@@ -1,7 +1,7 @@
 import os
 import time
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import requests
@@ -95,6 +95,22 @@ def jira_search(jql: str, max_results: int = 100, next_page_token: Optional[str]
     r.raise_for_status()
     return r.json()
 
+def parse_jira_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def format_jql_datetime(dt: datetime) -> str:
+    # JQL accepts "YYYY-MM-DD HH:MM"
+    dt_utc = dt.astimezone(timezone.utc)
+    return dt_utc.strftime("%Y-%m-%d %H:%M")
+
 
 
 def norm_request_type(v):
@@ -180,13 +196,14 @@ def run_sync_once():
             window_start = last - timedelta(minutes=5)
             jql = (
                 f'project = {JIRA_PROJECT} '
-                f'AND updated >= "{window_start.isoformat()}" '
+                f'AND updated >= "{format_jql_datetime(window_start)}" '
                 f'AND "cf[10010]" is not EMPTY '
                 f'ORDER BY updated ASC'
             )
 
         next_token = None
         total = 0
+        max_updated = None
 
         while True:
             data = jira_search(jql, max_results=100, next_page_token=next_token)
@@ -194,15 +211,28 @@ def run_sync_once():
             if batch:
                 upsert_issues(batch)
                 total += len(batch)
+                for issue in batch:
+                    updated_raw = issue.get("fields", {}).get("updated")
+                    updated_dt = parse_jira_datetime(updated_raw)
+                    if updated_dt and (max_updated is None or updated_dt > max_updated):
+                        max_updated = updated_dt
 
             next_token = data.get("nextPageToken")
             if data.get("isLast") or not next_token:
                 break
 
-        # Zet last_sync op now (alleen bij succes)
-        set_last_sync(now_utc)
+        # Zet last_sync op max(updated) om clock/indexing skew te voorkomen
+        if max_updated is not None:
+            set_last_sync(max_updated.astimezone(timezone.utc).replace(tzinfo=None))
+            set_ts = max_updated.astimezone(timezone.utc).isoformat() + "Z"
+        elif last is None:
+            set_last_sync(now_utc)
+            set_ts = now_utc.isoformat() + "Z"
+        else:
+            # Geen resultaten: houd last_sync gelijk om geen updates te missen
+            set_ts = last.isoformat() + "Z"
 
-        _sync_last_result = {"upserts": total, "set_last_sync": now_utc.isoformat() + "Z"}
+        _sync_last_result = {"upserts": total, "set_last_sync": set_ts}
         return {"started": True, "upserts": total}
 
     except Exception as e:
@@ -248,7 +278,7 @@ def volume_weekly(
       request_type,
       count(*) as tickets
     from issues
-    where created_at >= %s::timestamptz and created_at < %s::timestamptz
+    where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
       and (%s is null or request_type = %s)
       and (%s is null or onderwerp_logging = %s)
     group by 1,2
@@ -277,7 +307,7 @@ def leadtime_p90_by_type(
       count(*) as n
     from issues
     where resolved_at is not null
-      and created_at >= %s::timestamptz and created_at < %s::timestamptz
+      and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
       and (%s is null or onderwerp_logging = %s)
     group by 1
     order by 1;
@@ -286,6 +316,31 @@ def leadtime_p90_by_type(
         cur.execute(q, (date_from, date_to, onderwerp, onderwerp))
         rows = cur.fetchall()
     return [{"request_type": r[0], "p90_hours": float(r[1]) if r[1] is not None else None, "n": r[2]} for r in rows]
+
+
+@app.get("/metrics/volume_weekly_by_onderwerp")
+def volume_weekly_by_onderwerp(
+    date_from: str = Query(..., description="ISO date/time, e.g. 2025-01-01"),
+    date_to: str = Query(..., description="ISO date/time, e.g. 2026-01-01"),
+    request_type: Optional[str] = None,
+    onderwerp: Optional[str] = None,
+):
+    q = """
+    select
+      date_trunc('week', created_at) as week,
+      onderwerp_logging as onderwerp,
+      count(*) as tickets
+    from issues
+    where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
+      and (%s is null or request_type = %s)
+      and (%s is null or onderwerp_logging = %s)
+    group by 1,2
+    order by 1,2;
+    """
+    with conn() as c, c.cursor() as cur:
+        cur.execute(q, (date_from, date_to, request_type, request_type, onderwerp, onderwerp))
+        rows = cur.fetchall()
+    return [{"week": r[0].isoformat(), "onderwerp": r[1], "tickets": r[2]} for r in rows]
 
 
 @app.get("/issues")
@@ -300,7 +355,7 @@ def issues(
     q = """
     select issue_key, request_type, onderwerp_logging, created_at, resolved_at, priority, current_status
     from issues
-    where created_at >= %s::timestamptz and created_at < %s::timestamptz
+    where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
       and (%s is null or request_type = %s)
       and (%s is null or onderwerp_logging = %s)
     order by created_at desc
