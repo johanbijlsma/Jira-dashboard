@@ -2,7 +2,9 @@
   "name": "jsm-dashboard",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3000"
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000"
   },
   "dependencies": {
     "chart.js": "^4.4.0",

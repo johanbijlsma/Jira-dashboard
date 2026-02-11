@@ -20,6 +20,10 @@ JIRA_PROJECT = os.environ.get("JIRA_PROJECT", "SD")
 
 REQUEST_TYPE_FIELD = os.environ.get("REQUEST_TYPE_FIELD", "customfield_10010")
 ONDERWERP_FIELD = os.environ.get("ONDERWERP_FIELD", "customfield_10143")
+CORS_ORIGINS_RAW = os.environ.get(
+    "BACKEND_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
+)
+BACKEND_CORS_ORIGINS = [x.strip() for x in CORS_ORIGINS_RAW.split(",") if x.strip()]
 
 _jira = requests.Session()
 if JIRA_EMAIL and JIRA_TOKEN:
@@ -253,10 +257,10 @@ def run_sync_once(full: bool = False):
 
 app = FastAPI(title="JSM Analytics API")
 
-# Frontend draait op 3000; allow CORS voor lokale dev
+# Allow CORS for configured frontend origins (comma-separated env var)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=BACKEND_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

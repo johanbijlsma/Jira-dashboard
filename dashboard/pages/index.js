@@ -23,7 +23,7 @@ ChartJS.register(
   Legend
 );
 
-const API = "http://127.0.0.1:8000";
+const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
 const JIRA_BASE = "https://planningsagenda.atlassian.net";
 const DEFAULT_SERVICEDESK_ONLY = true;
 const DEFAULT_ONDERWERP_VIEW_MODE = "top5_overig";
