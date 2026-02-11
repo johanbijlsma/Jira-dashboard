@@ -1,4 +1,4 @@
-import { Bar, Line, Pie } from "react-chartjs-2";
+import { Bar, Doughnut, Line, Pie } from "react-chartjs-2";
 import {
   ArcElement,
   BarElement,
@@ -25,6 +25,8 @@ ChartJS.register(
 
 const API = "http://127.0.0.1:8000";
 const JIRA_BASE = "https://planningsagenda.atlassian.net";
+const DEFAULT_SERVICEDESK_ONLY = true;
+const DEFAULT_ONDERWERP_VIEW_MODE = "top5_overig";
 
 function isoDate(d) {
   // yyyy-mm-dd
@@ -118,6 +120,36 @@ function Toast({ message, kind, onClose }) {
   );
 }
 
+function hasDataPoints(chartData) {
+  if (!chartData || !Array.isArray(chartData.datasets)) return false;
+  return chartData.datasets.some((ds) =>
+    Array.isArray(ds.data) && ds.data.some((v) => typeof v === "number" && v > 0)
+  );
+}
+
+function EmptyChartState({ onReset }) {
+  return (
+    <div
+      style={{
+        border: "1px dashed #cfd8dc",
+        borderRadius: 8,
+        padding: "14px 12px",
+        color: "#455a64",
+        display: "flex",
+        gap: 10,
+        alignItems: "center",
+        justifyContent: "space-between",
+        flexWrap: "wrap",
+      }}
+    >
+      <span>Geen issues gevonden voor deze filtercombinatie.</span>
+      <button type="button" onClick={onReset}>
+        Reset filters
+      </button>
+    </div>
+  );
+}
+
 export default function Home() {
   const today = useMemo(() => new Date(), []);
   const defaultFrom = useMemo(() => {
@@ -144,6 +176,7 @@ export default function Home() {
   const [onderwerp, setOnderwerp] = useState("");
   const [priority, setPriority] = useState("");
   const [assignee, setAssignee] = useState("");
+  const [servicedeskOnly, setServicedeskOnly] = useState(DEFAULT_SERVICEDESK_ONLY);
 
   const [meta, setMeta] = useState({ request_types: [], onderwerpen: [], priorities: [], assignees: [] });
   const [volume, setVolume] = useState([]);
@@ -161,7 +194,7 @@ export default function Home() {
   const [selectedType, setSelectedType] = useState("");
   const [selectedOnderwerp, setSelectedOnderwerp] = useState("");
   const [onderwerpChartMode, setOnderwerpChartMode] = useState("line");
-  const [isFilterFocused, setIsFilterFocused] = useState(false);
+  const [onderwerpViewMode, setOnderwerpViewMode] = useState(DEFAULT_ONDERWERP_VIEW_MODE);
   const [drillIssues, setDrillIssues] = useState([]);
   const [drillLoading, setDrillLoading] = useState(false);
   const [drillOffset, setDrillOffset] = useState(0);
@@ -203,6 +236,16 @@ export default function Home() {
     setDateToUi(fmtDate(toIso));
   }
 
+  function resetFilters(showToast = true) {
+    setRequestType("");
+    setOnderwerp("");
+    setPriority("");
+    setAssignee("");
+    setServicedeskOnly(DEFAULT_SERVICEDESK_ONLY);
+    setOnderwerpViewMode(DEFAULT_ONDERWERP_VIEW_MODE);
+    if (showToast) flashToast("Filters gereset");
+  }
+
   useEffect(() => {
     fetch(`${API}/meta`).then((r) => r.json()).then(setMeta);
   }, []);
@@ -225,16 +268,13 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    function isTypingTarget(el) {
-      if (!el) return false;
-      const tag = el.tagName?.toLowerCase();
-      return tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable;
-    }
     function onKeyDown(e) {
-      if (isTypingTarget(e.target)) return;
-      if (isFilterFocused) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const key = e.key?.toLowerCase();
+      if (!["m", "j", "r", "s"].includes(key)) return;
+      e.preventDefault();
+      const active = document.activeElement;
+      if (active && typeof active.blur === "function") active.blur();
       if (key === "m") {
         applyDateRange({ months: 1 });
         flashToast("Datumselectie: laatste maand");
@@ -242,11 +282,7 @@ export default function Home() {
         applyDateRange({ years: 1 });
         flashToast("Datumselectie: laatste jaar");
       } else if (key === "r") {
-        setRequestType("");
-        setOnderwerp("");
-        setPriority("");
-        setAssignee("");
-        flashToast("Filters gereset");
+        resetFilters(true);
       } else if (key === "s") {
         if (!syncBusy) {
           triggerSync();
@@ -258,7 +294,7 @@ export default function Home() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [syncBusy, isFilterFocused]);
+  }, [syncBusy]);
 
   useEffect(() => {
     if (!selectedWeek) return;
@@ -315,6 +351,7 @@ export default function Home() {
     if (onderwerp) params.set("onderwerp", onderwerp);
     if (priority) params.set("priority", priority);
     if (assignee) params.set("assignee", assignee);
+    if (servicedeskOnly) params.set("servicedesk_only", "true");
 
     fetch(`${API}/metrics/volume_weekly?` + params.toString())
       .then((r) => r.json())
@@ -339,11 +376,12 @@ export default function Home() {
     if (onderwerp) p.set("onderwerp", onderwerp);
     if (priority) p.set("priority", priority);
     if (assignee) p.set("assignee", assignee);
+    if (servicedeskOnly) p.set("servicedesk_only", "true");
 
     fetch(`${API}/metrics/leadtime_p90_by_type?` + p.toString())
       .then((r) => r.json())
       .then(setP90);
-  }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee]);
+  }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee, servicedeskOnly]);
 
   function buildWeekStarts(fromIso, toIso) {
     if (!fromIso || !toIso) return [];
@@ -396,14 +434,30 @@ export default function Home() {
   const onderwerpSeries = useMemo(() => {
     const data = Array.isArray(onderwerpVolume) ? onderwerpVolume : [];
     const subjects = onderwerp ? [onderwerp] : meta.onderwerpen;
-    return subjects.map((o) => ({
+    const base = subjects.map((o) => ({
       label: o,
       data: weeksOnderwerp.map((w) => {
         const row = data.find((v) => v.onderwerp === o && v.week.slice(0, 10) === w);
         return row ? row.tickets : 0;
       }),
     }));
-  }, [weeksOnderwerp, onderwerpVolume, meta.onderwerpen, onderwerp]);
+    if (onderwerp || onderwerpViewMode !== "top5_overig") return base;
+
+    const withTotals = base
+      .map((s) => ({ ...s, total: s.data.reduce((sum, n) => sum + n, 0) }))
+      .sort((a, b) => b.total - a.total);
+    const top = withTotals.slice(0, 5).map(({ total, ...rest }) => rest);
+    const rest = withTotals.slice(5);
+    if (!rest.length) return top;
+
+    return [
+      ...top,
+      {
+        label: "Overig",
+        data: weeksOnderwerp.map((_, i) => rest.reduce((sum, s) => sum + (s.data[i] || 0), 0)),
+      },
+    ];
+  }, [weeksOnderwerp, onderwerpVolume, meta.onderwerpen, onderwerp, onderwerpViewMode]);
 
   const TYPE_COLORS = {
     rfc: "#2e7d32",
@@ -420,21 +474,10 @@ export default function Home() {
     return TYPE_COLORS[key] || "#6b7280";
   }
 
-  const SUBJECT_COLORS = [
-    "#1f77b4",
-    "#ff7f0e",
-    "#2ca02c",
-    "#d62728",
-    "#9467bd",
-    "#8c564b",
-    "#e377c2",
-    "#7f7f7f",
-    "#bcbd22",
-    "#17becf",
-  ];
-
-  function subjectColor(index) {
-    return SUBJECT_COLORS[index % SUBJECT_COLORS.length];
+  function uniqueChartColor(index, total, saturation = 70, lightness = 45) {
+    const safeTotal = Math.max(1, total);
+    const hue = (index * (360 / safeTotal) + 15) % 360;
+    return `hsl(${hue.toFixed(2)} ${saturation}% ${lightness}%)`;
   }
 
   function isTotalLabel(label) {
@@ -523,13 +566,18 @@ export default function Home() {
         label: s.label,
         data: s.data,
         tension: 0.2,
-        borderColor: subjectColor(i),
-        backgroundColor: subjectColor(i),
-        pointBackgroundColor: subjectColor(i),
-        pointBorderColor: subjectColor(i),
+        borderColor: uniqueChartColor(i, onderwerpSeries.length),
+        backgroundColor: uniqueChartColor(i, onderwerpSeries.length),
+        pointBackgroundColor: uniqueChartColor(i, onderwerpSeries.length),
+        pointBorderColor: uniqueChartColor(i, onderwerpSeries.length),
       })),
     }),
     [weeksOnderwerp, onderwerpSeries]
+  );
+
+  const priorityColors = useMemo(
+    () => priorityVolume.map((_, i) => uniqueChartColor(i, priorityVolume.length)),
+    [priorityVolume]
   );
 
   const priorityBarData = useMemo(
@@ -539,23 +587,37 @@ export default function Home() {
         {
           label: "Totaal issues per priority",
           data: priorityVolume.map((x) => x.tickets),
+          backgroundColor: priorityColors,
+          borderColor: priorityColors,
         },
       ],
     }),
-    [priorityVolume]
+    [priorityVolume, priorityColors]
+  );
+
+  const assigneeTopVolume = useMemo(() => {
+    const data = Array.isArray(assigneeVolume) ? assigneeVolume : [];
+    return data.slice(0, 3);
+  }, [assigneeVolume]);
+
+  const assigneeColors = useMemo(
+    () => assigneeTopVolume.map((_, i) => uniqueChartColor(i, assigneeTopVolume.length)),
+    [assigneeTopVolume]
   );
 
   const assigneeBarData = useMemo(
     () => ({
-      labels: assigneeVolume.map((x) => x.assignee),
+      labels: assigneeTopVolume.map((x) => x.assignee),
       datasets: [
         {
           label: "Totaal issues per assignee",
-          data: assigneeVolume.map((x) => x.tickets),
+          data: assigneeTopVolume.map((x) => x.tickets),
+          backgroundColor: assigneeColors,
+          borderColor: assigneeColors,
         },
       ],
     }),
-    [assigneeVolume]
+    [assigneeTopVolume, assigneeColors]
   );
 
   const onderwerpPieData = useMemo(() => {
@@ -566,23 +628,28 @@ export default function Home() {
       total: data.reduce((sum, v) => (v.onderwerp === o ? sum + v.tickets : sum), 0),
     }));
     totals.sort((a, b) => b.total - a.total);
+    const displayTotals =
+      onderwerp || onderwerpViewMode !== "top5_overig" || totals.length <= 5
+        ? totals
+        : [
+            ...totals.slice(0, 5),
+            {
+              onderwerp: "Overig",
+              total: totals.slice(5).reduce((sum, t) => sum + t.total, 0),
+            },
+          ];
     return {
-      labels: totals.map((t) => t.onderwerp),
+      labels: displayTotals.map((t) => t.onderwerp),
       datasets: [
         {
           label: "Totaal per onderwerp",
-          data: totals.map((t) => t.total),
-          backgroundColor: totals.map((_, i) => subjectColor(i)),
-          borderColor: totals.map((_, i) => subjectColor(i)),
+          data: displayTotals.map((t) => t.total),
+          backgroundColor: displayTotals.map((_, i) => uniqueChartColor(i, displayTotals.length)),
+          borderColor: displayTotals.map((_, i) => uniqueChartColor(i, displayTotals.length)),
         },
       ],
     };
-  }, [onderwerpVolume, meta.onderwerpen, onderwerp]);
-
-  const onderwerpPieTopLegend = useMemo(() => {
-    const labels = onderwerpPieData.labels || [];
-    return new Set(labels.slice(0, 5));
-  }, [onderwerpPieData]);
+  }, [onderwerpVolume, meta.onderwerpen, onderwerp, onderwerpViewMode]);
 
   const barData = useMemo(
     () => ({
@@ -629,6 +696,7 @@ export default function Home() {
       else if (onderwerp) params.set("onderwerp", onderwerp);
       if (priority) params.set("priority", priority);
       if (assignee) params.set("assignee", assignee);
+      if (servicedeskOnly) params.set("servicedesk_only", "true");
 
       const res = await fetch(`${API}/issues?` + params.toString());
       const data = await res.json();
@@ -652,6 +720,7 @@ export default function Home() {
     if (onderwerp) params.set("onderwerp", onderwerp);
     if (priority) params.set("priority", priority);
     if (assignee) params.set("assignee", assignee);
+    if (servicedeskOnly) params.set("servicedesk_only", "true");
 
     fetch(`${API}/metrics/volume_weekly?` + params.toString())
       .then((r) => r.json())
@@ -673,6 +742,7 @@ export default function Home() {
     if (onderwerp) p.set("onderwerp", onderwerp);
     if (priority) p.set("priority", priority);
     if (assignee) p.set("assignee", assignee);
+    if (servicedeskOnly) p.set("servicedesk_only", "true");
 
     fetch(`${API}/metrics/leadtime_p90_by_type?` + p.toString())
       .then((r) => r.json())
@@ -712,24 +782,56 @@ export default function Home() {
     }
   }
 
+  const filterPanelStyle = {
+    marginBottom: 18,
+    padding: 14,
+    border: "1px solid #e5e7eb",
+    borderRadius: 10,
+    background: "#fafafa",
+  };
+  const filterGridStyle = {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+    gap: 12,
+    alignItems: "end",
+  };
+  const fieldStyle = { display: "flex", flexDirection: "column", gap: 6, minWidth: 0 };
+  const labelStyle = { fontSize: 12, fontWeight: 600, color: "#334155" };
+  const inputBaseStyle = {
+    height: 36,
+    padding: "0 10px",
+    border: "1px solid #cbd5e1",
+    borderRadius: 8,
+    background: "#fff",
+    width: "100%",
+  };
+  const buttonBaseStyle = {
+    height: 36,
+    padding: "0 12px",
+    border: "1px solid #cbd5e1",
+    borderRadius: 8,
+    background: "#fff",
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  };
+
   return (
     <div style={{ fontFamily: "system-ui", padding: 24, maxWidth: 1100, margin: "0 auto" }}>
       <Toast message={syncMessage} kind={syncMessageKind} onClose={() => setSyncMessage("")} />
       <h1>JSM Dashboard (SD)</h1>
 
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
-        <label>
-          Van<br />
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+      <div style={filterPanelStyle}>
+        <div style={filterGridStyle}>
+          <label style={fieldStyle}>
+            <span style={labelStyle}>Van</span>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <input
               type="text"
               inputMode="numeric"
               placeholder="dd/mm/jjjj"
               value={dateFromUi}
               onChange={(e) => setDateFromUi(e.target.value)}
-              onFocus={() => setIsFilterFocused(true)}
               onBlur={() => {
-                setIsFilterFocused(false);
                 const iso = parseNlDateToIso(dateFromUi);
                 if (iso) {
                   setDateFrom(iso);
@@ -745,7 +847,7 @@ export default function Home() {
                   e.currentTarget.blur();
                 }
               }}
-              style={{ width: 120 }}
+              style={inputBaseStyle}
             />
 
             <button
@@ -762,13 +864,7 @@ export default function Home() {
               }}
               title="Open kalender"
               aria-label="Open kalender"
-              style={{
-                padding: "4px 8px",
-                border: "1px solid #ccc",
-                borderRadius: 6,
-                background: "#fff",
-                cursor: "pointer",
-              }}
+              style={buttonBaseStyle}
             >
               📅
             </button>
@@ -777,8 +873,6 @@ export default function Home() {
               ref={dateFromNativeRef}
               type="date"
               value={dateFrom}
-              onFocus={() => setIsFilterFocused(true)}
-              onBlur={() => setIsFilterFocused(false)}
               onChange={(e) => {
                 const iso = e.target.value;
                 setDateFrom(iso);
@@ -788,20 +882,19 @@ export default function Home() {
               tabIndex={-1}
               aria-hidden="true"
             />
-          </div>
-        </label>
-        <label>
-          Tot<br />
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            </div>
+          </label>
+
+          <label style={fieldStyle}>
+            <span style={labelStyle}>Tot</span>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <input
               type="text"
               inputMode="numeric"
               placeholder="dd/mm/jjjj"
               value={dateToUi}
               onChange={(e) => setDateToUi(e.target.value)}
-              onFocus={() => setIsFilterFocused(true)}
               onBlur={() => {
-                setIsFilterFocused(false);
                 const iso = parseNlDateToIso(dateToUi);
                 if (iso) {
                   setDateTo(iso);
@@ -817,7 +910,7 @@ export default function Home() {
                   e.currentTarget.blur();
                 }
               }}
-              style={{ width: 120 }}
+              style={inputBaseStyle}
             />
 
             <button
@@ -833,13 +926,7 @@ export default function Home() {
               }}
               title="Open kalender"
               aria-label="Open kalender"
-              style={{
-                padding: "4px 8px",
-                border: "1px solid #ccc",
-                borderRadius: 6,
-                background: "#fff",
-                cursor: "pointer",
-              }}
+              style={buttonBaseStyle}
             >
               📅
             </button>
@@ -848,8 +935,6 @@ export default function Home() {
               ref={dateToNativeRef}
               type="date"
               value={dateTo}
-              onFocus={() => setIsFilterFocused(true)}
-              onBlur={() => setIsFilterFocused(false)}
               onChange={(e) => {
                 const iso = e.target.value;
                 setDateTo(iso);
@@ -859,12 +944,12 @@ export default function Home() {
               tabIndex={-1}
               aria-hidden="true"
             />
-          </div>
-        </label>
+            </div>
+          </label>
 
-        <label>
-          Request type<br />
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <label style={fieldStyle}>
+            <span style={labelStyle}>Request type</span>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <span
               aria-hidden
               style={{
@@ -878,12 +963,11 @@ export default function Home() {
             />
             <select
               value={requestType}
-              onFocus={() => setIsFilterFocused(true)}
-              onBlur={() => setIsFilterFocused(false)}
               onChange={(e) => {
                 setRequestType(e.target.value);
                 e.target.blur();
               }}
+              style={inputBaseStyle}
             >
               <option value="">(alle)</option>
               {meta.request_types.map((rt) => (
@@ -892,95 +976,99 @@ export default function Home() {
                 </option>
               ))}
             </select>
-          </div>
-        </label>
+            </div>
+          </label>
 
-        <label>
-          Onderwerp<br />
+          <label style={fieldStyle}>
+            <span style={labelStyle}>Onderwerp</span>
           <select
             value={onderwerp}
-            onFocus={() => setIsFilterFocused(true)}
-            onBlur={() => setIsFilterFocused(false)}
             onChange={(e) => {
               setOnderwerp(e.target.value);
               e.target.blur();
             }}
+            style={inputBaseStyle}
           >
             <option value="">(alle)</option>
             {meta.onderwerpen.map((o) => (
               <option key={o} value={o}>
                 {o}
               </option>
-            ))}
-          </select>
-        </label>
+              ))}
+            </select>
+          </label>
 
-        <label>
-          Prioriteit<br />
+          <label style={fieldStyle}>
+            <span style={labelStyle}>Prioriteit</span>
           <select
             value={priority}
-            onFocus={() => setIsFilterFocused(true)}
-            onBlur={() => setIsFilterFocused(false)}
             onChange={(e) => {
               setPriority(e.target.value);
               e.target.blur();
             }}
+            style={inputBaseStyle}
           >
             <option value="">(alle)</option>
             {meta.priorities.map((p) => (
               <option key={p} value={p}>
                 {p}
               </option>
-            ))}
-          </select>
-        </label>
+              ))}
+            </select>
+          </label>
 
-        <label>
-          Assignee<br />
+          <label style={fieldStyle}>
+            <span style={labelStyle}>Assignee</span>
           <select
             value={assignee}
-            onFocus={() => setIsFilterFocused(true)}
-            onBlur={() => setIsFilterFocused(false)}
             onChange={(e) => {
               setAssignee(e.target.value);
               e.target.blur();
             }}
+            style={inputBaseStyle}
           >
             <option value="">(alle)</option>
             {meta.assignees.map((a) => (
               <option key={a} value={a}>
                 {a}
               </option>
-            ))}
-          </select>
-        </label>
+              ))}
+            </select>
+          </label>
 
-        <button
-          onClick={() => {
-            setRequestType("");
-            setOnderwerp("");
-            setPriority("");
-            setAssignee("");
-          }}
-        >
-          Reset filters
-        </button>
+          <label style={fieldStyle} title="Sluit uit: Koppelingen, datadump, Rest-endpoints, migratie, SSO-koppeling">
+            <span style={labelStyle}>Scope</span>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", height: 36, padding: "0 4px" }}>
+              <input
+                type="checkbox"
+                checked={servicedeskOnly}
+                onChange={(e) => setServicedeskOnly(e.target.checked)}
+              />
+              <span>Alleen servicedesk</span>
+            </div>
+          </label>
+        </div>
 
-        <button onClick={triggerSync} disabled={syncBusy}>
-          {syncBusy ? (
-            <>
-              <span style={{ marginRight: 6 }} aria-hidden>
-                ⏳
-              </span>
-              Sync bezig…
-            </>
-          ) : (
-            "Sync now"
-          )}
-        </button>
+        <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <button onClick={() => resetFilters(true)} style={buttonBaseStyle}>
+            Reset filters
+          </button>
 
-        {syncStatus ? (
-          <div style={{ alignSelf: "flex-end", color: "#666", display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button onClick={triggerSync} disabled={syncBusy} style={buttonBaseStyle}>
+            {syncBusy ? (
+              <>
+                <span style={{ marginRight: 6 }} aria-hidden>
+                  ⏳
+                </span>
+                Sync bezig…
+              </>
+            ) : (
+              "Sync now"
+            )}
+          </button>
+
+          {syncStatus ? (
+            <div style={{ color: "#666", display: "flex", gap: 10, flexWrap: "wrap" }}>
             <div>
               {syncStatus.running ? (
                 <>Bezig met synchroniseren…</>
@@ -992,32 +1080,37 @@ export default function Home() {
               {syncStatus.last_result?.upserts != null ? ` · ${syncStatus.last_result.upserts} bijgewerkt` : ""}
               {syncStatus.last_error ? ` · fout: ${syncStatus.last_error}` : ""}
             </div>
-          </div>
-        ) : null}
+            </div>
+          ) : null}
+        </div>
       </div>
 
       <h2>Volume per week</h2>
-      <Line
-        data={lineData}
-        options={{
-          responsive: true,
-          onClick: (_evt, elements) => {
-            const el = elements?.[0];
-            if (!el) return;
-            const weekStart = weeks[el.index];
-            const typeLabel = lineData.datasets[el.datasetIndex]?.label;
-            if (typeLabel === "Mediaan totaal aantal tickets") return;
-            if (typeLabel && typeLabel.startsWith("Mediaan ")) return;
-            const effectiveType = requestType ? requestType : isTotalLabel(typeLabel) ? "" : typeLabel;
-            fetchDrilldown(weekStart, effectiveType, "");
-          },
-          plugins: {
-            legend: { display: false },
-            tooltip: { mode: "nearest", intersect: false },
-          },
-          interaction: { mode: "nearest", intersect: false },
-        }}
-      />
+      {hasDataPoints(lineData) ? (
+        <Line
+          data={lineData}
+          options={{
+            responsive: true,
+            onClick: (_evt, elements) => {
+              const el = elements?.[0];
+              if (!el) return;
+              const weekStart = weeks[el.index];
+              const typeLabel = lineData.datasets[el.datasetIndex]?.label;
+              if (typeLabel === "Mediaan totaal aantal tickets") return;
+              if (typeLabel && typeLabel.startsWith("Mediaan ")) return;
+              const effectiveType = requestType ? requestType : isTotalLabel(typeLabel) ? "" : typeLabel;
+              fetchDrilldown(weekStart, effectiveType, "");
+            },
+            plugins: {
+              legend: { display: false },
+              tooltip: { mode: "nearest", intersect: false },
+            },
+            interaction: { mode: "nearest", intersect: false },
+          }}
+        />
+      ) : (
+        <EmptyChartState onReset={() => resetFilters(true)} />
+      )}
 
       <h2 style={{ marginTop: 28 }}>Onderwerp logging</h2>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
@@ -1042,31 +1135,56 @@ export default function Home() {
           />
           Pie
         </label>
+        <span style={{ width: 1, height: 16, background: "#d1d5db", margin: "0 4px" }} />
+        <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <input
+            type="radio"
+            name="onderwerpViewMode"
+            value="all"
+            checked={onderwerpViewMode === "all"}
+            onChange={() => setOnderwerpViewMode("all")}
+          />
+          Alle onderwerpen
+        </label>
+        <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <input
+            type="radio"
+            name="onderwerpViewMode"
+            value="top5_overig"
+            checked={onderwerpViewMode === "top5_overig"}
+            onChange={() => setOnderwerpViewMode("top5_overig")}
+          />
+          Top 5 + Overig
+        </label>
       </div>
 
       {onderwerpChartMode === "line" ? (
-        <Line
-          data={onderwerpLineData}
-          options={{
-            responsive: true,
-            onClick: (_evt, elements) => {
-              const el = elements?.[0];
-              if (!el) return;
-              const weekStart = weeksOnderwerp[el.index];
-              const subjectLabel = onderwerpLineData.datasets[el.datasetIndex]?.label;
-              setOnderwerp(subjectLabel || "");
-              fetchDrilldown(weekStart, requestType, subjectLabel);
-            },
-            plugins: {
-              legend: { display: false },
-              tooltip: { mode: "nearest", intersect: false },
-            },
-            interaction: { mode: "nearest", intersect: false },
-          }}
-        />
-      ) : (
+        hasDataPoints(onderwerpLineData) ? (
+          <Line
+            data={onderwerpLineData}
+            options={{
+              responsive: true,
+              onClick: (_evt, elements) => {
+                const el = elements?.[0];
+                if (!el) return;
+                const weekStart = weeksOnderwerp[el.index];
+                const subjectLabel = onderwerpLineData.datasets[el.datasetIndex]?.label;
+                if (!subjectLabel || subjectLabel === "Overig") return;
+                setOnderwerp(subjectLabel || "");
+                fetchDrilldown(weekStart, requestType, subjectLabel);
+              },
+              plugins: {
+                legend: { display: false },
+                tooltip: { mode: "nearest", intersect: false },
+              },
+              interaction: { mode: "nearest", intersect: false },
+            }}
+          />
+        ) : (
+          <EmptyChartState onReset={() => resetFilters(true)} />
+        )
+      ) : hasDataPoints(onderwerpPieData) ? (
         <div>
-          <div style={{ marginBottom: 6, fontSize: 12, color: "#666" }}>Legenda toont top 5</div>
           <Pie
             data={onderwerpPieData}
             options={{
@@ -1075,7 +1193,7 @@ export default function Home() {
                 const el = elements?.[0];
                 if (!el) return;
                 const subjectLabel = onderwerpPieData.labels?.[el.index];
-                if (!subjectLabel) return;
+                if (!subjectLabel || subjectLabel === "Overig") return;
                 setOnderwerp(subjectLabel);
                 const weekStart = weeksOnderwerp[weeksOnderwerp.length - 1];
                 if (!weekStart) return;
@@ -1084,48 +1202,95 @@ export default function Home() {
               plugins: {
                 legend: {
                   position: "right",
-                  labels: {
-                    filter: (item) => onderwerpPieTopLegend.has(item.text),
-                  },
                 },
               },
             }}
           />
         </div>
+      ) : (
+        <EmptyChartState onReset={() => resetFilters(true)} />
       )}
 
-      <h2 style={{ marginTop: 28 }}>Issues per priority</h2>
-      <Bar
-        data={priorityBarData}
-        options={{
-          plugins: { legend: { position: "top" } },
+      <div
+        style={{
+          marginTop: 28,
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+          gap: 20,
+          alignItems: "start",
         }}
-      />
+      >
+        <div>
+          <h2 style={{ marginTop: 0 }}>Issues per priority</h2>
+          {hasDataPoints(priorityBarData) ? (
+            <div style={{ maxWidth: 520 }}>
+              <Doughnut
+                data={priorityBarData}
+                options={{
+                  cutout: "60%",
+                  plugins: {
+                    legend: {
+                      display: true,
+                      position: "right",
+                      labels: {
+                        color: (ctx) => priorityColors?.[ctx.index] || "#6b7280",
+                      },
+                    },
+                  },
+                }}
+              />
+            </div>
+          ) : (
+            <EmptyChartState onReset={() => resetFilters(true)} />
+          )}
+        </div>
 
-      <h2 style={{ marginTop: 28 }}>Issues per assignee</h2>
-      <Bar
-        data={assigneeBarData}
-        options={{
-          plugins: { legend: { position: "top" } },
-        }}
-      />
+        <div>
+          <h2 style={{ marginTop: 0 }}>Issues per assignee</h2>
+          {hasDataPoints(assigneeBarData) ? (
+            <div style={{ maxWidth: 520 }}>
+              <Doughnut
+                data={assigneeBarData}
+                options={{
+                  cutout: "60%",
+                  plugins: {
+                    legend: {
+                      display: true,
+                      position: "right",
+                      labels: {
+                        color: (ctx) => assigneeColors?.[ctx.index] || "#6b7280",
+                      },
+                    },
+                  },
+                }}
+              />
+            </div>
+          ) : (
+            <EmptyChartState onReset={() => resetFilters(true)} />
+          )}
+        </div>
+      </div>
 
       <h2 style={{ marginTop: 28 }}>Doorlooptijd p90 per request type</h2>
-      <Bar
-        data={barData}
-        options={{
-          plugins: {
-            legend: { position: "top" },
-          },
-          scales: {
-            x: {
-              ticks: {
-                color: (ctx) => typeColor(ctx.tick?.label),
+      {hasDataPoints(barData) ? (
+        <Bar
+          data={barData}
+          options={{
+            plugins: {
+              legend: { display: false },
+            },
+            scales: {
+              x: {
+                ticks: {
+                  color: (ctx) => typeColor(ctx.tick?.label),
+                },
               },
             },
-          },
-        }}
-      />
+          }}
+        />
+      ) : (
+        <EmptyChartState onReset={() => resetFilters(true)} />
+      )}
 
       <p style={{ marginTop: 20, color: "#666" }}>Tip: filter op “Onderwerp” om p90 per type te zien voor één categorie.</p>
 

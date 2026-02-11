@@ -290,6 +290,7 @@ def volume_weekly(
     onderwerp: Optional[str] = None,
     priority: Optional[str] = None,
     assignee: Optional[str] = None,
+    servicedesk_only: bool = False,
 ):
     q = """
     select
@@ -302,13 +303,30 @@ def volume_weekly(
       and (%s is null or onderwerp_logging = %s)
       and (%s is null or priority = %s)
       and (%s is null or assignee = %s)
+      and (
+        not %s
+        or onderwerp_logging is null
+        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+      )
     group by 1,2
     order by 1,2;
     """
     with conn() as c, c.cursor() as cur:
         cur.execute(
             q,
-            (date_from, date_to, request_type, request_type, onderwerp, onderwerp, priority, priority, assignee, assignee),
+            (
+                date_from,
+                date_to,
+                request_type,
+                request_type,
+                onderwerp,
+                onderwerp,
+                priority,
+                priority,
+                assignee,
+                assignee,
+                servicedesk_only,
+            ),
         )
         rows = cur.fetchall()
 
@@ -323,6 +341,7 @@ def leadtime_p90_by_type(
     onderwerp: Optional[str] = None,
     priority: Optional[str] = None,
     assignee: Optional[str] = None,
+    servicedesk_only: bool = False,
 ):
     q = """
     select
@@ -337,11 +356,19 @@ def leadtime_p90_by_type(
       and (%s is null or onderwerp_logging = %s)
       and (%s is null or priority = %s)
       and (%s is null or assignee = %s)
+      and (
+        not %s
+        or onderwerp_logging is null
+        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+      )
     group by 1
     order by 1;
     """
     with conn() as c, c.cursor() as cur:
-        cur.execute(q, (date_from, date_to, onderwerp, onderwerp, priority, priority, assignee, assignee))
+        cur.execute(
+            q,
+            (date_from, date_to, onderwerp, onderwerp, priority, priority, assignee, assignee, servicedesk_only),
+        )
         rows = cur.fetchall()
     return [{"request_type": r[0], "p90_hours": float(r[1]) if r[1] is not None else None, "n": r[2]} for r in rows]
 
@@ -354,6 +381,7 @@ def volume_by_priority(
     onderwerp: Optional[str] = None,
     priority: Optional[str] = None,
     assignee: Optional[str] = None,
+    servicedesk_only: bool = False,
 ):
     q = """
     select
@@ -366,13 +394,30 @@ def volume_by_priority(
       and (%s is null or onderwerp_logging = %s)
       and (%s is null or priority = %s)
       and (%s is null or assignee = %s)
+      and (
+        not %s
+        or onderwerp_logging is null
+        or onderwerp_logging not in ('Koppelingen', 'Datadump', 'Rest-endpoints', 'Migratie', 'SSO-koppeling')
+      )
     group by 1
     order by 2 desc, 1;
     """
     with conn() as c, c.cursor() as cur:
         cur.execute(
             q,
-            (date_from, date_to, request_type, request_type, onderwerp, onderwerp, priority, priority, assignee, assignee),
+            (
+                date_from,
+                date_to,
+                request_type,
+                request_type,
+                onderwerp,
+                onderwerp,
+                priority,
+                priority,
+                assignee,
+                assignee,
+                servicedesk_only,
+            ),
         )
         rows = cur.fetchall()
     return [{"priority": r[0], "tickets": r[1]} for r in rows]
@@ -386,6 +431,7 @@ def volume_by_assignee(
     onderwerp: Optional[str] = None,
     priority: Optional[str] = None,
     assignee: Optional[str] = None,
+    servicedesk_only: bool = False,
 ):
     q = """
     select
@@ -398,13 +444,30 @@ def volume_by_assignee(
       and (%s is null or onderwerp_logging = %s)
       and (%s is null or priority = %s)
       and (%s is null or assignee = %s)
+      and (
+        not %s
+        or onderwerp_logging is null
+        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+      )
     group by 1
     order by 2 desc, 1;
     """
     with conn() as c, c.cursor() as cur:
         cur.execute(
             q,
-            (date_from, date_to, request_type, request_type, onderwerp, onderwerp, priority, priority, assignee, assignee),
+            (
+                date_from,
+                date_to,
+                request_type,
+                request_type,
+                onderwerp,
+                onderwerp,
+                priority,
+                priority,
+                assignee,
+                assignee,
+                servicedesk_only,
+            ),
         )
         rows = cur.fetchall()
     return [{"assignee": r[0], "tickets": r[1]} for r in rows]
@@ -418,6 +481,7 @@ def volume_weekly_by_onderwerp(
     onderwerp: Optional[str] = None,
     priority: Optional[str] = None,
     assignee: Optional[str] = None,
+    servicedesk_only: bool = False,
 ):
     q = """
     select
@@ -430,13 +494,30 @@ def volume_weekly_by_onderwerp(
       and (%s is null or onderwerp_logging = %s)
       and (%s is null or priority = %s)
       and (%s is null or assignee = %s)
+      and (
+        not %s
+        or onderwerp_logging is null
+        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+      )
     group by 1,2
     order by 1,2;
     """
     with conn() as c, c.cursor() as cur:
         cur.execute(
             q,
-            (date_from, date_to, request_type, request_type, onderwerp, onderwerp, priority, priority, assignee, assignee),
+            (
+                date_from,
+                date_to,
+                request_type,
+                request_type,
+                onderwerp,
+                onderwerp,
+                priority,
+                priority,
+                assignee,
+                assignee,
+                servicedesk_only,
+            ),
         )
         rows = cur.fetchall()
     return [{"week": r[0].isoformat(), "onderwerp": r[1], "tickets": r[2]} for r in rows]
@@ -450,6 +531,7 @@ def issues(
     onderwerp: Optional[str] = None,
     priority: Optional[str] = None,
     assignee: Optional[str] = None,
+    servicedesk_only: bool = False,
     limit: int = 100,
     offset: int = 0,
 ):
@@ -461,6 +543,11 @@ def issues(
       and (%s is null or onderwerp_logging = %s)
       and (%s is null or priority = %s)
       and (%s is null or assignee = %s)
+      and (
+        not %s
+        or onderwerp_logging is null
+        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+      )
     order by created_at desc
     limit %s offset %s;
     """
@@ -478,6 +565,7 @@ def issues(
                 priority,
                 assignee,
                 assignee,
+                servicedesk_only,
                 limit,
                 offset,
             ),
