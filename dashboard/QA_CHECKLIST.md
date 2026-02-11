@@ -6,6 +6,11 @@ Datum: ____________________
 - Backend gestart: `uvicorn api:app --port 8000`
 - Frontend gestart: `cd dashboard && npm run dev`
 
+## Backfill (bij nieuwe DB kolommen)
+- Full sync endpoint: `POST /sync/full`
+- Of run `import_issues.py` om alles opnieuw te laden
+- Zie ook `DB_CHANGE_REMINDER.md`
+
 ## Hotkeys
 - `m` → toast “Datumselectie: laatste maand”, grafieken updaten
 - `j` → toast “Datumselectie: laatste jaar”, grafieken updaten
@@ -36,4 +41,3 @@ Datum: ____________________
 - Datumselectie (handmatig) werkt en toont data
 - Request type filter werkt en kleurt lijnen/labels
 - Onderwerp filter werkt en beïnvloedt p90 + onderwerp‑grafiek
-

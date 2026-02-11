@@ -142,10 +142,14 @@ export default function Home() {
   }, [dateTo]);
   const [requestType, setRequestType] = useState("");
   const [onderwerp, setOnderwerp] = useState("");
+  const [priority, setPriority] = useState("");
+  const [assignee, setAssignee] = useState("");
 
-  const [meta, setMeta] = useState({ request_types: [], onderwerpen: [] });
+  const [meta, setMeta] = useState({ request_types: [], onderwerpen: [], priorities: [], assignees: [] });
   const [volume, setVolume] = useState([]);
   const [onderwerpVolume, setOnderwerpVolume] = useState([]);
+  const [priorityVolume, setPriorityVolume] = useState([]);
+  const [assigneeVolume, setAssigneeVolume] = useState([]);
   const [p90, setP90] = useState([]);
 
   const [syncStatus, setSyncStatus] = useState(null);
@@ -157,12 +161,15 @@ export default function Home() {
   const [selectedType, setSelectedType] = useState("");
   const [selectedOnderwerp, setSelectedOnderwerp] = useState("");
   const [onderwerpChartMode, setOnderwerpChartMode] = useState("line");
+  const [isFilterFocused, setIsFilterFocused] = useState(false);
   const [drillIssues, setDrillIssues] = useState([]);
   const [drillLoading, setDrillLoading] = useState(false);
   const [drillOffset, setDrillOffset] = useState(0);
   const [drillHasNext, setDrillHasNext] = useState(false);
   const drillPanelRef = useRef(null);
   const drillCloseRef = useRef(null);
+  const [showPriority, setShowPriority] = useState(false);
+  const [showAssignee, setShowAssignee] = useState(false);
 
   const DRILL_LIMIT = 100;
   const syncBusy = syncLoading || !!syncStatus?.running;
@@ -225,6 +232,8 @@ export default function Home() {
     }
     function onKeyDown(e) {
       if (isTypingTarget(e.target)) return;
+      if (isFilterFocused) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       const key = e.key?.toLowerCase();
       if (key === "m") {
         applyDateRange({ months: 1 });
@@ -235,6 +244,8 @@ export default function Home() {
       } else if (key === "r") {
         setRequestType("");
         setOnderwerp("");
+        setPriority("");
+        setAssignee("");
         flashToast("Filters gereset");
       } else if (key === "s") {
         if (!syncBusy) {
@@ -247,7 +258,7 @@ export default function Home() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [syncBusy]);
+  }, [syncBusy, isFilterFocused]);
 
   useEffect(() => {
     if (!selectedWeek) return;
@@ -302,6 +313,8 @@ export default function Home() {
     });
     if (requestType) params.set("request_type", requestType);
     if (onderwerp) params.set("onderwerp", onderwerp);
+    if (priority) params.set("priority", priority);
+    if (assignee) params.set("assignee", assignee);
 
     fetch(`${API}/metrics/volume_weekly?` + params.toString())
       .then((r) => r.json())
@@ -311,28 +324,52 @@ export default function Home() {
       .then((r) => r.json())
       .then((data) => (Array.isArray(data) ? setOnderwerpVolume(data) : setOnderwerpVolume([])));
 
+    fetch(`${API}/metrics/volume_by_priority?` + params.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setPriorityVolume(data) : setPriorityVolume([])));
+
+    fetch(`${API}/metrics/volume_by_assignee?` + params.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setAssigneeVolume(data) : setAssigneeVolume([])));
+
     const p = new URLSearchParams({
       date_from: dateFrom,
       date_to: dateTo,
     });
     if (onderwerp) p.set("onderwerp", onderwerp);
+    if (priority) p.set("priority", priority);
+    if (assignee) p.set("assignee", assignee);
 
     fetch(`${API}/metrics/leadtime_p90_by_type?` + p.toString())
       .then((r) => r.json())
       .then(setP90);
-  }, [dateFrom, dateTo, requestType, onderwerp]);
+  }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee]);
 
-  // volume -> weeks x series
-  const weeks = useMemo(() => {
-    const s = new Set(volume.map((v) => v.week.slice(0, 10)));
-    return Array.from(s).sort();
-  }, [volume]);
+  function buildWeekStarts(fromIso, toIso) {
+    if (!fromIso || !toIso) return [];
+    const [fy, fm, fd] = fromIso.split("-").map(Number);
+    const [ty, tm, td] = toIso.split("-").map(Number);
+    const from = new Date(Date.UTC(fy, fm - 1, fd));
+    const to = new Date(Date.UTC(ty, tm - 1, td));
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return [];
 
-  const weeksOnderwerp = useMemo(() => {
-    const data = Array.isArray(onderwerpVolume) ? onderwerpVolume : [];
-    const s = new Set(data.map((v) => v.week.slice(0, 10)));
-    return Array.from(s).sort();
-  }, [onderwerpVolume]);
+    // Align to Monday (Postgres date_trunc('week') start)
+    const day = from.getUTCDay(); // 0=Sun..6=Sat
+    const diff = (day + 6) % 7; // days since Monday
+    from.setUTCDate(from.getUTCDate() - diff);
+
+    const weeks = [];
+    const cursor = new Date(from);
+    while (cursor <= to) {
+      weeks.push(cursor.toISOString().slice(0, 10));
+      cursor.setUTCDate(cursor.getUTCDate() + 7);
+    }
+    return weeks;
+  }
+
+  // volume -> weeks x series (use full range so empty weeks show as 0)
+  const weeks = useMemo(() => buildWeekStarts(dateFrom, dateTo), [dateFrom, dateTo]);
+  const weeksOnderwerp = useMemo(() => buildWeekStarts(dateFrom, dateTo), [dateFrom, dateTo]);
 
   const series = useMemo(() => {
     const types = requestType ? [requestType] : meta.request_types;
@@ -404,10 +441,25 @@ export default function Home() {
     return String(label || "").toLowerCase() === "totaal";
   }
 
+  function median(values) {
+    const v = values.filter((x) => x != null).slice().sort((a, b) => a - b);
+    if (!v.length) return null;
+    const mid = Math.floor(v.length / 2);
+    return v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
+  }
+
+  function weekStartIso(d = new Date()) {
+    const dt = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    const day = dt.getUTCDay();
+    const diff = (day + 6) % 7; // days since Monday
+    dt.setUTCDate(dt.getUTCDate() - diff);
+    return dt.toISOString().slice(0, 10);
+  }
+
   const lineData = useMemo(
-    () => ({
-      labels: weeks.map((w) => fmtDate(w)),
-      datasets: series.map((s) => ({
+    () => {
+      const labels = weeks.map((w) => fmtDate(w));
+      const datasets = series.map((s) => ({
         label: s.label,
         data: s.data,
         tension: 0.2,
@@ -415,8 +467,52 @@ export default function Home() {
         backgroundColor: typeColor(s.label),
         pointBackgroundColor: typeColor(s.label),
         pointBorderColor: typeColor(s.label),
-      })),
-    }),
+        borderDash: isTotalLabel(s.label) ? [6, 4] : undefined,
+      }));
+
+      const currentWeek = weekStartIso();
+      const totalSeries = series.find((s) => isTotalLabel(s.label));
+      if (totalSeries && !requestType) {
+        const valuesForMedian = totalSeries.data
+          .map((v, i) => (weeks[i] === currentWeek ? null : v))
+          .filter((v) => v != null);
+        const med = median(valuesForMedian);
+        if (med != null) {
+          datasets.push({
+            label: "Mediaan totaal aantal tickets",
+            data: weeks.map((w) => (w === currentWeek ? null : med)),
+            tension: 0,
+            borderColor: "#c62828",
+            backgroundColor: "#c62828",
+            borderDash: [4, 4],
+            pointRadius: 0,
+            pointHitRadius: 0,
+          });
+        }
+      }
+
+      if (requestType && series[0]) {
+        const typeSeries = series[0];
+        const valuesForMedian = typeSeries.data
+          .map((v, i) => (weeks[i] === currentWeek ? null : v))
+          .filter((v) => v != null);
+        const med = median(valuesForMedian);
+        if (med != null) {
+          datasets.push({
+            label: `Mediaan ${typeSeries.label}`,
+            data: weeks.map((w) => (w === currentWeek ? null : med)),
+            tension: 0,
+            borderColor: "#c62828",
+            backgroundColor: "#c62828",
+            borderDash: [4, 4],
+            pointRadius: 0,
+            pointHitRadius: 0,
+          });
+        }
+      }
+
+      return { labels, datasets };
+    },
     [weeks, series]
   );
 
@@ -434,6 +530,32 @@ export default function Home() {
       })),
     }),
     [weeksOnderwerp, onderwerpSeries]
+  );
+
+  const priorityBarData = useMemo(
+    () => ({
+      labels: priorityVolume.map((x) => x.priority),
+      datasets: [
+        {
+          label: "Totaal issues per priority",
+          data: priorityVolume.map((x) => x.tickets),
+        },
+      ],
+    }),
+    [priorityVolume]
+  );
+
+  const assigneeBarData = useMemo(
+    () => ({
+      labels: assigneeVolume.map((x) => x.assignee),
+      datasets: [
+        {
+          label: "Totaal issues per assignee",
+          data: assigneeVolume.map((x) => x.tickets),
+        },
+      ],
+    }),
+    [assigneeVolume]
   );
 
   const onderwerpPieData = useMemo(() => {
@@ -505,6 +627,8 @@ export default function Home() {
       if (typeLabel) params.set("request_type", typeLabel);
       if (onderwerpLabel) params.set("onderwerp", onderwerpLabel);
       else if (onderwerp) params.set("onderwerp", onderwerp);
+      if (priority) params.set("priority", priority);
+      if (assignee) params.set("assignee", assignee);
 
       const res = await fetch(`${API}/issues?` + params.toString());
       const data = await res.json();
@@ -526,6 +650,8 @@ export default function Home() {
     const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
     if (requestType) params.set("request_type", requestType);
     if (onderwerp) params.set("onderwerp", onderwerp);
+    if (priority) params.set("priority", priority);
+    if (assignee) params.set("assignee", assignee);
 
     fetch(`${API}/metrics/volume_weekly?` + params.toString())
       .then((r) => r.json())
@@ -535,8 +661,18 @@ export default function Home() {
       .then((r) => r.json())
       .then((data) => (Array.isArray(data) ? setOnderwerpVolume(data) : setOnderwerpVolume([])));
 
+    fetch(`${API}/metrics/volume_by_priority?` + params.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setPriorityVolume(data) : setPriorityVolume([])));
+
+    fetch(`${API}/metrics/volume_by_assignee?` + params.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setAssigneeVolume(data) : setAssigneeVolume([])));
+
     const p = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
     if (onderwerp) p.set("onderwerp", onderwerp);
+    if (priority) p.set("priority", priority);
+    if (assignee) p.set("assignee", assignee);
 
     fetch(`${API}/metrics/leadtime_p90_by_type?` + p.toString())
       .then((r) => r.json())
@@ -591,7 +727,9 @@ export default function Home() {
               placeholder="dd/mm/jjjj"
               value={dateFromUi}
               onChange={(e) => setDateFromUi(e.target.value)}
+              onFocus={() => setIsFilterFocused(true)}
               onBlur={() => {
+                setIsFilterFocused(false);
                 const iso = parseNlDateToIso(dateFromUi);
                 if (iso) {
                   setDateFrom(iso);
@@ -639,6 +777,8 @@ export default function Home() {
               ref={dateFromNativeRef}
               type="date"
               value={dateFrom}
+              onFocus={() => setIsFilterFocused(true)}
+              onBlur={() => setIsFilterFocused(false)}
               onChange={(e) => {
                 const iso = e.target.value;
                 setDateFrom(iso);
@@ -659,7 +799,9 @@ export default function Home() {
               placeholder="dd/mm/jjjj"
               value={dateToUi}
               onChange={(e) => setDateToUi(e.target.value)}
+              onFocus={() => setIsFilterFocused(true)}
               onBlur={() => {
+                setIsFilterFocused(false);
                 const iso = parseNlDateToIso(dateToUi);
                 if (iso) {
                   setDateTo(iso);
@@ -706,6 +848,8 @@ export default function Home() {
               ref={dateToNativeRef}
               type="date"
               value={dateTo}
+              onFocus={() => setIsFilterFocused(true)}
+              onBlur={() => setIsFilterFocused(false)}
               onChange={(e) => {
                 const iso = e.target.value;
                 setDateTo(iso);
@@ -732,7 +876,15 @@ export default function Home() {
                 border: "1px solid rgba(0,0,0,0.15)",
               }}
             />
-            <select value={requestType} onChange={(e) => setRequestType(e.target.value)}>
+            <select
+              value={requestType}
+              onFocus={() => setIsFilterFocused(true)}
+              onBlur={() => setIsFilterFocused(false)}
+              onChange={(e) => {
+                setRequestType(e.target.value);
+                e.target.blur();
+              }}
+            >
               <option value="">(alle)</option>
               {meta.request_types.map((rt) => (
                 <option key={rt} value={rt}>
@@ -745,7 +897,15 @@ export default function Home() {
 
         <label>
           Onderwerp<br />
-          <select value={onderwerp} onChange={(e) => setOnderwerp(e.target.value)}>
+          <select
+            value={onderwerp}
+            onFocus={() => setIsFilterFocused(true)}
+            onBlur={() => setIsFilterFocused(false)}
+            onChange={(e) => {
+              setOnderwerp(e.target.value);
+              e.target.blur();
+            }}
+          >
             <option value="">(alle)</option>
             {meta.onderwerpen.map((o) => (
               <option key={o} value={o}>
@@ -755,10 +915,52 @@ export default function Home() {
           </select>
         </label>
 
+        <label>
+          Prioriteit<br />
+          <select
+            value={priority}
+            onFocus={() => setIsFilterFocused(true)}
+            onBlur={() => setIsFilterFocused(false)}
+            onChange={(e) => {
+              setPriority(e.target.value);
+              e.target.blur();
+            }}
+          >
+            <option value="">(alle)</option>
+            {meta.priorities.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          Assignee<br />
+          <select
+            value={assignee}
+            onFocus={() => setIsFilterFocused(true)}
+            onBlur={() => setIsFilterFocused(false)}
+            onChange={(e) => {
+              setAssignee(e.target.value);
+              e.target.blur();
+            }}
+          >
+            <option value="">(alle)</option>
+            {meta.assignees.map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+          </select>
+        </label>
+
         <button
           onClick={() => {
             setRequestType("");
             setOnderwerp("");
+            setPriority("");
+            setAssignee("");
           }}
         >
           Reset filters
@@ -804,6 +1006,8 @@ export default function Home() {
             if (!el) return;
             const weekStart = weeks[el.index];
             const typeLabel = lineData.datasets[el.datasetIndex]?.label;
+            if (typeLabel === "Mediaan totaal aantal tickets") return;
+            if (typeLabel && typeLabel.startsWith("Mediaan ")) return;
             const effectiveType = requestType ? requestType : isTotalLabel(typeLabel) ? "" : typeLabel;
             fetchDrilldown(weekStart, effectiveType, "");
           },
@@ -889,6 +1093,22 @@ export default function Home() {
           />
         </div>
       )}
+
+      <h2 style={{ marginTop: 28 }}>Issues per priority</h2>
+      <Bar
+        data={priorityBarData}
+        options={{
+          plugins: { legend: { position: "top" } },
+        }}
+      />
+
+      <h2 style={{ marginTop: 28 }}>Issues per assignee</h2>
+      <Bar
+        data={assigneeBarData}
+        options={{
+          plugins: { legend: { position: "top" } },
+        }}
+      />
 
       <h2 style={{ marginTop: 28 }}>Doorlooptijd p90 per request type</h2>
       <Bar
@@ -981,7 +1201,7 @@ export default function Home() {
         </div>
 
         <div style={{ padding: "10px 20px", borderBottom: "1px solid #f0f0f0" }}>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <button
               onClick={() =>
                 fetchDrilldown(selectedWeek, selectedType, selectedOnderwerp, Math.max(0, drillOffset - DRILL_LIMIT))
@@ -999,6 +1219,23 @@ export default function Home() {
             <span style={{ color: "#666" }}>
               rijen {drillOffset + 1}–{drillOffset + drillIssues.length}
             </span>
+            <span style={{ color: "#aaa" }}>•</span>
+            <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input
+                type="checkbox"
+                checked={showPriority}
+                onChange={(e) => setShowPriority(e.target.checked)}
+              />
+              Priority
+            </label>
+            <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input
+                type="checkbox"
+                checked={showAssignee}
+                onChange={(e) => setShowAssignee(e.target.checked)}
+              />
+              Assignee
+            </label>
           </div>
         </div>
 
@@ -1013,6 +1250,16 @@ export default function Home() {
                     <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: "8px" }}>Key</th>
                     <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: "8px" }}>Type</th>
                     <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: "8px" }}>Onderwerp</th>
+                    {showPriority ? (
+                      <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: "8px" }}>
+                        Priority
+                      </th>
+                    ) : null}
+                    {showAssignee ? (
+                      <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: "8px" }}>
+                        Assignee
+                      </th>
+                    ) : null}
                     <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: "8px" }}>Status</th>
                     <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: "8px" }}>Created</th>
                     <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: "8px" }}>Resolved</th>
@@ -1036,6 +1283,16 @@ export default function Home() {
                         {x.request_type || ""}
                       </td>
                       <td style={{ borderBottom: "1px solid #f0f0f0", padding: "8px" }}>{x.onderwerp || ""}</td>
+                      {showPriority ? (
+                        <td style={{ borderBottom: "1px solid #f0f0f0", padding: "8px" }}>
+                          {x.priority || ""}
+                        </td>
+                      ) : null}
+                      {showAssignee ? (
+                        <td style={{ borderBottom: "1px solid #f0f0f0", padding: "8px" }}>
+                          {x.assignee || ""}
+                        </td>
+                      ) : null}
                       <td style={{ borderBottom: "1px solid #f0f0f0", padding: "8px" }}>{x.status || ""}</td>
                       <td style={{ borderBottom: "1px solid #f0f0f0", padding: "8px" }}>{fmtDate(x.created_at)}</td>
                       <td style={{ borderBottom: "1px solid #f0f0f0", padding: "8px" }}>{fmtDate(x.resolved_at)}</td>

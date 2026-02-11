@@ -42,6 +42,7 @@ def api_search(next_page_token=None):
             "resolutiondate",
             "status",
             "priority",
+            "assignee",
             REQUEST_TYPE_FIELD,
             ONDERWERP_FIELD,
         ],
@@ -72,6 +73,11 @@ def norm_dropdown(v):
         return v.get("value") or v.get("name")
     return None if v is None else str(v)
 
+def norm_assignee(v):
+    if isinstance(v, dict):
+        return v.get("displayName") or v.get("emailAddress") or v.get("accountId")
+    return None if v is None else str(v)
+
 def main():
     inserted = 0
     page = 0
@@ -100,11 +106,12 @@ def main():
 
                 status = (f.get("status") or {}).get("name")
                 priority = (f.get("priority") or {}).get("name")
+                assignee = norm_assignee(f.get("assignee"))
 
                 cur.execute(
                     """
-                    insert into issues(issue_key, request_type, onderwerp_logging, created_at, resolved_at, updated_at, priority, current_status)
-                    values (%s,%s,%s,%s,%s,%s,%s,%s)
+                    insert into issues(issue_key, request_type, onderwerp_logging, created_at, resolved_at, updated_at, priority, assignee, current_status)
+                    values (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     on conflict (issue_key) do update set
                       request_type=excluded.request_type,
                       onderwerp_logging=excluded.onderwerp_logging,
@@ -112,9 +119,10 @@ def main():
                       resolved_at=excluded.resolved_at,
                       updated_at=excluded.updated_at,
                       priority=excluded.priority,
+                      assignee=excluded.assignee,
                       current_status=excluded.current_status
                     """,
-                    (issue_key, request_type, onderwerp, created_at, resolved_at, updated_at, priority, status),
+                    (issue_key, request_type, onderwerp, created_at, resolved_at, updated_at, priority, assignee, status),
                 )
                 inserted += 1
 

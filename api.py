@@ -77,6 +77,7 @@ def jira_search(jql: str, max_results: int = 100, next_page_token: Optional[str]
             "resolutiondate",
             "status",
             "priority",
+            "assignee",
             REQUEST_TYPE_FIELD,
             ONDERWERP_FIELD,
         ],
@@ -130,6 +131,11 @@ def norm_dropdown(v):
         return v.get("value") or v.get("name")
     return None if v is None else str(v)
 
+def norm_assignee(v):
+    if isinstance(v, dict):
+        return v.get("displayName") or v.get("emailAddress") or v.get("accountId")
+    return None if v is None else str(v)
+
 
 
 def upsert_issues(issues):
@@ -147,11 +153,12 @@ def upsert_issues(issues):
 
             status = (f.get("status") or {}).get("name")
             priority = (f.get("priority") or {}).get("name")
+            assignee = norm_assignee(f.get("assignee"))
 
             cur.execute(
                 """
-                insert into issues(issue_key, request_type, onderwerp_logging, created_at, resolved_at, updated_at, priority, current_status)
-                values (%s,%s,%s,%s,%s,%s,%s,%s)
+                insert into issues(issue_key, request_type, onderwerp_logging, created_at, resolved_at, updated_at, priority, assignee, current_status)
+                values (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 on conflict (issue_key) do update set
                   request_type=excluded.request_type,
                   onderwerp_logging=excluded.onderwerp_logging,
@@ -159,15 +166,16 @@ def upsert_issues(issues):
                   resolved_at=excluded.resolved_at,
                   updated_at=excluded.updated_at,
                   priority=excluded.priority,
+                  assignee=excluded.assignee,
                   current_status=excluded.current_status
                 """,
-                (issue_key, request_type, onderwerp, created_at, resolved_at, updated_at, priority, status),
+                (issue_key, request_type, onderwerp, created_at, resolved_at, updated_at, priority, assignee, status),
             )
         c.commit()
 
 
 
-def run_sync_once():
+def run_sync_once(full: bool = False):
     """
     Incremental sync op basis van 'updated' sinds last_sync.
     We gebruiken 5 minuten overlap om edge-cases te voorkomen.
@@ -186,7 +194,7 @@ def run_sync_once():
         _sync_last_result = None
 
     try:
-        last = get_last_sync()
+        last = None if full else get_last_sync()
         now_utc = datetime.utcnow()
 
         if last is None:
@@ -262,7 +270,16 @@ def meta():
         request_types = [r[0] for r in cur.fetchall()]
         cur.execute("select distinct onderwerp_logging from issues where onderwerp_logging is not null order by 1;")
         onderwerpen = [r[0] for r in cur.fetchall()]
-    return {"request_types": request_types, "onderwerpen": onderwerpen}
+        cur.execute("select distinct priority from issues where priority is not null order by 1;")
+        priorities = [r[0] for r in cur.fetchall()]
+        cur.execute("select distinct assignee from issues where assignee is not null order by 1;")
+        assignees = [r[0] for r in cur.fetchall()]
+    return {
+        "request_types": request_types,
+        "onderwerpen": onderwerpen,
+        "priorities": priorities,
+        "assignees": assignees,
+    }
 
 
 @app.get("/metrics/volume_weekly")
@@ -271,6 +288,8 @@ def volume_weekly(
     date_to: str = Query(..., description="ISO date/time, e.g. 2026-01-01"),
     request_type: Optional[str] = None,
     onderwerp: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee: Optional[str] = None,
 ):
     q = """
     select
@@ -281,11 +300,16 @@ def volume_weekly(
     where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
       and (%s is null or request_type = %s)
       and (%s is null or onderwerp_logging = %s)
+      and (%s is null or priority = %s)
+      and (%s is null or assignee = %s)
     group by 1,2
     order by 1,2;
     """
     with conn() as c, c.cursor() as cur:
-        cur.execute(q, (date_from, date_to, request_type, request_type, onderwerp, onderwerp))
+        cur.execute(
+            q,
+            (date_from, date_to, request_type, request_type, onderwerp, onderwerp, priority, priority, assignee, assignee),
+        )
         rows = cur.fetchall()
 
     # Return as list for easy charting
@@ -297,6 +321,8 @@ def leadtime_p90_by_type(
     date_from: str = Query(...),
     date_to: str = Query(...),
     onderwerp: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee: Optional[str] = None,
 ):
     q = """
     select
@@ -309,13 +335,79 @@ def leadtime_p90_by_type(
     where resolved_at is not null
       and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
       and (%s is null or onderwerp_logging = %s)
+      and (%s is null or priority = %s)
+      and (%s is null or assignee = %s)
     group by 1
     order by 1;
     """
     with conn() as c, c.cursor() as cur:
-        cur.execute(q, (date_from, date_to, onderwerp, onderwerp))
+        cur.execute(q, (date_from, date_to, onderwerp, onderwerp, priority, priority, assignee, assignee))
         rows = cur.fetchall()
     return [{"request_type": r[0], "p90_hours": float(r[1]) if r[1] is not None else None, "n": r[2]} for r in rows]
+
+
+@app.get("/metrics/volume_by_priority")
+def volume_by_priority(
+    date_from: str = Query(...),
+    date_to: str = Query(...),
+    request_type: Optional[str] = None,
+    onderwerp: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee: Optional[str] = None,
+):
+    q = """
+    select
+      priority,
+      count(*) as tickets
+    from issues
+    where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
+      and priority is not null
+      and (%s is null or request_type = %s)
+      and (%s is null or onderwerp_logging = %s)
+      and (%s is null or priority = %s)
+      and (%s is null or assignee = %s)
+    group by 1
+    order by 2 desc, 1;
+    """
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            q,
+            (date_from, date_to, request_type, request_type, onderwerp, onderwerp, priority, priority, assignee, assignee),
+        )
+        rows = cur.fetchall()
+    return [{"priority": r[0], "tickets": r[1]} for r in rows]
+
+
+@app.get("/metrics/volume_by_assignee")
+def volume_by_assignee(
+    date_from: str = Query(...),
+    date_to: str = Query(...),
+    request_type: Optional[str] = None,
+    onderwerp: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee: Optional[str] = None,
+):
+    q = """
+    select
+      assignee,
+      count(*) as tickets
+    from issues
+    where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
+      and assignee is not null
+      and (%s is null or request_type = %s)
+      and (%s is null or onderwerp_logging = %s)
+      and (%s is null or priority = %s)
+      and (%s is null or assignee = %s)
+    group by 1
+    order by 2 desc, 1;
+    """
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            q,
+            (date_from, date_to, request_type, request_type, onderwerp, onderwerp, priority, priority, assignee, assignee),
+        )
+        rows = cur.fetchall()
+    return [{"assignee": r[0], "tickets": r[1]} for r in rows]
 
 
 @app.get("/metrics/volume_weekly_by_onderwerp")
@@ -324,6 +416,8 @@ def volume_weekly_by_onderwerp(
     date_to: str = Query(..., description="ISO date/time, e.g. 2026-01-01"),
     request_type: Optional[str] = None,
     onderwerp: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee: Optional[str] = None,
 ):
     q = """
     select
@@ -334,11 +428,16 @@ def volume_weekly_by_onderwerp(
     where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
       and (%s is null or request_type = %s)
       and (%s is null or onderwerp_logging = %s)
+      and (%s is null or priority = %s)
+      and (%s is null or assignee = %s)
     group by 1,2
     order by 1,2;
     """
     with conn() as c, c.cursor() as cur:
-        cur.execute(q, (date_from, date_to, request_type, request_type, onderwerp, onderwerp))
+        cur.execute(
+            q,
+            (date_from, date_to, request_type, request_type, onderwerp, onderwerp, priority, priority, assignee, assignee),
+        )
         rows = cur.fetchall()
     return [{"week": r[0].isoformat(), "onderwerp": r[1], "tickets": r[2]} for r in rows]
 
@@ -349,20 +448,40 @@ def issues(
     date_to: str,
     request_type: Optional[str] = None,
     onderwerp: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
 ):
     q = """
-    select issue_key, request_type, onderwerp_logging, created_at, resolved_at, priority, current_status
+    select issue_key, request_type, onderwerp_logging, created_at, resolved_at, priority, assignee, current_status
     from issues
     where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
       and (%s is null or request_type = %s)
       and (%s is null or onderwerp_logging = %s)
+      and (%s is null or priority = %s)
+      and (%s is null or assignee = %s)
     order by created_at desc
     limit %s offset %s;
     """
     with conn() as c, c.cursor() as cur:
-        cur.execute(q, (date_from, date_to, request_type, request_type, onderwerp, onderwerp, limit, offset))
+        cur.execute(
+            q,
+            (
+                date_from,
+                date_to,
+                request_type,
+                request_type,
+                onderwerp,
+                onderwerp,
+                priority,
+                priority,
+                assignee,
+                assignee,
+                limit,
+                offset,
+            ),
+        )
         rows = cur.fetchall()
 
     return [
@@ -373,7 +492,8 @@ def issues(
             "created_at": r[3].isoformat(),
             "resolved_at": r[4].isoformat() if r[4] else None,
             "priority": r[5],
-            "status": r[6],
+            "assignee": r[6],
+            "status": r[7],
         }
         for r in rows
     ]
@@ -396,3 +516,10 @@ def sync(background_tasks: BackgroundTasks):
     # in background zodat je UI niet blokkeert
     background_tasks.add_task(run_sync_once)
     return {"queued": True}
+
+
+@app.post("/sync/full")
+def sync_full(background_tasks: BackgroundTasks):
+    # full sync: negeer last_sync en haal alles opnieuw op
+    background_tasks.add_task(run_sync_once, True)
+    return {"queued": True, "mode": "full"}
