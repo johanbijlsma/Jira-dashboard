@@ -203,6 +203,7 @@ export default function Home() {
   const drillCloseRef = useRef(null);
   const [showPriority, setShowPriority] = useState(false);
   const [showAssignee, setShowAssignee] = useState(false);
+  const autoSyncAttemptRef = useRef(0);
 
   const DRILL_LIMIT = 100;
   const syncBusy = syncLoading || !!syncStatus?.running;
@@ -266,6 +267,21 @@ export default function Home() {
     }, 15000);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    if (!syncStatus || syncBusy) return;
+    const lastSyncRaw = syncStatus.last_sync;
+    const lastSync = lastSyncRaw ? new Date(lastSyncRaw) : null;
+    const now = Date.now();
+    const isStale =
+      !lastSync || Number.isNaN(lastSync.getTime()) || now - lastSync.getTime() > 60 * 60 * 1000;
+    if (!isStale) return;
+
+    // Throttle automatic retries when sync fails or takes long.
+    if (now - autoSyncAttemptRef.current < 10 * 60 * 1000) return;
+    autoSyncAttemptRef.current = now;
+    triggerSync().catch(() => {});
+  }, [syncStatus, syncBusy]);
 
   useEffect(() => {
     function onKeyDown(e) {
@@ -560,9 +576,8 @@ export default function Home() {
   );
 
   const onderwerpLineData = useMemo(
-    () => ({
-      labels: weeksOnderwerp.map((w) => fmtDate(w)),
-      datasets: onderwerpSeries.map((s, i) => ({
+    () => {
+      const datasets = onderwerpSeries.map((s, i) => ({
         label: s.label,
         data: s.data,
         tension: 0.2,
@@ -570,9 +585,35 @@ export default function Home() {
         backgroundColor: uniqueChartColor(i, onderwerpSeries.length),
         pointBackgroundColor: uniqueChartColor(i, onderwerpSeries.length),
         pointBorderColor: uniqueChartColor(i, onderwerpSeries.length),
-      })),
-    }),
-    [weeksOnderwerp, onderwerpSeries]
+      }));
+
+      // When a specific onderwerp filter is active, add a median guide line for that onderwerp.
+      if (onderwerp && onderwerpSeries[0]) {
+        const currentWeek = weekStartIso();
+        const valuesForMedian = onderwerpSeries[0].data
+          .map((v, i) => (weeksOnderwerp[i] === currentWeek ? null : v))
+          .filter((v) => v != null);
+        const med = median(valuesForMedian);
+        if (med != null) {
+          datasets.push({
+            label: `Mediaan ${onderwerpSeries[0].label}`,
+            data: weeksOnderwerp.map((w) => (w === currentWeek ? null : med)),
+            tension: 0,
+            borderColor: "#c62828",
+            backgroundColor: "#c62828",
+            borderDash: [4, 4],
+            pointRadius: 0,
+            pointHitRadius: 0,
+          });
+        }
+      }
+
+      return {
+        labels: weeksOnderwerp.map((w) => fmtDate(w)),
+        datasets,
+      };
+    },
+    [weeksOnderwerp, onderwerpSeries, onderwerp]
   );
 
   const priorityColors = useMemo(
@@ -813,6 +854,23 @@ export default function Home() {
     background: "#fff",
     cursor: "pointer",
     whiteSpace: "nowrap",
+  };
+  const hiddenChartPlaceholderStyle = {
+    height: 320,
+    border: "1px dashed #cbd5e1",
+    borderRadius: 10,
+    color: "#64748b",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    textAlign: "center",
+    padding: 16,
+  };
+  const donutBodyStyle = {
+    height: 320,
+    maxWidth: 520,
+    display: "flex",
+    alignItems: "center",
   };
 
   return (
@@ -1169,6 +1227,7 @@ export default function Home() {
                 if (!el) return;
                 const weekStart = weeksOnderwerp[el.index];
                 const subjectLabel = onderwerpLineData.datasets[el.datasetIndex]?.label;
+                if (!subjectLabel || subjectLabel.startsWith("Mediaan ")) return;
                 if (!subjectLabel || subjectLabel === "Overig") return;
                 setOnderwerp(subjectLabel || "");
                 fetchDrilldown(weekStart, requestType, subjectLabel);
@@ -1220,55 +1279,71 @@ export default function Home() {
           alignItems: "start",
         }}
       >
-        <div>
-          <h2 style={{ marginTop: 0 }}>Issues per priority</h2>
-          {hasDataPoints(priorityBarData) ? (
-            <div style={{ maxWidth: 520 }}>
-              <Doughnut
-                data={priorityBarData}
-                options={{
-                  cutout: "60%",
-                  plugins: {
-                    legend: {
-                      display: true,
-                      position: "right",
-                      labels: {
-                        color: (ctx) => priorityColors?.[ctx.index] || "#6b7280",
+        {!priority ? (
+          <div>
+            <h2 style={{ marginTop: 0 }}>Issues per priority</h2>
+            {hasDataPoints(priorityBarData) ? (
+              <div style={donutBodyStyle}>
+                <Doughnut
+                  data={priorityBarData}
+                  options={{
+                    cutout: "60%",
+                    maintainAspectRatio: false,
+                    plugins: {
+                      legend: {
+                        display: true,
+                        position: "right",
+                        labels: {
+                          color: (ctx) => priorityColors?.[ctx.index] || "#6b7280",
+                        },
                       },
                     },
-                  },
-                }}
-              />
-            </div>
-          ) : (
-            <EmptyChartState onReset={() => resetFilters(true)} />
-          )}
-        </div>
+                  }}
+                />
+              </div>
+            ) : (
+              <EmptyChartState onReset={() => resetFilters(true)} />
+            )}
+          </div>
+        ) : (
+          <div>
+            <h2 style={{ marginTop: 0 }}>Issues per priority</h2>
+            <div style={hiddenChartPlaceholderStyle}>Verborgen omdat filter `Prioriteit` actief is.</div>
+          </div>
+        )}
 
-        <div>
-          <h2 style={{ marginTop: 0 }}>Issues per assignee</h2>
-          {hasDataPoints(assigneeBarData) ? (
-            <div style={{ maxWidth: 520 }}>
-              <Doughnut
-                data={assigneeBarData}
-                options={{
-                  cutout: "60%",
-                  plugins: {
-                    legend: {
-                      display: true,
-                      position: "right",
-                      labels: {
-                        color: (ctx) => assigneeColors?.[ctx.index] || "#6b7280",
+        {!assignee ? (
+          <div>
+            <h2 style={{ marginTop: 0 }}>Issues per assignee</h2>
+            {hasDataPoints(assigneeBarData) ? (
+              <div style={donutBodyStyle}>
+                <Doughnut
+                  data={assigneeBarData}
+                  options={{
+                    cutout: "60%",
+                    maintainAspectRatio: false,
+                    plugins: {
+                      legend: {
+                        display: true,
+                        position: "right",
+                        labels: {
+                          color: (ctx) => assigneeColors?.[ctx.index] || "#6b7280",
+                        },
                       },
                     },
-                  },
-                }}
-              />
-            </div>
-          ) : (
-            <EmptyChartState onReset={() => resetFilters(true)} />
-          )}
-        </div>
+                  }}
+                />
+              </div>
+            ) : (
+              <EmptyChartState onReset={() => resetFilters(true)} />
+            )}
+          </div>
+        ) : (
+          <div>
+            <h2 style={{ marginTop: 0 }}>Issues per assignee</h2>
+            <div style={hiddenChartPlaceholderStyle}>Verborgen omdat filter `Assignee` actief is.</div>
+          </div>
+        )}
       </div>
 
       <h2 style={{ marginTop: 28 }}>Doorlooptijd p90 per request type</h2>
