@@ -131,10 +131,10 @@ function EmptyChartState({ onReset }) {
   return (
     <div
       style={{
-        border: "1px dashed #cfd8dc",
+        border: "1px dashed var(--border)",
         borderRadius: 8,
         padding: "14px 12px",
-        color: "#455a64",
+        color: "var(--text-muted)",
         display: "flex",
         gap: 10,
         alignItems: "center",
@@ -203,10 +203,28 @@ export default function Home() {
   const drillCloseRef = useRef(null);
   const [showPriority, setShowPriority] = useState(false);
   const [showAssignee, setShowAssignee] = useState(false);
+  const [expandedCard, setExpandedCard] = useState("");
   const autoSyncAttemptRef = useRef(0);
 
   const DRILL_LIMIT = 100;
   const syncBusy = syncLoading || !!syncStatus?.running;
+  const activeFilterItems = useMemo(() => {
+    const items = [];
+    if (requestType) items.push(`Type: ${requestType}`);
+    if (onderwerp) items.push(`Onderwerp: ${onderwerp}`);
+    if (priority) items.push(`Prioriteit: ${priority}`);
+    if (assignee) items.push(`Assignee: ${assignee}`);
+    if (servicedeskOnly !== DEFAULT_SERVICEDESK_ONLY) {
+      items.push(servicedeskOnly ? "Scope: alleen servicedesk" : "Scope: alle tickets");
+    }
+    return items;
+  }, [
+    requestType,
+    onderwerp,
+    priority,
+    assignee,
+    servicedeskOnly,
+  ]);
 
   function closeDrilldown() {
     setSelectedWeek("");
@@ -320,6 +338,15 @@ export default function Home() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [selectedWeek]);
+
+  useEffect(() => {
+    if (!expandedCard) return;
+    function onKeyDown(e) {
+      if (e.key === "Escape") setExpandedCard("");
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [expandedCard]);
 
   useEffect(() => {
     if (!selectedWeek) return;
@@ -824,42 +851,44 @@ export default function Home() {
   }
 
   const filterPanelStyle = {
-    marginBottom: 18,
-    padding: 14,
-    border: "1px solid #e5e7eb",
+    marginBottom: 12,
+    padding: 12,
+    border: "1px solid var(--border)",
     borderRadius: 10,
-    background: "#fafafa",
+    background: "var(--surface-muted)",
   };
   const filterGridStyle = {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-    gap: 12,
+    gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+    gap: 10,
     alignItems: "end",
   };
   const fieldStyle = { display: "flex", flexDirection: "column", gap: 6, minWidth: 0 };
-  const labelStyle = { fontSize: 12, fontWeight: 600, color: "#334155" };
+  const labelStyle = { fontSize: 12, fontWeight: 600, color: "var(--text-subtle)" };
   const inputBaseStyle = {
     height: 36,
     padding: "0 10px",
-    border: "1px solid #cbd5e1",
+    border: "1px solid var(--border)",
     borderRadius: 8,
-    background: "#fff",
+    background: "var(--surface)",
+    color: "var(--text-main)",
     width: "100%",
   };
   const buttonBaseStyle = {
     height: 36,
     padding: "0 12px",
-    border: "1px solid #cbd5e1",
+    border: "1px solid var(--border)",
     borderRadius: 8,
-    background: "#fff",
+    background: "var(--surface)",
+    color: "var(--text-main)",
     cursor: "pointer",
     whiteSpace: "nowrap",
   };
   const hiddenChartPlaceholderStyle = {
-    height: 320,
-    border: "1px dashed #cbd5e1",
+    height: "100%",
+    border: "1px dashed var(--border)",
     borderRadius: 10,
-    color: "#64748b",
+    color: "var(--text-muted)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -867,16 +896,436 @@ export default function Home() {
     padding: 16,
   };
   const donutBodyStyle = {
-    height: 320,
-    maxWidth: 520,
+    height: "100%",
     display: "flex",
     alignItems: "center",
+    justifyContent: "center",
+  };
+  const chartShellStyle = {
+    border: "1px solid var(--border-strong)",
+    borderRadius: 10,
+    background: "var(--surface)",
+    padding: 12,
+    minWidth: 0,
+    height: 360,
+    display: "flex",
+    flexDirection: "column",
+  };
+  const chartBodyStyle = {
+    flex: 1,
+    minHeight: 0,
+    position: "relative",
+  };
+  const pageStyle = {
+    fontFamily: "system-ui",
+    padding: 16,
+    maxWidth: "100%",
+    margin: "0 auto",
+    background: "var(--page-bg)",
+    color: "var(--text-main)",
+  };
+  const topChartsGridStyle = {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))",
+    gap: 12,
+    alignItems: "start",
+    width: "100%",
+    marginBottom: 12,
+  };
+  const lowerChartsGridStyle = {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+    gap: 12,
+    alignItems: "start",
+    width: "100%",
+  };
+  const chartTitleStyle = {
+    margin: "0 0 8px",
+    fontSize: 18,
+    lineHeight: 1.2,
+  };
+  const sectionHeaderStyle = {
+    display: "flex",
+    gap: 8,
+    alignItems: "center",
+    marginBottom: 8,
+    flexWrap: "wrap",
+  };
+  const activeFilterBarStyle = {
+    marginTop: 10,
+    padding: "8px 10px",
+    borderRadius: 8,
+    border: "1px solid var(--border)",
+    background: "var(--surface)",
+    display: "flex",
+    gap: 8,
+    alignItems: "center",
+    flexWrap: "wrap",
+  };
+  const activeFilterChipStyle = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "4px 8px",
+    borderRadius: 999,
+    background: "color-mix(in srgb, var(--accent) 14%, transparent)",
+    color: "var(--text-main)",
+    border: "1px solid color-mix(in srgb, var(--accent) 34%, var(--border))",
+    fontSize: 12,
+    lineHeight: 1.2,
+    maxWidth: "100%",
+  };
+  const resetActiveFiltersButtonStyle = {
+    height: 30,
+    padding: "0 10px",
+    border: "1px solid var(--danger)",
+    borderRadius: 8,
+    background: "color-mix(in srgb, var(--danger) 12%, var(--surface))",
+    color: "var(--danger)",
+    cursor: "pointer",
+    fontWeight: 600,
+  };
+  const cardTitleButtonStyle = {
+    margin: "0 0 8px",
+    padding: 0,
+    border: "none",
+    background: "transparent",
+    textAlign: "left",
+    fontSize: 18,
+    lineHeight: 1.2,
+    fontWeight: 700,
+    color: "var(--text-main)",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  };
+  const cardTitleHintStyle = {
+    fontSize: 12,
+    fontWeight: 600,
+    color: "var(--accent)",
+    opacity: 0.9,
+  };
+  const modalOverlayStyle = {
+    position: "fixed",
+    inset: 0,
+    background: "var(--overlay-bg)",
+    zIndex: 1001,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+    animation: "overlayIn 180ms ease",
+  };
+  const modalFrameStyle = {
+    width: "100%",
+    display: "flex",
+    justifyContent: "center",
+    transform: selectedWeek ? "translateX(clamp(-360px, -18vw, -96px))" : "translateX(0)",
+    transition: "transform 220ms ease",
+    pointerEvents: "none",
+  };
+  const modalCardStyle = {
+    width: "min(1280px, 96vw)",
+    height: "min(88vh, 880px)",
+    background: "var(--surface)",
+    borderRadius: 14,
+    border: "1px solid var(--border)",
+    boxShadow: "0 24px 70px var(--shadow-strong)",
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden",
+    animation: "modalIn 220ms cubic-bezier(0.2, 0.7, 0.2, 1)",
+    pointerEvents: "auto",
+  };
+  const modalHeaderStyle = {
+    display: "flex",
+    gap: 12,
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "12px 14px",
+    borderBottom: "1px solid var(--border-strong)",
+    background: "var(--surface-muted)",
+  };
+  const modalBodyStyle = {
+    flex: 1,
+    minHeight: 0,
+    padding: 14,
+    overflow: "auto",
+  };
+  const modalCloseStyle = {
+    height: 34,
+    padding: "0 10px",
+    border: "1px solid var(--border)",
+    borderRadius: 8,
+    background: "var(--surface)",
+    color: "var(--text-main)",
+    cursor: "pointer",
   };
 
+  const cardTitles = {
+    volume: "Volume per week",
+    onderwerp: "Onderwerp logging",
+    priority: "Issues per priority",
+    assignee: "Issues per assignee",
+    p90: "Doorlooptijd p90",
+  };
+
+  function renderCardContent(cardKey, expanded = false) {
+    const bodyStyle = expanded ? { height: "100%", minHeight: 0, position: "relative" } : chartBodyStyle;
+    const donutStyle = expanded ? { ...donutBodyStyle, minHeight: 0 } : donutBodyStyle;
+    const emptyStyle = expanded ? { ...hiddenChartPlaceholderStyle, minHeight: 0 } : hiddenChartPlaceholderStyle;
+    const nameSuffix = expanded ? "-modal" : "-main";
+
+    if (cardKey === "volume") {
+      return (
+        <div style={bodyStyle}>
+          {hasDataPoints(lineData) ? (
+            <Line
+              data={lineData}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                onClick: (_evt, elements) => {
+                  const el = elements?.[0];
+                  if (!el) return;
+                  const weekStart = weeks[el.index];
+                  const typeLabel = lineData.datasets[el.datasetIndex]?.label;
+                  if (typeLabel === "Mediaan totaal aantal tickets") return;
+                  if (typeLabel && typeLabel.startsWith("Mediaan ")) return;
+                  const effectiveType = requestType ? requestType : isTotalLabel(typeLabel) ? "" : typeLabel;
+                  fetchDrilldown(weekStart, effectiveType, "");
+                },
+                plugins: {
+                  legend: { display: false },
+                  tooltip: { mode: "nearest", intersect: false },
+                },
+                interaction: { mode: "nearest", intersect: false },
+              }}
+            />
+          ) : (
+            <EmptyChartState onReset={() => resetFilters(true)} />
+          )}
+        </div>
+      );
+    }
+
+    if (cardKey === "onderwerp") {
+      const onderwerpContentStyle = expanded
+        ? { display: "flex", flexDirection: "column", flex: 1, minHeight: 0, height: "100%" }
+        : { display: "flex", flexDirection: "column", flex: 1, minHeight: 0 };
+      return (
+        <div style={onderwerpContentStyle}>
+          <div style={sectionHeaderStyle}>
+            <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Weergave</span>
+            <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input
+                type="radio"
+                name={`onderwerpChartMode${nameSuffix}`}
+                value="line"
+                checked={onderwerpChartMode === "line"}
+                onChange={() => setOnderwerpChartMode("line")}
+              />
+              Line
+            </label>
+            <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input
+                type="radio"
+                name={`onderwerpChartMode${nameSuffix}`}
+                value="pie"
+                checked={onderwerpChartMode === "pie"}
+                onChange={() => setOnderwerpChartMode("pie")}
+              />
+              Pie
+            </label>
+            <span style={{ width: 1, height: 16, background: "var(--border)", margin: "0 4px" }} />
+            <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input
+                type="radio"
+                name={`onderwerpViewMode${nameSuffix}`}
+                value="all"
+                checked={onderwerpViewMode === "all"}
+                onChange={() => setOnderwerpViewMode("all")}
+              />
+              Alle onderwerpen
+            </label>
+            <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input
+                type="radio"
+                name={`onderwerpViewMode${nameSuffix}`}
+                value="top5_overig"
+                checked={onderwerpViewMode === "top5_overig"}
+                onChange={() => setOnderwerpViewMode("top5_overig")}
+              />
+              Top 5 + Overig
+            </label>
+          </div>
+          <div style={bodyStyle}>
+            {onderwerpChartMode === "line" ? (
+              hasDataPoints(onderwerpLineData) ? (
+                <Line
+                  data={onderwerpLineData}
+                  options={{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    onClick: (_evt, elements) => {
+                      const el = elements?.[0];
+                      if (!el) return;
+                      const weekStart = weeksOnderwerp[el.index];
+                      const subjectLabel = onderwerpLineData.datasets[el.datasetIndex]?.label;
+                      if (!subjectLabel || subjectLabel.startsWith("Mediaan ")) return;
+                      if (!subjectLabel || subjectLabel === "Overig") return;
+                      setOnderwerp(subjectLabel || "");
+                      fetchDrilldown(weekStart, requestType, subjectLabel);
+                    },
+                    plugins: {
+                      legend: { display: false },
+                      tooltip: { mode: "nearest", intersect: false },
+                    },
+                    interaction: { mode: "nearest", intersect: false },
+                  }}
+                />
+              ) : (
+                <EmptyChartState onReset={() => resetFilters(true)} />
+              )
+            ) : hasDataPoints(onderwerpPieData) ? (
+              <Pie
+                data={onderwerpPieData}
+                options={{
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  onClick: (_evt, elements) => {
+                    const el = elements?.[0];
+                    if (!el) return;
+                    const subjectLabel = onderwerpPieData.labels?.[el.index];
+                    if (!subjectLabel || subjectLabel === "Overig") return;
+                    setOnderwerp(subjectLabel);
+                    const weekStart = weeksOnderwerp[weeksOnderwerp.length - 1];
+                    if (!weekStart) return;
+                    fetchDrilldown(weekStart, requestType, subjectLabel);
+                  },
+                  plugins: {
+                    legend: {
+                      position: "right",
+                    },
+                  },
+                }}
+              />
+            ) : (
+              <EmptyChartState onReset={() => resetFilters(true)} />
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    if (cardKey === "priority") {
+      return (
+        <div style={bodyStyle}>
+          {!priority ? (
+            hasDataPoints(priorityBarData) ? (
+              <div style={donutStyle}>
+                <Doughnut
+                  data={priorityBarData}
+                  options={{
+                    cutout: "60%",
+                    maintainAspectRatio: false,
+                    plugins: {
+                      legend: {
+                        display: true,
+                        position: "right",
+                        labels: {
+                          color: (ctx) => priorityColors?.[ctx.index] || "#6b7280",
+                        },
+                      },
+                    },
+                  }}
+                />
+              </div>
+            ) : (
+              <EmptyChartState onReset={() => resetFilters(true)} />
+            )
+          ) : (
+            <div style={emptyStyle}>Verborgen omdat filter `Prioriteit` actief is.</div>
+          )}
+        </div>
+      );
+    }
+
+    if (cardKey === "assignee") {
+      return (
+        <div style={bodyStyle}>
+          {!assignee ? (
+            hasDataPoints(assigneeBarData) ? (
+              <div style={donutStyle}>
+                <Doughnut
+                  data={assigneeBarData}
+                  options={{
+                    cutout: "60%",
+                    maintainAspectRatio: false,
+                    plugins: {
+                      legend: {
+                        display: true,
+                        position: "right",
+                        labels: {
+                          color: (ctx) => assigneeColors?.[ctx.index] || "#6b7280",
+                        },
+                      },
+                    },
+                  }}
+                />
+              </div>
+            ) : (
+              <EmptyChartState onReset={() => resetFilters(true)} />
+            )
+          ) : (
+            <div style={emptyStyle}>Verborgen omdat filter `Assignee` actief is.</div>
+          )}
+        </div>
+      );
+    }
+
+    if (cardKey === "p90") {
+      return (
+        <>
+          <div style={bodyStyle}>
+            {hasDataPoints(barData) ? (
+              <Bar
+                data={barData}
+                options={{
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  plugins: {
+                    legend: { display: false },
+                  },
+                  scales: {
+                    x: {
+                      ticks: {
+                        color: (ctx) => typeColor(ctx.tick?.label),
+                      },
+                    },
+                  },
+                }}
+              />
+            ) : (
+              <EmptyChartState onReset={() => resetFilters(true)} />
+            )}
+          </div>
+          <p style={{ margin: "8px 0 0", color: "var(--text-muted)", fontSize: 12 }}>
+            Tip: filter op “Onderwerp” om p90 per type te zien voor één categorie.
+          </p>
+        </>
+      );
+    }
+
+    return null;
+  }
+
   return (
-    <div style={{ fontFamily: "system-ui", padding: 24, maxWidth: 1100, margin: "0 auto" }}>
+    <div style={pageStyle}>
       <Toast message={syncMessage} kind={syncMessageKind} onClose={() => setSyncMessage("")} />
-      <h1>JSM Dashboard (SD)</h1>
+      <h1 style={{ margin: "0 0 12px", lineHeight: 1.1 }}>JSM Dashboard (SD)</h1>
 
       <div style={filterPanelStyle}>
         <div style={filterGridStyle}>
@@ -1016,7 +1465,7 @@ export default function Home() {
                 borderRadius: 999,
                 background: typeColor(requestType),
                 display: "inline-block",
-                border: "1px solid rgba(0,0,0,0.15)",
+                border: "1px solid var(--indicator-border)",
               }}
             />
             <select
@@ -1108,10 +1557,6 @@ export default function Home() {
         </div>
 
         <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <button onClick={() => resetFilters(true)} style={buttonBaseStyle}>
-            Reset filters
-          </button>
-
           <button onClick={triggerSync} disabled={syncBusy} style={buttonBaseStyle}>
             {syncBusy ? (
               <>
@@ -1126,7 +1571,7 @@ export default function Home() {
           </button>
 
           {syncStatus ? (
-            <div style={{ color: "#666", display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ color: "var(--text-muted)", display: "flex", gap: 10, flexWrap: "wrap" }}>
             <div>
               {syncStatus.running ? (
                 <>Bezig met synchroniseren…</>
@@ -1141,233 +1586,114 @@ export default function Home() {
             </div>
           ) : null}
         </div>
+
+        {activeFilterItems.length ? (
+          <div style={activeFilterBarStyle}>
+            <strong style={{ fontSize: 12, color: "var(--text-subtle)" }}>
+              {`Actieve filters (${activeFilterItems.length})`}
+            </strong>
+            <button
+              type="button"
+              onClick={() => resetFilters(true)}
+              style={resetActiveFiltersButtonStyle}
+              title="Reset actieve filters"
+            >
+              Reset filters
+            </button>
+            {activeFilterItems.map((item) => (
+              <span key={item} style={activeFilterChipStyle} title={item}>
+                {item}
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
 
-      <h2>Volume per week</h2>
-      {hasDataPoints(lineData) ? (
-        <Line
-          data={lineData}
-          options={{
-            responsive: true,
-            onClick: (_evt, elements) => {
-              const el = elements?.[0];
-              if (!el) return;
-              const weekStart = weeks[el.index];
-              const typeLabel = lineData.datasets[el.datasetIndex]?.label;
-              if (typeLabel === "Mediaan totaal aantal tickets") return;
-              if (typeLabel && typeLabel.startsWith("Mediaan ")) return;
-              const effectiveType = requestType ? requestType : isTotalLabel(typeLabel) ? "" : typeLabel;
-              fetchDrilldown(weekStart, effectiveType, "");
-            },
-            plugins: {
-              legend: { display: false },
-              tooltip: { mode: "nearest", intersect: false },
-            },
-            interaction: { mode: "nearest", intersect: false },
-          }}
-        />
-      ) : (
-        <EmptyChartState onReset={() => resetFilters(true)} />
-      )}
-
-      <h2 style={{ marginTop: 28 }}>Onderwerp logging</h2>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
-        <span style={{ fontSize: 12, color: "#666" }}>Weergave</span>
-        <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <input
-            type="radio"
-            name="onderwerpChartMode"
-            value="line"
-            checked={onderwerpChartMode === "line"}
-            onChange={() => setOnderwerpChartMode("line")}
-          />
-          Line
-        </label>
-        <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <input
-            type="radio"
-            name="onderwerpChartMode"
-            value="pie"
-            checked={onderwerpChartMode === "pie"}
-            onChange={() => setOnderwerpChartMode("pie")}
-          />
-          Pie
-        </label>
-        <span style={{ width: 1, height: 16, background: "#d1d5db", margin: "0 4px" }} />
-        <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <input
-            type="radio"
-            name="onderwerpViewMode"
-            value="all"
-            checked={onderwerpViewMode === "all"}
-            onChange={() => setOnderwerpViewMode("all")}
-          />
-          Alle onderwerpen
-        </label>
-        <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <input
-            type="radio"
-            name="onderwerpViewMode"
-            value="top5_overig"
-            checked={onderwerpViewMode === "top5_overig"}
-            onChange={() => setOnderwerpViewMode("top5_overig")}
-          />
-          Top 5 + Overig
-        </label>
-      </div>
-
-      {onderwerpChartMode === "line" ? (
-        hasDataPoints(onderwerpLineData) ? (
-          <Line
-            data={onderwerpLineData}
-            options={{
-              responsive: true,
-              onClick: (_evt, elements) => {
-                const el = elements?.[0];
-                if (!el) return;
-                const weekStart = weeksOnderwerp[el.index];
-                const subjectLabel = onderwerpLineData.datasets[el.datasetIndex]?.label;
-                if (!subjectLabel || subjectLabel.startsWith("Mediaan ")) return;
-                if (!subjectLabel || subjectLabel === "Overig") return;
-                setOnderwerp(subjectLabel || "");
-                fetchDrilldown(weekStart, requestType, subjectLabel);
-              },
-              plugins: {
-                legend: { display: false },
-                tooltip: { mode: "nearest", intersect: false },
-              },
-              interaction: { mode: "nearest", intersect: false },
-            }}
-          />
-        ) : (
-          <EmptyChartState onReset={() => resetFilters(true)} />
-        )
-      ) : hasDataPoints(onderwerpPieData) ? (
-        <div>
-          <Pie
-            data={onderwerpPieData}
-            options={{
-              responsive: true,
-              onClick: (_evt, elements) => {
-                const el = elements?.[0];
-                if (!el) return;
-                const subjectLabel = onderwerpPieData.labels?.[el.index];
-                if (!subjectLabel || subjectLabel === "Overig") return;
-                setOnderwerp(subjectLabel);
-                const weekStart = weeksOnderwerp[weeksOnderwerp.length - 1];
-                if (!weekStart) return;
-                fetchDrilldown(weekStart, requestType, subjectLabel);
-              },
-              plugins: {
-                legend: {
-                  position: "right",
-                },
-              },
-            }}
-          />
+      <div style={topChartsGridStyle}>
+        <div style={chartShellStyle}>
+          <button
+            type="button"
+            className="card-expand-title"
+            style={cardTitleButtonStyle}
+            onClick={() => setExpandedCard("volume")}
+          >
+            <span style={chartTitleStyle}>{cardTitles.volume}</span>
+            <span style={cardTitleHintStyle}>Vergroot</span>
+          </button>
+          {renderCardContent("volume")}
         </div>
-      ) : (
-        <EmptyChartState onReset={() => resetFilters(true)} />
-      )}
 
-      <div
-        style={{
-          marginTop: 28,
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-          gap: 20,
-          alignItems: "start",
-        }}
-      >
-        {!priority ? (
-          <div>
-            <h2 style={{ marginTop: 0 }}>Issues per priority</h2>
-            {hasDataPoints(priorityBarData) ? (
-              <div style={donutBodyStyle}>
-                <Doughnut
-                  data={priorityBarData}
-                  options={{
-                    cutout: "60%",
-                    maintainAspectRatio: false,
-                    plugins: {
-                      legend: {
-                        display: true,
-                        position: "right",
-                        labels: {
-                          color: (ctx) => priorityColors?.[ctx.index] || "#6b7280",
-                        },
-                      },
-                    },
-                  }}
-                />
-              </div>
-            ) : (
-              <EmptyChartState onReset={() => resetFilters(true)} />
-            )}
-          </div>
-        ) : (
-          <div>
-            <h2 style={{ marginTop: 0 }}>Issues per priority</h2>
-            <div style={hiddenChartPlaceholderStyle}>Verborgen omdat filter `Prioriteit` actief is.</div>
-          </div>
-        )}
+        <div style={chartShellStyle}>
+          <button
+            type="button"
+            className="card-expand-title"
+            style={cardTitleButtonStyle}
+            onClick={() => setExpandedCard("onderwerp")}
+          >
+            <span style={chartTitleStyle}>{cardTitles.onderwerp}</span>
+            <span style={cardTitleHintStyle}>Vergroot</span>
+          </button>
+          {renderCardContent("onderwerp")}
+        </div>
 
-        {!assignee ? (
-          <div>
-            <h2 style={{ marginTop: 0 }}>Issues per assignee</h2>
-            {hasDataPoints(assigneeBarData) ? (
-              <div style={donutBodyStyle}>
-                <Doughnut
-                  data={assigneeBarData}
-                  options={{
-                    cutout: "60%",
-                    maintainAspectRatio: false,
-                    plugins: {
-                      legend: {
-                        display: true,
-                        position: "right",
-                        labels: {
-                          color: (ctx) => assigneeColors?.[ctx.index] || "#6b7280",
-                        },
-                      },
-                    },
-                  }}
-                />
-              </div>
-            ) : (
-              <EmptyChartState onReset={() => resetFilters(true)} />
-            )}
-          </div>
-        ) : (
-          <div>
-            <h2 style={{ marginTop: 0 }}>Issues per assignee</h2>
-            <div style={hiddenChartPlaceholderStyle}>Verborgen omdat filter `Assignee` actief is.</div>
-          </div>
-        )}
       </div>
 
-      <h2 style={{ marginTop: 28 }}>Doorlooptijd p90 per request type</h2>
-      {hasDataPoints(barData) ? (
-        <Bar
-          data={barData}
-          options={{
-            plugins: {
-              legend: { display: false },
-            },
-            scales: {
-              x: {
-                ticks: {
-                  color: (ctx) => typeColor(ctx.tick?.label),
-                },
-              },
-            },
-          }}
-        />
-      ) : (
-        <EmptyChartState onReset={() => resetFilters(true)} />
-      )}
+      <div style={lowerChartsGridStyle}>
+        <div style={chartShellStyle}>
+          <button
+            type="button"
+            className="card-expand-title"
+            style={cardTitleButtonStyle}
+            onClick={() => setExpandedCard("priority")}
+          >
+            <span style={chartTitleStyle}>{cardTitles.priority}</span>
+            <span style={cardTitleHintStyle}>Vergroot</span>
+          </button>
+          {renderCardContent("priority")}
+        </div>
 
-      <p style={{ marginTop: 20, color: "#666" }}>Tip: filter op “Onderwerp” om p90 per type te zien voor één categorie.</p>
+        <div style={chartShellStyle}>
+          <button
+            type="button"
+            className="card-expand-title"
+            style={cardTitleButtonStyle}
+            onClick={() => setExpandedCard("assignee")}
+          >
+            <span style={chartTitleStyle}>{cardTitles.assignee}</span>
+            <span style={cardTitleHintStyle}>Vergroot</span>
+          </button>
+          {renderCardContent("assignee")}
+        </div>
+
+        <div style={chartShellStyle}>
+          <button
+            type="button"
+            className="card-expand-title"
+            style={cardTitleButtonStyle}
+            onClick={() => setExpandedCard("p90")}
+          >
+            <span style={chartTitleStyle}>{cardTitles.p90}</span>
+            <span style={cardTitleHintStyle}>Vergroot</span>
+          </button>
+          {renderCardContent("p90")}
+        </div>
+      </div>
+
+      {expandedCard ? (
+        <div role="dialog" aria-modal="true" aria-label={cardTitles[expandedCard]} style={modalOverlayStyle} onClick={() => setExpandedCard("")}>
+          <div style={modalFrameStyle}>
+            <div style={modalCardStyle} onClick={(e) => e.stopPropagation()}>
+              <div style={modalHeaderStyle}>
+                <h2 style={{ margin: 0, fontSize: 20 }}>{cardTitles[expandedCard]}</h2>
+                <button type="button" onClick={() => setExpandedCard("")} style={modalCloseStyle}>
+                  Sluiten
+                </button>
+              </div>
+              <div style={modalBodyStyle}>{renderCardContent(expandedCard, true)}</div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div
         aria-hidden={!selectedWeek}
@@ -1375,11 +1701,11 @@ export default function Home() {
         style={{
           position: "fixed",
           inset: 0,
-          background: "rgba(0,0,0,0.35)",
+          background: "var(--overlay-soft)",
           opacity: selectedWeek ? 1 : 0,
           pointerEvents: selectedWeek ? "auto" : "none",
           transition: "opacity 200ms ease",
-          zIndex: 998,
+          zIndex: 1200,
         }}
       />
 
@@ -1395,19 +1721,19 @@ export default function Home() {
           top: 0,
           right: 0,
           height: "100vh",
-          width: "min(720px, 92vw)",
-          background: "#fff",
-          boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+          width: "min(60vw, 1200px)",
+          background: "var(--surface)",
+          boxShadow: "0 10px 30px var(--shadow-medium)",
           transform: selectedWeek ? "translateX(0)" : "translateX(100%)",
           transition: "transform 200ms ease",
-          zIndex: 999,
+          zIndex: 1201,
           display: "flex",
           flexDirection: "column",
         }}
       >
-        <div style={{ padding: "16px 20px", borderBottom: "1px solid #e6e6e6", display: "flex", gap: 10 }}>
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border-strong)", display: "flex", gap: 10 }}>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>Drilldown</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Drilldown</div>
             <div style={{ fontSize: 16 }}>
               Week vanaf <b>{fmtDate(selectedWeek)}</b>
               {selectedType ? (
@@ -1429,7 +1755,7 @@ export default function Home() {
             ref={drillCloseRef}
             style={{
               background: "transparent",
-              border: "1px solid #ddd",
+              border: "1px solid var(--border)",
               borderRadius: 8,
               padding: "6px 10px",
               cursor: "pointer",
@@ -1440,7 +1766,7 @@ export default function Home() {
           </button>
         </div>
 
-        <div style={{ padding: "10px 20px", borderBottom: "1px solid #f0f0f0" }}>
+        <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border)" }}>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <button
               onClick={() =>
@@ -1456,10 +1782,10 @@ export default function Home() {
             >
               Volgende
             </button>
-            <span style={{ color: "#666" }}>
+            <span style={{ color: "var(--text-muted)" }}>
               rijen {drillOffset + 1}–{drillOffset + drillIssues.length}
             </span>
-            <span style={{ color: "#aaa" }}>•</span>
+            <span style={{ color: "var(--text-faint)" }}>•</span>
             <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <input
                 type="checkbox"
@@ -1487,69 +1813,155 @@ export default function Home() {
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
-                    <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: "8px" }}>Key</th>
-                    <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: "8px" }}>Type</th>
-                    <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: "8px" }}>Onderwerp</th>
+                    <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Key</th>
+                    <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Type</th>
+                    <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Onderwerp</th>
                     {showPriority ? (
-                      <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: "8px" }}>
+                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>
                         Priority
                       </th>
                     ) : null}
                     {showAssignee ? (
-                      <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: "8px" }}>
+                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>
                         Assignee
                       </th>
                     ) : null}
-                    <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: "8px" }}>Status</th>
-                    <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: "8px" }}>Created</th>
-                    <th style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: "8px" }}>Resolved</th>
+                    <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Status</th>
+                    <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Created</th>
+                    <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Resolved</th>
                   </tr>
                 </thead>
                 <tbody>
                   {drillIssues.map((x) => (
                     <tr key={x.issue_key}>
-                      <td style={{ borderBottom: "1px solid #f0f0f0", padding: "8px" }}>
+                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
                         <a href={`${JIRA_BASE}/browse/${x.issue_key}`} target="_blank" rel="noreferrer">
                           {x.issue_key}
                         </a>
                       </td>
                       <td
                         style={{
-                          borderBottom: "1px solid #f0f0f0",
+                          borderBottom: "1px solid var(--border)",
                           padding: "8px",
                           color: typeColor(x.request_type),
                         }}
                       >
                         {x.request_type || ""}
                       </td>
-                      <td style={{ borderBottom: "1px solid #f0f0f0", padding: "8px" }}>{x.onderwerp || ""}</td>
+                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>{x.onderwerp || ""}</td>
                       {showPriority ? (
-                        <td style={{ borderBottom: "1px solid #f0f0f0", padding: "8px" }}>
+                        <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
                           {x.priority || ""}
                         </td>
                       ) : null}
                       {showAssignee ? (
-                        <td style={{ borderBottom: "1px solid #f0f0f0", padding: "8px" }}>
+                        <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
                           {x.assignee || ""}
                         </td>
                       ) : null}
-                      <td style={{ borderBottom: "1px solid #f0f0f0", padding: "8px" }}>{x.status || ""}</td>
-                      <td style={{ borderBottom: "1px solid #f0f0f0", padding: "8px" }}>{fmtDate(x.created_at)}</td>
-                      <td style={{ borderBottom: "1px solid #f0f0f0", padding: "8px" }}>{fmtDate(x.resolved_at)}</td>
+                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>{x.status || ""}</td>
+                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>{fmtDate(x.created_at)}</td>
+                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>{fmtDate(x.resolved_at)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
 
-              <div style={{ marginTop: 8, color: "#666" }}>
+              <div style={{ marginTop: 8, color: "var(--text-muted)" }}>
                 {drillIssues.length} tickets (limit {DRILL_LIMIT}, offset {drillOffset})
               </div>
             </div>
           ) : (
-            <div style={{ color: "#666" }}>Klik op een punt in “Volume per week” om tickets te zien.</div>
+            <div style={{ color: "var(--text-muted)" }}>Klik op een punt in “Volume per week” om tickets te zien.</div>
           )}
         </div>
       </div>
+
+      <style jsx global>{`
+        :root {
+          color-scheme: light dark;
+          --page-bg: #f1f5f9;
+          --surface: #ffffff;
+          --surface-muted: #f8fafc;
+          --text-main: #0f172a;
+          --text-subtle: #334155;
+          --text-muted: #64748b;
+          --text-faint: #94a3b8;
+          --border: #cbd5e1;
+          --border-strong: #e2e8f0;
+          --accent: #2563eb;
+          --danger: #dc2626;
+          --overlay-bg: rgba(15, 23, 42, 0.55);
+          --overlay-soft: rgba(0, 0, 0, 0.35);
+          --shadow-medium: rgba(0, 0, 0, 0.25);
+          --shadow-strong: rgba(2, 6, 23, 0.35);
+          --indicator-border: rgba(0, 0, 0, 0.15);
+        }
+        @media (prefers-color-scheme: dark) {
+          :root {
+            --page-bg: #020617;
+            --surface: #0f172a;
+            --surface-muted: #111c31;
+            --text-main: #e5e7eb;
+            --text-subtle: #cbd5e1;
+            --text-muted: #94a3b8;
+            --text-faint: #64748b;
+            --border: #334155;
+            --border-strong: #475569;
+            --accent: #60a5fa;
+            --danger: #f87171;
+            --overlay-bg: rgba(2, 6, 23, 0.72);
+            --overlay-soft: rgba(2, 6, 23, 0.55);
+            --shadow-medium: rgba(0, 0, 0, 0.45);
+            --shadow-strong: rgba(0, 0, 0, 0.62);
+            --indicator-border: rgba(148, 163, 184, 0.35);
+          }
+        }
+        html,
+        body {
+          background: var(--page-bg);
+          color: var(--text-main);
+        }
+        input,
+        select,
+        textarea,
+        button {
+          color: var(--text-main);
+        }
+        a {
+          color: var(--accent);
+        }
+        .card-expand-title {
+          transition: transform 160ms ease, color 160ms ease, opacity 160ms ease;
+        }
+        .card-expand-title:hover {
+          transform: translateY(-1px);
+          color: var(--accent);
+        }
+        .card-expand-title:focus-visible {
+          outline: 2px solid var(--accent);
+          outline-offset: 3px;
+          border-radius: 6px;
+        }
+        @keyframes overlayIn {
+          from {
+            opacity: 0;
+          }
+          to {
+            opacity: 1;
+          }
+        }
+        @keyframes modalIn {
+          from {
+            opacity: 0;
+            transform: translateY(12px) scale(0.985);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
+      `}</style>
     </div>
   );
 }
