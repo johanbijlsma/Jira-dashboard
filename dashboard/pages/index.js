@@ -75,6 +75,42 @@ function parseNlDateToIso(value) {
   return dt.toISOString().slice(0, 10);
 }
 
+function weekStartIsoFromDate(d = new Date()) {
+  const dt = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = dt.getUTCDay();
+  const diff = (day + 6) % 7; // days since Monday
+  dt.setUTCDate(dt.getUTCDate() - diff);
+  return dt.toISOString().slice(0, 10);
+}
+
+function buildWeekStartsFromRange(fromIso, toIso) {
+  if (!fromIso || !toIso) return [];
+  const [fy, fm, fd] = fromIso.split("-").map(Number);
+  const [ty, tm, td] = toIso.split("-").map(Number);
+  const from = new Date(Date.UTC(fy, fm - 1, fd));
+  const to = new Date(Date.UTC(ty, tm - 1, td));
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return [];
+
+  const day = from.getUTCDay();
+  const diff = (day + 6) % 7;
+  from.setUTCDate(from.getUTCDate() - diff);
+
+  const weeks = [];
+  const cursor = new Date(from);
+  while (cursor <= to) {
+    weeks.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 7);
+  }
+  return weeks;
+}
+
+function addDaysIso(yyyyMmDd, days) {
+  const [y, m, d] = yyyyMmDd.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
+
 function Toast({ message, kind, onClose }) {
   if (!message) return null;
 
@@ -127,25 +163,137 @@ function hasDataPoints(chartData) {
   );
 }
 
-function EmptyChartState({ onReset }) {
+function num(value, digits = 0) {
+  if (value == null || Number.isNaN(Number(value))) return "—";
+  return new Intl.NumberFormat("nl-NL", {
+    maximumFractionDigits: digits,
+    minimumFractionDigits: digits,
+  }).format(Number(value));
+}
+
+function pct(value) {
+  if (value == null || Number.isNaN(Number(value))) return "—";
+  return `${num(value, 1)}%`;
+}
+
+const SimpleDataLabelsPlugin = {
+  id: "simpleDataLabels",
+  afterDatasetsDraw(chart, _args, pluginOptions) {
+    if (pluginOptions === false) return;
+    const opts = {
+      mode: "bar", // arc | bar | line
+      color: null,
+      fontSize: 11,
+      fontWeight: "600",
+      lineOffset: 8,
+      barOffset: 8,
+      maxLabels: 14,
+      minArcPct: 6,
+      datasetIndexes: null,
+      ...pluginOptions,
+    };
+
+    const computed = typeof window !== "undefined" ? getComputedStyle(document.documentElement) : null;
+    const textColor = opts.color || computed?.getPropertyValue("--text-main")?.trim() || "#111827";
+    const haloColor = computed?.getPropertyValue("--surface")?.trim() || "#ffffff";
+    const ctx = chart.ctx;
+    const visibleMetas = chart.getSortedVisibleDatasetMetas();
+    if (!visibleMetas.length) return;
+    const colorCache = new Map();
+
+    function resolveCssColor(input) {
+      const key = String(input || "");
+      if (!key) return null;
+      if (colorCache.has(key)) return colorCache.get(key);
+      const probe = document.createElement("canvas").getContext("2d");
+      if (!probe) return null;
+      probe.fillStyle = "#000000";
+      probe.fillStyle = key;
+      const normalized = probe.fillStyle;
+      const m = String(normalized).match(/rgba?\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+      const value = m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+      colorCache.set(key, value);
+      return value;
+    }
+
+    function contrastTextFor(background) {
+      const rgb = resolveCssColor(background);
+      if (!rgb) return textColor;
+      const [r, g, b] = rgb.map((v) => v / 255);
+      const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      return luminance > 0.6 ? "#0b1220" : "#f8fafc";
+    }
+
+    function drawLabel(label, x, y, fill = textColor) {
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = haloColor;
+      ctx.strokeText(label, x, y);
+      ctx.fillStyle = fill;
+      ctx.fillText(label, x, y);
+      ctx.fillStyle = textColor;
+    }
+
+    ctx.save();
+    ctx.font = `${opts.fontWeight} ${opts.fontSize}px system-ui`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    if (opts.mode === "arc") {
+      const meta = visibleMetas[0];
+      const values = (chart.data.datasets?.[meta.index]?.data || []).map((v) => Number(v) || 0);
+      const total = values.reduce((sum, v) => sum + v, 0);
+      if (total <= 0) {
+        ctx.restore();
+        return;
+      }
+
+      meta.data.forEach((element, idx) => {
+        const value = values[idx] || 0;
+        if (value <= 0) return;
+        const percentage = (value / total) * 100;
+        if (percentage < opts.minArcPct) return;
+        const pos = element.tooltipPosition();
+        const label = `${num(value)} (${Math.round(percentage)}%)`;
+        const rawColors = chart.data.datasets?.[meta.index]?.backgroundColor;
+        const bgColor = Array.isArray(rawColors) ? rawColors[idx] : rawColors;
+        drawLabel(label, pos.x, pos.y, contrastTextFor(bgColor));
+      });
+      ctx.restore();
+      return;
+    }
+
+    visibleMetas.forEach((meta) => {
+      if (Array.isArray(opts.datasetIndexes) && !opts.datasetIndexes.includes(meta.index)) return;
+      const dataset = chart.data.datasets?.[meta.index];
+      if (!dataset || dataset.hidden) return;
+      if (String(dataset.label || "").startsWith("Mediaan ")) return;
+      const values = (dataset.data || []).map((v) => Number(v));
+      const valid = values.filter((v) => Number.isFinite(v));
+      const step = valid.length > opts.maxLabels ? Math.ceil(valid.length / opts.maxLabels) : 1;
+
+      meta.data.forEach((element, idx) => {
+        const value = values[idx];
+        if (!Number.isFinite(value) || value <= 0) return;
+        if (idx % step !== 0 && idx !== values.length - 1) return;
+
+        const pos = element.tooltipPosition();
+        const y = opts.mode === "line" ? pos.y - opts.lineOffset : pos.y - opts.barOffset;
+        drawLabel(num(value, value % 1 === 0 ? 0 : 1), pos.x, y, textColor);
+      });
+    });
+
+    ctx.restore();
+  },
+};
+
+if (!ChartJS.registry.plugins.get("simpleDataLabels")) {
+  ChartJS.register(SimpleDataLabelsPlugin);
+}
+
+function EmptyChartState({ filterLabel, style }) {
   return (
-    <div
-      style={{
-        border: "1px dashed var(--border)",
-        borderRadius: 8,
-        padding: "14px 12px",
-        color: "var(--text-muted)",
-        display: "flex",
-        gap: 10,
-        alignItems: "center",
-        justifyContent: "space-between",
-        flexWrap: "wrap",
-      }}
-    >
-      <span>Geen issues gevonden voor deze filtercombinatie.</span>
-      <button type="button" onClick={onReset}>
-        Reset filters
-      </button>
+    <div style={style}>
+      <span>{`Verborgen omdat filter \`${filterLabel}\` actief is.`}</span>
     </div>
   );
 }
@@ -204,6 +352,8 @@ export default function Home() {
   const [showPriority, setShowPriority] = useState(false);
   const [showAssignee, setShowAssignee] = useState(false);
   const [expandedCard, setExpandedCard] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [topOnderwerpSort, setTopOnderwerpSort] = useState("wow");
   const autoSyncAttemptRef = useRef(0);
 
   const DRILL_LIMIT = 100;
@@ -225,6 +375,27 @@ export default function Home() {
     assignee,
     servicedeskOnly,
   ]);
+  const p90Period = useMemo(() => {
+    const weekStarts = buildWeekStartsFromRange(dateFrom, dateTo);
+    const currentWeek = weekStartIsoFromDate();
+    const completed = weekStarts.filter((w) => w < currentWeek);
+    if (!completed.length) {
+      return {
+        hasData: false,
+        dateFrom: null,
+        dateTo: null,
+        label: "Geen volledige weken in de huidige datumselectie",
+      };
+    }
+    const from = completed[0];
+    const to = addDaysIso(completed[completed.length - 1], 6);
+    return {
+      hasData: true,
+      dateFrom: from,
+      dateTo: to,
+      label: `${fmtDate(from)} t/m ${fmtDate(to)} (${completed.length} volledige weken)`,
+    };
+  }, [dateFrom, dateTo]);
 
   function closeDrilldown() {
     setSelectedWeek("");
@@ -349,6 +520,15 @@ export default function Home() {
   }, [expandedCard]);
 
   useEffect(() => {
+    if (!filtersOpen) return;
+    function onKeyDown(e) {
+      if (e.key === "Escape") setFiltersOpen(false);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [filtersOpen]);
+
+  useEffect(() => {
     if (!selectedWeek) return;
     const t = setTimeout(() => {
       drillCloseRef.current?.focus?.();
@@ -412,45 +592,44 @@ export default function Home() {
       .then((r) => r.json())
       .then((data) => (Array.isArray(data) ? setAssigneeVolume(data) : setAssigneeVolume([])));
 
-    const p = new URLSearchParams({
-      date_from: dateFrom,
-      date_to: dateTo,
-    });
-    if (onderwerp) p.set("onderwerp", onderwerp);
-    if (priority) p.set("priority", priority);
-    if (assignee) p.set("assignee", assignee);
-    if (servicedeskOnly) p.set("servicedesk_only", "true");
+    if (!p90Period.hasData) {
+      setP90([]);
+    } else {
+      const p = new URLSearchParams({
+        date_from: p90Period.dateFrom,
+        date_to: p90Period.dateTo,
+      });
+      if (onderwerp) p.set("onderwerp", onderwerp);
+      if (priority) p.set("priority", priority);
+      if (assignee) p.set("assignee", assignee);
+      if (servicedeskOnly) p.set("servicedesk_only", "true");
 
-    fetch(`${API}/metrics/leadtime_p90_by_type?` + p.toString())
-      .then((r) => r.json())
-      .then(setP90);
-  }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee, servicedeskOnly]);
-
-  function buildWeekStarts(fromIso, toIso) {
-    if (!fromIso || !toIso) return [];
-    const [fy, fm, fd] = fromIso.split("-").map(Number);
-    const [ty, tm, td] = toIso.split("-").map(Number);
-    const from = new Date(Date.UTC(fy, fm - 1, fd));
-    const to = new Date(Date.UTC(ty, tm - 1, td));
-    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return [];
-
-    // Align to Monday (Postgres date_trunc('week') start)
-    const day = from.getUTCDay(); // 0=Sun..6=Sat
-    const diff = (day + 6) % 7; // days since Monday
-    from.setUTCDate(from.getUTCDate() - diff);
-
-    const weeks = [];
-    const cursor = new Date(from);
-    while (cursor <= to) {
-      weeks.push(cursor.toISOString().slice(0, 10));
-      cursor.setUTCDate(cursor.getUTCDate() + 7);
+      fetch(`${API}/metrics/leadtime_p90_by_type?` + p.toString())
+        .then((r) => r.json())
+        .then(setP90);
     }
-    return weeks;
-  }
+  }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee, servicedeskOnly, p90Period]);
 
   // volume -> weeks x series (use full range so empty weeks show as 0)
-  const weeks = useMemo(() => buildWeekStarts(dateFrom, dateTo), [dateFrom, dateTo]);
-  const weeksOnderwerp = useMemo(() => buildWeekStarts(dateFrom, dateTo), [dateFrom, dateTo]);
+  const weeks = useMemo(() => buildWeekStartsFromRange(dateFrom, dateTo), [dateFrom, dateTo]);
+  const weeksOnderwerp = useMemo(() => buildWeekStartsFromRange(dateFrom, dateTo), [dateFrom, dateTo]);
+  const fullWeekInfo = useMemo(() => {
+    const currentWeek = weekStartIsoFromDate();
+    const indices = weeks
+      .map((w, idx) => (w < currentWeek ? idx : -1))
+      .filter((idx) => idx >= 0);
+    const lastIndex = indices.length ? indices[indices.length - 1] : -1;
+    const prevIndex = indices.length > 1 ? indices[indices.length - 2] : -1;
+    const periodFrom = indices.length ? fmtDate(weeks[indices[0]]) : "—";
+    const periodTo = indices.length ? fmtDate(weeks[lastIndex]) : "—";
+    return {
+      indices,
+      lastIndex,
+      prevIndex,
+      periodLabel: `${periodFrom} t/m ${periodTo}`,
+      count: indices.length,
+    };
+  }, [weeks]);
 
   const series = useMemo(() => {
     const types = requestType ? [requestType] : meta.request_types;
@@ -535,11 +714,7 @@ export default function Home() {
   }
 
   function weekStartIso(d = new Date()) {
-    const dt = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-    const day = dt.getUTCDay();
-    const diff = (day + 6) % 7; // days since Monday
-    dt.setUTCDate(dt.getUTCDate() - diff);
-    return dt.toISOString().slice(0, 10);
+    return weekStartIsoFromDate(d);
   }
 
   const lineData = useMemo(
@@ -721,25 +896,144 @@ export default function Home() {
 
   const barData = useMemo(
     () => ({
-      labels: p90.map((x) => x.request_type),
+      labels: p90.map((x) => `${x.request_type} (n=${x.n || 0})`),
       datasets: [
         {
-          label: "p90 doorlooptijd (uren)",
+          label: "p50 (uren)",
+          data: p90.map((x) => x.p50_hours),
+          backgroundColor: "rgba(59, 130, 246, 0.55)",
+          borderColor: "rgba(59, 130, 246, 0.95)",
+        },
+        {
+          label: "p75 (uren)",
+          data: p90.map((x) => x.p75_hours),
+          backgroundColor: "rgba(245, 158, 11, 0.6)",
+          borderColor: "rgba(245, 158, 11, 0.95)",
+        },
+        {
+          label: "p90 (uren)",
           data: p90.map((x) => x.p90_hours),
-          backgroundColor: p90.map((x) => typeColor(x.request_type)),
-          borderColor: p90.map((x) => typeColor(x.request_type)),
+          backgroundColor: "rgba(220, 38, 38, 0.65)",
+          borderColor: "rgba(220, 38, 38, 0.98)",
         },
       ],
     }),
     [p90]
   );
 
+  const kpiStats = useMemo(() => {
+    const indices = fullWeekInfo.indices;
+
+    const totalSeries = series.find((s) => isTotalLabel(s.label)) || series[0];
+    const totalTickets = indices.reduce((sum, idx) => sum + (Number(totalSeries?.data?.[idx]) || 0), 0);
+
+    const lastCompletedIdx = indices.length ? indices[indices.length - 1] : -1;
+    const prevCompletedIdx = indices.length > 1 ? indices[indices.length - 2] : -1;
+    const latestTickets = lastCompletedIdx >= 0 ? Number(totalSeries?.data?.[lastCompletedIdx] || 0) : 0;
+    const previousTickets = prevCompletedIdx >= 0 ? Number(totalSeries?.data?.[prevCompletedIdx] || 0) : null;
+    const wowChangePct =
+      previousTickets && previousTickets > 0
+        ? ((latestTickets - previousTickets) / previousTickets) * 100
+        : null;
+    const avgPerWeek = indices.length ? totalTickets / indices.length : null;
+
+    const typeCandidates = series.filter((s) => !isTotalLabel(s.label) && !String(s.label).startsWith("Mediaan "));
+    const typeTotals = typeCandidates.map((s) => ({
+      label: s.label,
+      total: indices.reduce((sum, idx) => sum + (Number(s.data?.[idx]) || 0), 0),
+    }));
+    typeTotals.sort((a, b) => b.total - a.total);
+    const topType = typeTotals[0];
+
+    const completeWeekSet = new Set(indices.map((idx) => weeks[idx]));
+    const onderwerpMap = new Map();
+    (Array.isArray(onderwerpVolume) ? onderwerpVolume : []).forEach((row) => {
+      const weekIso = String(row?.week || "").slice(0, 10);
+      const onderwerpLabel = String(row?.onderwerp || "");
+      if (!weekIso || !onderwerpLabel) return;
+      if (!completeWeekSet.has(weekIso)) return;
+      const current = onderwerpMap.get(onderwerpLabel) || 0;
+      onderwerpMap.set(onderwerpLabel, current + (Number(row?.tickets) || 0));
+    });
+    const onderwerpTotals = Array.from(onderwerpMap.entries())
+      .map(([label, total]) => ({ label, total }))
+      .sort((a, b) => b.total - a.total);
+    const topSubject = onderwerpTotals[0];
+
+    return {
+      totalTickets,
+      latestTickets,
+      wowChangePct,
+      avgPerWeek,
+      lastCompletedWeekLabel:
+        lastCompletedIdx >= 0 && weeks[lastCompletedIdx] ? fmtDate(weeks[lastCompletedIdx]) : "—",
+      topTypeLabel: topType?.label || "—",
+      topTypeTickets: topType?.total || 0,
+      topSubjectLabel: topSubject?.label || "—",
+      topSubjectTotal: topSubject?.total || 0,
+      periodLabel: fullWeekInfo.periodLabel,
+      completeWeeksCount: fullWeekInfo.count,
+    };
+  }, [series, weeks, onderwerpVolume, fullWeekInfo]);
+
+  const topOnderwerpRows = useMemo(() => {
+    if (!fullWeekInfo.count) return [];
+    const completeWeekSet = new Set(fullWeekInfo.indices.map((idx) => weeks[idx]));
+    const map = new Map();
+
+    (Array.isArray(onderwerpVolume) ? onderwerpVolume : []).forEach((row) => {
+      const weekIso = String(row?.week || "").slice(0, 10);
+      const label = String(row?.onderwerp || "");
+      if (!weekIso || !label || !completeWeekSet.has(weekIso)) return;
+
+      const cur = map.get(label) || { label, total: 0, last: 0, prev: 0 };
+      const tickets = Number(row?.tickets) || 0;
+      cur.total += tickets;
+      if (weekIso === weeks[fullWeekInfo.lastIndex]) cur.last += tickets;
+      if (fullWeekInfo.prevIndex >= 0 && weekIso === weeks[fullWeekInfo.prevIndex]) cur.prev += tickets;
+      map.set(label, cur);
+    });
+
+    function wowSortValue(row) {
+      const last = Number(row?.last) || 0;
+      const prev = Number(row?.prev) || 0;
+      if (prev <= 0 && last > 0) return Number.NEGATIVE_INFINITY; // voorkom dat "nieuw" alles domineert
+      if (prev <= 0 && last <= 0) return Number.NEGATIVE_INFINITY;
+      return ((last - prev) / prev) * 100;
+    }
+
+    return Array.from(map.values())
+      .filter((row) => (Number(row?.last) || 0) > 0)
+      .sort((a, b) => {
+        if (topOnderwerpSort === "tickets") {
+          const byLast = (Number(b.last) || 0) - (Number(a.last) || 0);
+          if (byLast !== 0) return byLast;
+          const wowDiff = wowSortValue(b) - wowSortValue(a);
+          if (wowDiff !== 0) return wowDiff;
+          return (Number(b.total) || 0) - (Number(a.total) || 0);
+        }
+        const wowDiff = wowSortValue(b) - wowSortValue(a);
+        if (wowDiff !== 0) return wowDiff;
+        const byLast = (Number(b.last) || 0) - (Number(a.last) || 0);
+        if (byLast !== 0) return byLast;
+        return (Number(b.total) || 0) - (Number(a.total) || 0);
+      })
+      .slice(0, 10);
+  }, [fullWeekInfo, weeks, onderwerpVolume, topOnderwerpSort]);
+
+  function trendInfo(last, prev) {
+    const l = Number(last) || 0;
+    const p = Number(prev) || 0;
+    if (p <= 0 && l <= 0) return { symbol: "→", text: "0%", color: "var(--text-muted)" };
+    if (p <= 0 && l > 0) return { symbol: "↑", text: "nieuw", color: "var(--ok)" };
+    const delta = ((l - p) / p) * 100;
+    if (delta > 0.5) return { symbol: "↑", text: `+${num(delta, 1)}%`, color: "var(--ok)" };
+    if (delta < -0.5) return { symbol: "↓", text: `${num(delta, 1)}%`, color: "var(--danger)" };
+    return { symbol: "→", text: `${num(delta, 1)}%`, color: "var(--text-muted)" };
+  }
+
   function addDays(yyyyMmDd, days) {
-    // Use UTC to avoid timezone/DST off-by-one issues
-    const [y, m, d] = yyyyMmDd.split("-").map(Number);
-    const dt = new Date(Date.UTC(y, m - 1, d));
-    dt.setUTCDate(dt.getUTCDate() + days);
-    return dt.toISOString().slice(0, 10);
+    return addDaysIso(yyyyMmDd, days);
   }
 
   async function fetchDrilldown(weekStart, typeLabel, onderwerpLabel, offset = 0) {
@@ -806,15 +1100,19 @@ export default function Home() {
       .then((r) => r.json())
       .then((data) => (Array.isArray(data) ? setAssigneeVolume(data) : setAssigneeVolume([])));
 
-    const p = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
-    if (onderwerp) p.set("onderwerp", onderwerp);
-    if (priority) p.set("priority", priority);
-    if (assignee) p.set("assignee", assignee);
-    if (servicedeskOnly) p.set("servicedesk_only", "true");
+    if (!p90Period.hasData) {
+      setP90([]);
+    } else {
+      const p = new URLSearchParams({ date_from: p90Period.dateFrom, date_to: p90Period.dateTo });
+      if (onderwerp) p.set("onderwerp", onderwerp);
+      if (priority) p.set("priority", priority);
+      if (assignee) p.set("assignee", assignee);
+      if (servicedeskOnly) p.set("servicedesk_only", "true");
 
-    fetch(`${API}/metrics/leadtime_p90_by_type?` + p.toString())
-      .then((r) => r.json())
-      .then(setP90);
+      fetch(`${API}/metrics/leadtime_p90_by_type?` + p.toString())
+        .then((r) => r.json())
+        .then(setP90);
+    }
 
     fetch(`${API}/meta`).then((r) => r.json()).then(setMeta);
   }
@@ -886,15 +1184,18 @@ export default function Home() {
   };
   const hiddenChartPlaceholderStyle = {
     height: "100%",
-    border: "1px dashed var(--border)",
+    width: "100%",
+    boxSizing: "border-box",
+    border: "1px solid var(--border)",
     borderRadius: 10,
     color: "var(--text-muted)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     textAlign: "center",
-    padding: 16,
+    padding: 10,
   };
+  const rowCardHeight = "clamp(220px, 24vh, 320px)";
   const donutBodyStyle = {
     height: "100%",
     display: "flex",
@@ -905,9 +1206,9 @@ export default function Home() {
     border: "1px solid var(--border-strong)",
     borderRadius: 10,
     background: "var(--surface)",
-    padding: 12,
+    padding: 8,
     minWidth: 0,
-    height: 360,
+    height: rowCardHeight,
     display: "flex",
     flexDirection: "column",
   };
@@ -918,26 +1219,119 @@ export default function Home() {
   };
   const pageStyle = {
     fontFamily: "system-ui",
-    padding: 16,
+    padding: 10,
     maxWidth: "100%",
     margin: "0 auto",
     background: "var(--page-bg)",
     color: "var(--text-main)",
+    minHeight: "100vh",
   };
   const topChartsGridStyle = {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))",
-    gap: 12,
+    gap: 8,
     alignItems: "start",
     width: "100%",
-    marginBottom: 12,
+    marginBottom: 8,
   };
   const lowerChartsGridStyle = {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-    gap: 12,
+    gap: 8,
     alignItems: "start",
     width: "100%",
+  };
+  const kpiGridStyle = {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+    gap: 8,
+    marginBottom: 8,
+    width: "100%",
+  };
+  const kpiCardStyle = {
+    border: "1px solid var(--border)",
+    borderRadius: 10,
+    background: "var(--surface)",
+    padding: "8px 10px",
+    minWidth: 0,
+  };
+  const kpiLabelStyle = {
+    fontSize: 12,
+    color: "var(--text-muted)",
+    marginBottom: 4,
+  };
+  const kpiValueStyle = {
+    fontSize: 20,
+    fontWeight: 700,
+    lineHeight: 1.1,
+    color: "var(--text-main)",
+  };
+  const kpiSubStyle = {
+    fontSize: 12,
+    color: "var(--text-muted)",
+    marginTop: 4,
+  };
+  const fixedMetricBadgeStyle = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "2px 8px",
+    borderRadius: 999,
+    border: "1px solid color-mix(in srgb, var(--accent) 34%, var(--border))",
+    color: "var(--accent)",
+    fontSize: 11,
+    fontWeight: 700,
+    lineHeight: 1.2,
+    whiteSpace: "nowrap",
+  };
+  const topListGridStyle = {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))",
+    gap: 8,
+    width: "100%",
+    marginBottom: 8,
+  };
+  const topListCardStyle = {
+    border: "1px solid var(--border)",
+    borderRadius: 10,
+    background: "var(--surface)",
+    padding: 8,
+    minWidth: 0,
+    height: rowCardHeight,
+    display: "flex",
+    flexDirection: "column",
+  };
+  const topListHeaderStyle = {
+    margin: "0 0 6px",
+    fontSize: 14,
+    lineHeight: 1.2,
+  };
+  const topListHintStyle = {
+    margin: "0 0 6px",
+    color: "var(--text-muted)",
+    fontSize: 11,
+  };
+  const topListTableStyle = {
+    width: "100%",
+    borderCollapse: "collapse",
+    fontSize: 11,
+  };
+  const topListTableWrapStyle = {
+    flex: 1,
+    minHeight: 0,
+    overflow: "auto",
+  };
+  const topListThStyle = {
+    textAlign: "left",
+    padding: "4px 6px",
+    borderBottom: "1px solid var(--border)",
+    color: "var(--text-muted)",
+    fontWeight: 600,
+  };
+  const topListTdStyle = {
+    padding: "3px 6px",
+    borderBottom: "1px solid var(--border)",
+    verticalAlign: "middle",
   };
   const chartTitleStyle = {
     margin: "0 0 8px",
@@ -951,16 +1345,72 @@ export default function Home() {
     marginBottom: 8,
     flexWrap: "wrap",
   };
-  const activeFilterBarStyle = {
-    marginTop: 10,
-    padding: "8px 10px",
-    borderRadius: 8,
-    border: "1px solid var(--border)",
-    background: "var(--surface)",
+  const headerRowStyle = {
+    marginBottom: 10,
     display: "flex",
+    justifyContent: "space-between",
     gap: 8,
     alignItems: "center",
     flexWrap: "wrap",
+  };
+  const titleStyle = { margin: 0, lineHeight: 1.1 };
+  const headerActionsStyle = {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+  };
+  const activeFiltersBadgeStyle = {
+    height: 36,
+    padding: "0 2px",
+    color: "var(--text-muted)",
+    display: "inline-flex",
+    alignItems: "center",
+    fontSize: 13,
+    fontWeight: 700,
+    whiteSpace: "nowrap",
+  };
+  const filterOpenButtonStyle = {
+    ...buttonBaseStyle,
+    borderColor: "var(--accent)",
+    color: "var(--accent)",
+    fontWeight: 700,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 8,
+  };
+  const filterOverlayStyle = {
+    position: "fixed",
+    inset: 0,
+    background: "var(--overlay-bg)",
+    zIndex: 1100,
+    opacity: filtersOpen ? 1 : 0,
+    transition: "opacity 160ms ease",
+  };
+  const filterModalStyle = {
+    position: "fixed",
+    top: 18,
+    left: "50%",
+    transform: "translateX(-50%)",
+    width: "min(1120px, 96vw)",
+    maxHeight: "86vh",
+    overflow: "auto",
+    zIndex: 1101,
+    border: "1px solid var(--border)",
+    borderRadius: 12,
+    background: "var(--surface)",
+    boxShadow: "0 20px 56px var(--shadow-strong)",
+  };
+  const filterModalHeaderStyle = {
+    position: "sticky",
+    top: 0,
+    zIndex: 1,
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: "10px 12px",
+    borderBottom: "1px solid var(--border)",
+    background: "var(--surface-muted)",
   };
   const activeFilterChipStyle = {
     display: "inline-flex",
@@ -1069,7 +1519,7 @@ export default function Home() {
     onderwerp: "Onderwerp logging",
     priority: "Issues per priority",
     assignee: "Issues per assignee",
-    p90: "Doorlooptijd p90",
+    p90: "Doorlooptijd p50/p75/p90",
   };
 
   function renderCardContent(cardKey, expanded = false) {
@@ -1100,12 +1550,13 @@ export default function Home() {
                 plugins: {
                   legend: { display: false },
                   tooltip: { mode: "nearest", intersect: false },
+                  simpleDataLabels: { mode: "line", maxLabels: expanded ? 24 : 12 },
                 },
                 interaction: { mode: "nearest", intersect: false },
               }}
             />
           ) : (
-            <EmptyChartState onReset={() => resetFilters(true)} />
+            <EmptyChartState filterLabel="Request type" style={emptyStyle} />
           )}
         </div>
       );
@@ -1182,12 +1633,13 @@ export default function Home() {
                     plugins: {
                       legend: { display: false },
                       tooltip: { mode: "nearest", intersect: false },
+                      simpleDataLabels: { mode: "line", maxLabels: expanded ? 24 : 12 },
                     },
                     interaction: { mode: "nearest", intersect: false },
                   }}
                 />
               ) : (
-                <EmptyChartState onReset={() => resetFilters(true)} />
+                <EmptyChartState filterLabel="Onderwerp" style={emptyStyle} />
               )
             ) : hasDataPoints(onderwerpPieData) ? (
               <Pie
@@ -1209,11 +1661,12 @@ export default function Home() {
                     legend: {
                       position: "right",
                     },
+                    simpleDataLabels: { mode: "arc", minArcPct: 8 },
                   },
                 }}
               />
             ) : (
-              <EmptyChartState onReset={() => resetFilters(true)} />
+              <EmptyChartState filterLabel="Onderwerp" style={emptyStyle} />
             )}
           </div>
         </div>
@@ -1239,12 +1692,13 @@ export default function Home() {
                           color: (ctx) => priorityColors?.[ctx.index] || "#6b7280",
                         },
                       },
+                      simpleDataLabels: { mode: "arc", minArcPct: 8 },
                     },
                   }}
                 />
               </div>
             ) : (
-              <EmptyChartState onReset={() => resetFilters(true)} />
+              <EmptyChartState filterLabel="Prioriteit" style={emptyStyle} />
             )
           ) : (
             <div style={emptyStyle}>Verborgen omdat filter `Prioriteit` actief is.</div>
@@ -1272,12 +1726,13 @@ export default function Home() {
                           color: (ctx) => assigneeColors?.[ctx.index] || "#6b7280",
                         },
                       },
+                      simpleDataLabels: { mode: "arc", minArcPct: 8 },
                     },
                   }}
                 />
               </div>
             ) : (
-              <EmptyChartState onReset={() => resetFilters(true)} />
+              <EmptyChartState filterLabel="Assignee" style={emptyStyle} />
             )
           ) : (
             <div style={emptyStyle}>Verborgen omdat filter `Assignee` actief is.</div>
@@ -1297,22 +1752,37 @@ export default function Home() {
                   responsive: true,
                   maintainAspectRatio: false,
                   plugins: {
-                    legend: { display: false },
+                    legend: { display: true, position: "top" },
+                    simpleDataLabels: { mode: "bar", maxLabels: expanded ? 20 : 10, datasetIndexes: [2] },
                   },
                   scales: {
                     x: {
                       ticks: {
-                        color: (ctx) => typeColor(ctx.tick?.label),
+                        color: "var(--text-muted)",
+                        maxRotation: 30,
+                        minRotation: 0,
+                      },
+                    },
+                    y: {
+                      title: {
+                        display: true,
+                        text: "Uren",
+                        color: "var(--text-muted)",
+                      },
+                      ticks: {
+                        color: "var(--text-muted)",
                       },
                     },
                   },
                 }}
               />
             ) : (
-              <EmptyChartState onReset={() => resetFilters(true)} />
+              <EmptyChartState filterLabel="Periode" style={emptyStyle} />
             )}
           </div>
           <p style={{ margin: "8px 0 0", color: "var(--text-muted)", fontSize: 12 }}>
+            Periode: {p90Period.label}
+            {" · "}
             Tip: filter op “Onderwerp” om p90 per type te zien voor één categorie.
           </p>
         </>
@@ -1325,9 +1795,48 @@ export default function Home() {
   return (
     <div style={pageStyle}>
       <Toast message={syncMessage} kind={syncMessageKind} onClose={() => setSyncMessage("")} />
-      <h1 style={{ margin: "0 0 12px", lineHeight: 1.1 }}>JSM Dashboard (SD)</h1>
+      <div style={headerRowStyle}>
+        <h1 style={titleStyle}>JSM Dashboard (SD)</h1>
+        <div style={headerActionsStyle}>
+          {activeFilterItems.length ? (
+            <>
+              <span style={activeFiltersBadgeStyle}>{`Filters actief (${activeFilterItems.length})`}</span>
+              <button
+                type="button"
+                onClick={() => resetFilters(true)}
+                style={{ ...resetActiveFiltersButtonStyle, height: 32 }}
+                title="Reset actieve filters"
+              >
+                Reset
+              </button>
+            </>
+          ) : null}
+          <button type="button" onClick={() => setFiltersOpen(true)} style={filterOpenButtonStyle}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M4 6h16l-6 7v5l-4 2v-7L4 6z"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            Filters openen
+          </button>
+        </div>
+      </div>
 
-      <div style={filterPanelStyle}>
+      {filtersOpen ? (
+        <>
+          <div style={filterOverlayStyle} onClick={() => setFiltersOpen(false)} />
+          <div style={filterModalStyle} role="dialog" aria-modal="true" aria-label="Filters">
+            <div style={filterModalHeaderStyle}>
+              <strong>Filters</strong>
+              <button type="button" onClick={() => setFiltersOpen(false)} style={buttonBaseStyle}>
+                Sluiten
+              </button>
+            </div>
+            <div style={filterPanelStyle}>
         <div style={filterGridStyle}>
           <label style={fieldStyle}>
             <span style={labelStyle}>Van</span>
@@ -1587,26 +2096,116 @@ export default function Home() {
           ) : null}
         </div>
 
-        {activeFilterItems.length ? (
-          <div style={activeFilterBarStyle}>
-            <strong style={{ fontSize: 12, color: "var(--text-subtle)" }}>
-              {`Actieve filters (${activeFilterItems.length})`}
-            </strong>
-            <button
-              type="button"
-              onClick={() => resetFilters(true)}
-              style={resetActiveFiltersButtonStyle}
-              title="Reset actieve filters"
-            >
-              Reset filters
-            </button>
-            {activeFilterItems.map((item) => (
-              <span key={item} style={activeFilterChipStyle} title={item}>
-                {item}
-              </span>
-            ))}
+            </div>
           </div>
-        ) : null}
+        </>
+      ) : null}
+
+      <div style={kpiGridStyle}>
+        <div style={kpiCardStyle}>
+          <div style={kpiLabelStyle}>Totaal tickets (volledige weken)</div>
+          <div style={kpiValueStyle}>{num(kpiStats.totalTickets)}</div>
+          <div style={kpiSubStyle}>{kpiStats.periodLabel}</div>
+        </div>
+        <div style={kpiCardStyle}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 2 }}>
+            <div style={{ ...kpiLabelStyle, marginBottom: 0 }}>Tickets laatste volledige week</div>
+            <span style={fixedMetricBadgeStyle}>Periode: laatste week</span>
+          </div>
+          <div style={kpiValueStyle}>{num(kpiStats.latestTickets)}</div>
+          <div style={kpiSubStyle}>
+            Week van {kpiStats.lastCompletedWeekLabel} · WoW: {pct(kpiStats.wowChangePct)}
+          </div>
+        </div>
+        <div style={kpiCardStyle}>
+          <div style={kpiLabelStyle}>Gemiddeld per volledige week</div>
+          <div style={kpiValueStyle}>{num(kpiStats.avgPerWeek, 1)}</div>
+          <div style={kpiSubStyle}>{num(kpiStats.completeWeeksCount)} volledige weken</div>
+        </div>
+        <div style={kpiCardStyle}>
+          <div style={kpiLabelStyle}>Top request type (volledige weken)</div>
+          <div style={{ ...kpiValueStyle, fontSize: 20 }}>{kpiStats.topTypeLabel}</div>
+          <div style={kpiSubStyle}>{num(kpiStats.topTypeTickets)} tickets</div>
+        </div>
+        <div style={kpiCardStyle}>
+          <div style={kpiLabelStyle}>Top onderwerp (volledige weken)</div>
+          <div style={{ ...kpiValueStyle, fontSize: 20 }}>{kpiStats.topSubjectLabel}</div>
+          <div style={kpiSubStyle}>{num(kpiStats.topSubjectTotal)} tickets</div>
+        </div>
+      </div>
+
+      <div style={topListGridStyle}>
+        <div style={topListCardStyle}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 4 }}>
+            <h3 style={{ ...topListHeaderStyle, margin: 0 }}>Top 10 onderwerpen</h3>
+            <span style={fixedMetricBadgeStyle}>Periode: laatste week</span>
+          </div>
+          <p style={topListHintStyle}>Tickets en trend per laatste volledige week ({fullWeekInfo.periodLabel})</p>
+          <div style={topListTableWrapStyle}>
+            {topOnderwerpRows.length ? (
+              <table style={topListTableStyle}>
+                <thead>
+                  <tr>
+                    <th style={topListThStyle}>Onderwerp</th>
+                    <th
+                      style={{
+                        ...topListThStyle,
+                        textAlign: "right",
+                        cursor: "pointer",
+                        color: topOnderwerpSort === "tickets" ? "var(--accent)" : "var(--text-muted)",
+                      }}
+                      onClick={() => setTopOnderwerpSort("tickets")}
+                      title="Sorteer op tickets (laatste volledige week)"
+                    >
+                      Tickets {topOnderwerpSort === "tickets" ? "↓" : ""}
+                    </th>
+                    <th
+                      style={{
+                        ...topListThStyle,
+                        textAlign: "right",
+                        cursor: "pointer",
+                        color: topOnderwerpSort === "wow" ? "var(--accent)" : "var(--text-muted)",
+                      }}
+                      onClick={() => setTopOnderwerpSort("wow")}
+                      title="Sorteer op WoW"
+                    >
+                      Δ WoW {topOnderwerpSort === "wow" ? "↓" : ""}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topOnderwerpRows.map((row) => {
+                    const trend = trendInfo(row.last, row.prev);
+                    return (
+                      <tr key={row.label}>
+                        <td style={topListTdStyle}>{row.label}</td>
+                        <td style={{ ...topListTdStyle, textAlign: "right" }}>{num(row.last)}</td>
+                        <td style={{ ...topListTdStyle, textAlign: "right", color: trend.color }}>
+                          {trend.symbol} {trend.text}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ) : (
+              <div style={hiddenChartPlaceholderStyle}>Verborgen omdat filter `Periode` actief is.</div>
+            )}
+          </div>
+        </div>
+
+        <div style={chartShellStyle}>
+          <button
+            type="button"
+            className="card-expand-title"
+            style={cardTitleButtonStyle}
+            onClick={() => setExpandedCard("priority")}
+          >
+            <span style={chartTitleStyle}>{cardTitles.priority}</span>
+            <span style={cardTitleHintStyle}>Vergroot</span>
+          </button>
+          {renderCardContent("priority")}
+        </div>
       </div>
 
       <div style={topChartsGridStyle}>
@@ -1639,19 +2238,6 @@ export default function Home() {
       </div>
 
       <div style={lowerChartsGridStyle}>
-        <div style={chartShellStyle}>
-          <button
-            type="button"
-            className="card-expand-title"
-            style={cardTitleButtonStyle}
-            onClick={() => setExpandedCard("priority")}
-          >
-            <span style={chartTitleStyle}>{cardTitles.priority}</span>
-            <span style={cardTitleHintStyle}>Vergroot</span>
-          </button>
-          {renderCardContent("priority")}
-        </div>
-
         <div style={chartShellStyle}>
           <button
             type="button"
@@ -1891,6 +2477,7 @@ export default function Home() {
           --border-strong: #e2e8f0;
           --accent: #2563eb;
           --danger: #dc2626;
+          --ok: #15803d;
           --overlay-bg: rgba(15, 23, 42, 0.55);
           --overlay-soft: rgba(0, 0, 0, 0.35);
           --shadow-medium: rgba(0, 0, 0, 0.25);
@@ -1910,6 +2497,7 @@ export default function Home() {
             --border-strong: #475569;
             --accent: #60a5fa;
             --danger: #f87171;
+            --ok: #4ade80;
             --overlay-bg: rgba(2, 6, 23, 0.72);
             --overlay-soft: rgba(2, 6, 23, 0.55);
             --shadow-medium: rgba(0, 0, 0, 0.45);
