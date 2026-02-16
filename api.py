@@ -350,6 +350,12 @@ def leadtime_p90_by_type(
     q = """
     select
       request_type,
+      percentile_cont(0.50) within group (
+        order by extract(epoch from (resolved_at - created_at))/3600.0
+      ) as p50_hours,
+      percentile_cont(0.75) within group (
+        order by extract(epoch from (resolved_at - created_at))/3600.0
+      ) as p75_hours,
       percentile_cont(0.90) within group (
         order by extract(epoch from (resolved_at - created_at))/3600.0
       ) as p90_hours,
@@ -366,7 +372,7 @@ def leadtime_p90_by_type(
         or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
       )
     group by 1
-    order by 1;
+    order by p90_hours desc nulls last, 1;
     """
     with conn() as c, c.cursor() as cur:
         cur.execute(
@@ -374,7 +380,16 @@ def leadtime_p90_by_type(
             (date_from, date_to, onderwerp, onderwerp, priority, priority, assignee, assignee, servicedesk_only),
         )
         rows = cur.fetchall()
-    return [{"request_type": r[0], "p90_hours": float(r[1]) if r[1] is not None else None, "n": r[2]} for r in rows]
+    return [
+        {
+            "request_type": r[0],
+            "p50_hours": float(r[1]) if r[1] is not None else None,
+            "p75_hours": float(r[2]) if r[2] is not None else None,
+            "p90_hours": float(r[3]) if r[3] is not None else None,
+            "n": r[4],
+        }
+        for r in rows
+    ]
 
 
 @app.get("/metrics/volume_by_priority")

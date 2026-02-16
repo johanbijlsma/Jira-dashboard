@@ -4,7 +4,7 @@ DEV_COMPOSE_FILE=docker-compose.yml
 DEV_COMPOSE=docker compose -f $(DEV_COMPOSE_FILE)
 
 .PHONY: up down logs logs-api logs-dashboard ps rebuild restart sync sync-full \
-	dev-up dev-down dev-logs dev-ps dev-rebuild dev-restart dev-api dev-api-no-reload
+	dev-up dev-down dev-logs dev-ps dev-rebuild dev-restart dev-api dev-api-no-reload dev-frontend
 
 up:
 	$(COMPOSE) up -d --build
@@ -61,3 +61,6 @@ dev-api:
 
 dev-api-no-reload:
 	uvicorn api:app --host 0.0.0.0 --port 8000
+
+dev-frontend:
+	npm --prefix dashboard run dev
