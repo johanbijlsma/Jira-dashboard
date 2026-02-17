@@ -70,9 +70,11 @@ install-hooks:
 	git config core.hooksPath .githooks
 
 test-api:
-	python -m pytest -q
+	python3 -m pip install -r requirements.txt -r requirements-dev.txt
+	python3 -m pytest -q
 
 test-dashboard:
+	npm --prefix dashboard install
 	npm --prefix dashboard run test
 
 test: test-api test-dashboard
