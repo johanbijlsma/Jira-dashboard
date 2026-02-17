@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+echo "Running lint before push..."
+npm --prefix dashboard run lint

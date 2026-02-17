@@ -1,4 +1,4 @@
-import { Bar, Doughnut, Line, Pie } from "react-chartjs-2";
+import { Bar, Doughnut, Line } from "react-chartjs-2";
 import {
   ArcElement,
   BarElement,
@@ -10,7 +10,8 @@ import {
   PointElement,
   Tooltip,
 } from "chart.js";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { parseNlDateToIso } from "../lib/date";
 
 ChartJS.register(
   CategoryScale,
@@ -26,7 +27,15 @@ ChartJS.register(
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
 const JIRA_BASE = "https://planningsagenda.atlassian.net";
 const DEFAULT_SERVICEDESK_ONLY = true;
-const DEFAULT_ONDERWERP_VIEW_MODE = "top5_overig";
+const TYPE_COLORS = {
+  rfc: "#2e7d32",
+  incident: "#c62828",
+  incidenten: "#c62828",
+  "service request": "#1565c0",
+  vraag: "#e65100",
+  vragen: "#e65100",
+  totaal: "#374151",
+};
 
 function isoDate(d) {
   // yyyy-mm-dd
@@ -57,22 +66,6 @@ function fmtDateTime(value) {
     minute: "2-digit",
     hour12: false,
   }).format(dt);
-}
-
-function parseNlDateToIso(value) {
-  // accepts dd/mm/yyyy (also allow dd-mm-yyyy)
-  if (!value) return "";
-  const v = String(value).trim();
-  const m = v.match(/^\s*(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})\s*$/);
-  if (!m) return "";
-  const dd = Number(m[1]);
-  const mm = Number(m[2]);
-  const yyyy = Number(m[3]);
-  if (!yyyy || mm < 1 || mm > 12 || dd < 1 || dd > 31) return "";
-  // Validate by round-tripping through UTC
-  const dt = new Date(Date.UTC(yyyy, mm - 1, dd));
-  if (dt.getUTCFullYear() !== yyyy || dt.getUTCMonth() !== mm - 1 || dt.getUTCDate() !== dd) return "";
-  return dt.toISOString().slice(0, 10);
 }
 
 function weekStartIsoFromDate(d = new Date()) {
@@ -341,18 +334,19 @@ export default function Home() {
   const [selectedWeek, setSelectedWeek] = useState("");
   const [selectedType, setSelectedType] = useState("");
   const [selectedOnderwerp, setSelectedOnderwerp] = useState("");
-  const [onderwerpChartMode, setOnderwerpChartMode] = useState("line");
-  const [onderwerpViewMode, setOnderwerpViewMode] = useState(DEFAULT_ONDERWERP_VIEW_MODE);
   const [drillIssues, setDrillIssues] = useState([]);
   const [drillLoading, setDrillLoading] = useState(false);
   const [drillOffset, setDrillOffset] = useState(0);
   const [drillHasNext, setDrillHasNext] = useState(false);
   const drillPanelRef = useRef(null);
   const drillCloseRef = useRef(null);
+  const hotkeysPopupRef = useRef(null);
+  const hotkeysButtonRef = useRef(null);
   const [showPriority, setShowPriority] = useState(false);
   const [showAssignee, setShowAssignee] = useState(false);
   const [expandedCard, setExpandedCard] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [hotkeysOpen, setHotkeysOpen] = useState(false);
   const [topOnderwerpSort, setTopOnderwerpSort] = useState("wow");
   const autoSyncAttemptRef = useRef(0);
 
@@ -406,13 +400,13 @@ export default function Home() {
     setDrillHasNext(false);
   }
 
-  function flashToast(message, kind = "success", ms = 3000) {
+  const flashToast = useCallback((message, kind = "success", ms = 3000) => {
     setSyncMessage(message);
     setSyncMessageKind(kind);
     if (ms > 0) setTimeout(() => setSyncMessage(""), ms);
-  }
+  }, []);
 
-  function applyDateRange({ months = 0, years = 0, days = 0 }) {
+  const applyDateRange = useCallback(({ months = 0, years = 0, days = 0 }) => {
     const end = new Date();
     const start = new Date(end);
     if (years) start.setFullYear(start.getFullYear() - years);
@@ -424,17 +418,95 @@ export default function Home() {
     setDateTo(toIso);
     setDateFromUi(fmtDate(fromIso));
     setDateToUi(fmtDate(toIso));
-  }
+  }, []);
 
-  function resetFilters(showToast = true) {
+  const resetFilters = useCallback((showToast = true) => {
     setRequestType("");
     setOnderwerp("");
     setPriority("");
     setAssignee("");
     setServicedeskOnly(DEFAULT_SERVICEDESK_ONLY);
-    setOnderwerpViewMode(DEFAULT_ONDERWERP_VIEW_MODE);
     if (showToast) flashToast("Filters gereset");
-  }
+  }, [flashToast]);
+
+  const refreshSyncStatus = useCallback(async () => {
+    const r = await fetch(`${API}/sync/status`);
+    const s = await r.json();
+    setSyncStatus(s);
+    return s;
+  }, []);
+
+  const refreshDashboard = useCallback(async () => {
+    const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
+    if (requestType) params.set("request_type", requestType);
+    if (onderwerp) params.set("onderwerp", onderwerp);
+    if (priority) params.set("priority", priority);
+    if (assignee) params.set("assignee", assignee);
+    if (servicedeskOnly) params.set("servicedesk_only", "true");
+
+    fetch(`${API}/metrics/volume_weekly?` + params.toString())
+      .then((r) => r.json())
+      .then(setVolume);
+
+    fetch(`${API}/metrics/volume_weekly_by_onderwerp?` + params.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setOnderwerpVolume(data) : setOnderwerpVolume([])));
+
+    fetch(`${API}/metrics/volume_by_priority?` + params.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setPriorityVolume(data) : setPriorityVolume([])));
+
+    fetch(`${API}/metrics/volume_by_assignee?` + params.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setAssigneeVolume(data) : setAssigneeVolume([])));
+
+    if (!p90Period.hasData) {
+      setP90([]);
+    } else {
+      const p = new URLSearchParams({ date_from: p90Period.dateFrom, date_to: p90Period.dateTo });
+      if (onderwerp) p.set("onderwerp", onderwerp);
+      if (priority) p.set("priority", priority);
+      if (assignee) p.set("assignee", assignee);
+      if (servicedeskOnly) p.set("servicedesk_only", "true");
+
+      fetch(`${API}/metrics/leadtime_p90_by_type?` + p.toString())
+        .then((r) => r.json())
+        .then(setP90);
+    }
+
+    fetch(`${API}/meta`).then((r) => r.json()).then(setMeta);
+  }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee, servicedeskOnly, p90Period]);
+
+  const triggerSync = useCallback(async () => {
+    setSyncLoading(true);
+    setSyncMessage("");
+
+    try {
+      await fetch(`${API}/sync`, { method: "POST" });
+
+      let last = null;
+      // Poll status for up to ~60s
+      for (let i = 0; i < 20; i++) {
+        last = await refreshSyncStatus();
+        if (!last?.running) break;
+        await new Promise((res) => setTimeout(res, 3000));
+      }
+
+      await refreshDashboard();
+
+      const upserts = last?.last_result?.upserts;
+      setSyncMessage(`Sync klaar${upserts != null ? `: ${upserts} tickets geüpdatet` : ""}`);
+      setSyncMessageKind("success");
+      setTimeout(() => setSyncMessage(""), 5000);
+    } catch (e) {
+      setSyncMessage("Sync mislukt (zie status/error)");
+      setSyncMessageKind("error");
+      setTimeout(() => setSyncMessage(""), 8000);
+      throw e;
+    } finally {
+      setSyncLoading(false);
+    }
+  }, [refreshSyncStatus, refreshDashboard]);
 
   useEffect(() => {
     fetch(`${API}/meta`).then((r) => r.json()).then(setMeta);
@@ -470,10 +542,11 @@ export default function Home() {
     if (now - autoSyncAttemptRef.current < 10 * 60 * 1000) return;
     autoSyncAttemptRef.current = now;
     triggerSync().catch(() => {});
-  }, [syncStatus, syncBusy]);
+  }, [syncStatus, syncBusy, triggerSync]);
 
   useEffect(() => {
     function onKeyDown(e) {
+      if (hotkeysOpen) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const key = e.key?.toLowerCase();
       if (!["m", "j", "r", "s"].includes(key)) return;
@@ -499,7 +572,28 @@ export default function Home() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [syncBusy]);
+  }, [syncBusy, hotkeysOpen, applyDateRange, flashToast, resetFilters, triggerSync]);
+
+  useEffect(() => {
+    if (!hotkeysOpen) return;
+    function onKeyDown(e) {
+      if (e.key === "Escape") setHotkeysOpen(false);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [hotkeysOpen]);
+
+  useEffect(() => {
+    if (!hotkeysOpen) return;
+    function onPointerDown(e) {
+      const target = e.target;
+      if (hotkeysPopupRef.current?.contains(target)) return;
+      if (hotkeysButtonRef.current?.contains(target)) return;
+      setHotkeysOpen(false);
+    }
+    window.addEventListener("mousedown", onPointerDown);
+    return () => window.removeEventListener("mousedown", onPointerDown);
+  }, [hotkeysOpen]);
 
   useEffect(() => {
     if (!selectedWeek) return;
@@ -663,38 +757,19 @@ export default function Home() {
         return row ? row.tickets : 0;
       }),
     }));
-    if (onderwerp || onderwerpViewMode !== "top5_overig") return base;
+    if (onderwerp) return base;
 
-    const withTotals = base
+    return base
       .map((s) => ({ ...s, total: s.data.reduce((sum, n) => sum + n, 0) }))
-      .sort((a, b) => b.total - a.total);
-    const top = withTotals.slice(0, 5).map(({ total, ...rest }) => rest);
-    const rest = withTotals.slice(5);
-    if (!rest.length) return top;
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 5)
+      .map(({ total, ...rest }) => rest);
+  }, [weeksOnderwerp, onderwerpVolume, meta.onderwerpen, onderwerp]);
 
-    return [
-      ...top,
-      {
-        label: "Overig",
-        data: weeksOnderwerp.map((_, i) => rest.reduce((sum, s) => sum + (s.data[i] || 0), 0)),
-      },
-    ];
-  }, [weeksOnderwerp, onderwerpVolume, meta.onderwerpen, onderwerp, onderwerpViewMode]);
-
-  const TYPE_COLORS = {
-    rfc: "#2e7d32",
-    incident: "#c62828",
-    incidenten: "#c62828",
-    "service request": "#1565c0",
-    vraag: "#e65100",
-    vragen: "#e65100",
-    totaal: "#374151",
-  };
-
-  function typeColor(label) {
+  const typeColor = useCallback((label) => {
     const key = String(label || "").toLowerCase();
     return TYPE_COLORS[key] || "#6b7280";
-  }
+  }, []);
 
   function uniqueChartColor(index, total, saturation = 70, lightness = 45) {
     const safeTotal = Math.max(1, total);
@@ -774,7 +849,7 @@ export default function Home() {
 
       return { labels, datasets };
     },
-    [weeks, series]
+    [weeks, series, requestType, typeColor]
   );
 
   const onderwerpLineData = useMemo(
@@ -862,37 +937,6 @@ export default function Home() {
     }),
     [assigneeTopVolume, assigneeColors]
   );
-
-  const onderwerpPieData = useMemo(() => {
-    const data = Array.isArray(onderwerpVolume) ? onderwerpVolume : [];
-    const subjects = onderwerp ? [onderwerp] : meta.onderwerpen;
-    const totals = subjects.map((o) => ({
-      onderwerp: o,
-      total: data.reduce((sum, v) => (v.onderwerp === o ? sum + v.tickets : sum), 0),
-    }));
-    totals.sort((a, b) => b.total - a.total);
-    const displayTotals =
-      onderwerp || onderwerpViewMode !== "top5_overig" || totals.length <= 5
-        ? totals
-        : [
-            ...totals.slice(0, 5),
-            {
-              onderwerp: "Overig",
-              total: totals.slice(5).reduce((sum, t) => sum + t.total, 0),
-            },
-          ];
-    return {
-      labels: displayTotals.map((t) => t.onderwerp),
-      datasets: [
-        {
-          label: "Totaal per onderwerp",
-          data: displayTotals.map((t) => t.total),
-          backgroundColor: displayTotals.map((_, i) => uniqueChartColor(i, displayTotals.length)),
-          borderColor: displayTotals.map((_, i) => uniqueChartColor(i, displayTotals.length)),
-        },
-      ],
-    };
-  }, [onderwerpVolume, meta.onderwerpen, onderwerp, onderwerpViewMode]);
 
   const barData = useMemo(
     () => ({
@@ -1066,85 +1110,6 @@ export default function Home() {
       setDrillHasNext(Array.isArray(data) && data.length === DRILL_LIMIT);
     } finally {
       setDrillLoading(false);
-    }
-  }
-
-  async function refreshSyncStatus() {
-    const r = await fetch(`${API}/sync/status`);
-    const s = await r.json();
-    setSyncStatus(s);
-    return s;
-  }
-
-  async function refreshDashboard() {
-    const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
-    if (requestType) params.set("request_type", requestType);
-    if (onderwerp) params.set("onderwerp", onderwerp);
-    if (priority) params.set("priority", priority);
-    if (assignee) params.set("assignee", assignee);
-    if (servicedeskOnly) params.set("servicedesk_only", "true");
-
-    fetch(`${API}/metrics/volume_weekly?` + params.toString())
-      .then((r) => r.json())
-      .then(setVolume);
-
-    fetch(`${API}/metrics/volume_weekly_by_onderwerp?` + params.toString())
-      .then((r) => r.json())
-      .then((data) => (Array.isArray(data) ? setOnderwerpVolume(data) : setOnderwerpVolume([])));
-
-    fetch(`${API}/metrics/volume_by_priority?` + params.toString())
-      .then((r) => r.json())
-      .then((data) => (Array.isArray(data) ? setPriorityVolume(data) : setPriorityVolume([])));
-
-    fetch(`${API}/metrics/volume_by_assignee?` + params.toString())
-      .then((r) => r.json())
-      .then((data) => (Array.isArray(data) ? setAssigneeVolume(data) : setAssigneeVolume([])));
-
-    if (!p90Period.hasData) {
-      setP90([]);
-    } else {
-      const p = new URLSearchParams({ date_from: p90Period.dateFrom, date_to: p90Period.dateTo });
-      if (onderwerp) p.set("onderwerp", onderwerp);
-      if (priority) p.set("priority", priority);
-      if (assignee) p.set("assignee", assignee);
-      if (servicedeskOnly) p.set("servicedesk_only", "true");
-
-      fetch(`${API}/metrics/leadtime_p90_by_type?` + p.toString())
-        .then((r) => r.json())
-        .then(setP90);
-    }
-
-    fetch(`${API}/meta`).then((r) => r.json()).then(setMeta);
-  }
-
-  async function triggerSync() {
-    setSyncLoading(true);
-    setSyncMessage("");
-
-    try {
-      await fetch(`${API}/sync`, { method: "POST" });
-
-      let last = null;
-      // Poll status for up to ~60s
-      for (let i = 0; i < 20; i++) {
-        last = await refreshSyncStatus();
-        if (!last?.running) break;
-        await new Promise((res) => setTimeout(res, 3000));
-      }
-
-      await refreshDashboard();
-
-      const upserts = last?.last_result?.upserts;
-      setSyncMessage(`Sync klaar${upserts != null ? `: ${upserts} tickets geüpdatet` : ""}`);
-      setSyncMessageKind("success");
-      setTimeout(() => setSyncMessage(""), 5000);
-    } catch (e) {
-      setSyncMessage("Sync mislukt (zie status/error)");
-      setSyncMessageKind("error");
-      setTimeout(() => setSyncMessage(""), 8000);
-      throw e;
-    } finally {
-      setSyncLoading(false);
     }
   }
 
@@ -1338,13 +1303,6 @@ export default function Home() {
     fontSize: 18,
     lineHeight: 1.2,
   };
-  const sectionHeaderStyle = {
-    display: "flex",
-    gap: 8,
-    alignItems: "center",
-    marginBottom: 8,
-    flexWrap: "wrap",
-  };
   const headerRowStyle = {
     marginBottom: 10,
     display: "flex",
@@ -1513,6 +1471,68 @@ export default function Home() {
     color: "var(--text-main)",
     cursor: "pointer",
   };
+  const hotkeysFabStyle = {
+    position: "fixed",
+    right: 16,
+    bottom: 16,
+    zIndex: 1003,
+    height: 40,
+    width: 40,
+    padding: 0,
+    borderRadius: 999,
+    border: "1px solid var(--border)",
+    background: "var(--surface)",
+    color: "var(--text-main)",
+    cursor: "pointer",
+    boxShadow: "0 8px 24px var(--shadow-medium)",
+    fontWeight: 600,
+    fontSize: 22,
+    lineHeight: 1,
+  };
+  const hotkeysPanelStyle = {
+    position: "fixed",
+    right: 16,
+    bottom: 64,
+    zIndex: 1003,
+    width: "min(560px, 96vw)",
+    maxHeight: "min(78vh, 620px)",
+    background: "var(--surface)",
+    borderRadius: 14,
+    border: "1px solid var(--border)",
+    boxShadow: "0 24px 70px var(--shadow-strong)",
+    overflow: "hidden",
+  };
+  const hotkeysTableStyle = {
+    width: "100%",
+    borderCollapse: "collapse",
+    fontSize: 14,
+  };
+  const hotkeysThStyle = {
+    textAlign: "left",
+    padding: "8px 10px",
+    borderBottom: "1px solid var(--border)",
+    color: "var(--text-muted)",
+    fontWeight: 600,
+  };
+  const hotkeysTdStyle = {
+    padding: "10px",
+    borderBottom: "1px solid var(--border)",
+    verticalAlign: "top",
+  };
+  const hotkeysKeyStyle = {
+    display: "inline-flex",
+    minWidth: 22,
+    height: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "0 6px",
+    borderRadius: 6,
+    border: "1px solid var(--border)",
+    background: "var(--surface-muted)",
+    fontSize: 12,
+    fontWeight: 700,
+    letterSpacing: 0.3,
+  };
 
   const cardTitles = {
     volume: "Volume per week",
@@ -1526,8 +1546,6 @@ export default function Home() {
     const bodyStyle = expanded ? { height: "100%", minHeight: 0, position: "relative" } : chartBodyStyle;
     const donutStyle = expanded ? { ...donutBodyStyle, minHeight: 0 } : donutBodyStyle;
     const emptyStyle = expanded ? { ...hiddenChartPlaceholderStyle, minHeight: 0 } : hiddenChartPlaceholderStyle;
-    const nameSuffix = expanded ? "-modal" : "-main";
-
     if (cardKey === "volume") {
       return (
         <div style={bodyStyle}>
@@ -1568,101 +1586,29 @@ export default function Home() {
         : { display: "flex", flexDirection: "column", flex: 1, minHeight: 0 };
       return (
         <div style={onderwerpContentStyle}>
-          <div style={sectionHeaderStyle}>
-            <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Weergave</span>
-            <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <input
-                type="radio"
-                name={`onderwerpChartMode${nameSuffix}`}
-                value="line"
-                checked={onderwerpChartMode === "line"}
-                onChange={() => setOnderwerpChartMode("line")}
-              />
-              Line
-            </label>
-            <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <input
-                type="radio"
-                name={`onderwerpChartMode${nameSuffix}`}
-                value="pie"
-                checked={onderwerpChartMode === "pie"}
-                onChange={() => setOnderwerpChartMode("pie")}
-              />
-              Pie
-            </label>
-            <span style={{ width: 1, height: 16, background: "var(--border)", margin: "0 4px" }} />
-            <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <input
-                type="radio"
-                name={`onderwerpViewMode${nameSuffix}`}
-                value="all"
-                checked={onderwerpViewMode === "all"}
-                onChange={() => setOnderwerpViewMode("all")}
-              />
-              Alle onderwerpen
-            </label>
-            <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <input
-                type="radio"
-                name={`onderwerpViewMode${nameSuffix}`}
-                value="top5_overig"
-                checked={onderwerpViewMode === "top5_overig"}
-                onChange={() => setOnderwerpViewMode("top5_overig")}
-              />
-              Top 5 + Overig
-            </label>
-          </div>
           <div style={bodyStyle}>
-            {onderwerpChartMode === "line" ? (
-              hasDataPoints(onderwerpLineData) ? (
-                <Line
-                  data={onderwerpLineData}
-                  options={{
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    onClick: (_evt, elements) => {
-                      const el = elements?.[0];
-                      if (!el) return;
-                      const weekStart = weeksOnderwerp[el.index];
-                      const subjectLabel = onderwerpLineData.datasets[el.datasetIndex]?.label;
-                      if (!subjectLabel || subjectLabel.startsWith("Mediaan ")) return;
-                      if (!subjectLabel || subjectLabel === "Overig") return;
-                      setOnderwerp(subjectLabel || "");
-                      fetchDrilldown(weekStart, requestType, subjectLabel);
-                    },
-                    plugins: {
-                      legend: { display: false },
-                      tooltip: { mode: "nearest", intersect: false },
-                      simpleDataLabels: { mode: "line", maxLabels: expanded ? 24 : 12 },
-                    },
-                    interaction: { mode: "nearest", intersect: false },
-                  }}
-                />
-              ) : (
-                <EmptyChartState filterLabel="Onderwerp" style={emptyStyle} />
-              )
-            ) : hasDataPoints(onderwerpPieData) ? (
-              <Pie
-                data={onderwerpPieData}
+            {hasDataPoints(onderwerpLineData) ? (
+              <Line
+                data={onderwerpLineData}
                 options={{
                   responsive: true,
                   maintainAspectRatio: false,
                   onClick: (_evt, elements) => {
                     const el = elements?.[0];
                     if (!el) return;
-                    const subjectLabel = onderwerpPieData.labels?.[el.index];
-                    if (!subjectLabel || subjectLabel === "Overig") return;
-                    setOnderwerp(subjectLabel);
-                    const weekStart = weeksOnderwerp[weeksOnderwerp.length - 1];
-                    if (!weekStart) return;
+                    const weekStart = weeksOnderwerp[el.index];
+                    const subjectLabel = onderwerpLineData.datasets[el.datasetIndex]?.label;
+                    if (!subjectLabel || subjectLabel.startsWith("Mediaan ")) return;
+                    if (!subjectLabel) return;
+                    setOnderwerp(subjectLabel || "");
                     fetchDrilldown(weekStart, requestType, subjectLabel);
                   },
                   plugins: {
-                    legend: {
-                      position: "right",
-                    },
-                    simpleDataLabels: { mode: "arc", minArcPct: 8 },
+                    legend: { display: false },
+                    tooltip: { mode: "nearest", intersect: false },
+                    simpleDataLabels: { mode: "line", maxLabels: expanded ? 24 : 12 },
                   },
+                  interaction: { mode: "nearest", intersect: false },
                 }}
               />
             ) : (
@@ -1795,6 +1741,17 @@ export default function Home() {
   return (
     <div style={pageStyle}>
       <Toast message={syncMessage} kind={syncMessageKind} onClose={() => setSyncMessage("")} />
+      <button
+        ref={hotkeysButtonRef}
+        type="button"
+        onClick={() => setHotkeysOpen((v) => !v)}
+        style={hotkeysFabStyle}
+        aria-label="Toon hotkeys"
+        aria-expanded={hotkeysOpen}
+        aria-haspopup="dialog"
+      >
+        ?
+      </button>
       <div style={headerRowStyle}>
         <h1 style={titleStyle}>JSM Dashboard (SD)</h1>
         <div style={headerActionsStyle}>
@@ -2079,21 +2036,6 @@ export default function Home() {
             )}
           </button>
 
-          {syncStatus ? (
-            <div style={{ color: "var(--text-muted)", display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <div>
-              {syncStatus.running ? (
-                <>Bezig met synchroniseren…</>
-              ) : (
-                <>
-                  Voor het laatst bijgewerkt op {syncStatus.last_sync ? fmtDateTime(syncStatus.last_sync) : "—"}
-                </>
-              )}
-              {syncStatus.last_result?.upserts != null ? ` · ${syncStatus.last_result.upserts} bijgewerkt` : ""}
-              {syncStatus.last_error ? ` · fout: ${syncStatus.last_error}` : ""}
-            </div>
-            </div>
-          ) : null}
         </div>
 
             </div>
@@ -2281,6 +2223,52 @@ export default function Home() {
         </div>
       ) : null}
 
+      {hotkeysOpen ? (
+        <div ref={hotkeysPopupRef} role="dialog" aria-label="Hotkeys overzicht" style={hotkeysPanelStyle}>
+          <div style={modalHeaderStyle}>
+            <h2 style={{ margin: 0, fontSize: 20 }}>Hotkeys</h2>
+            <button type="button" onClick={() => setHotkeysOpen(false)} style={modalCloseStyle}>
+              Sluiten
+            </button>
+          </div>
+          <div style={{ ...modalBodyStyle, paddingTop: 10 }}>
+            <p style={{ margin: "0 0 12px", color: "var(--text-muted)" }}>
+              Overzicht van sneltoetsen in dit dashboard.
+            </p>
+            <table style={hotkeysTableStyle}>
+              <thead>
+                <tr>
+                  <th style={hotkeysThStyle}>Toets</th>
+                  <th style={hotkeysThStyle}>Actie</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style={hotkeysTdStyle}><span style={hotkeysKeyStyle}>M</span></td>
+                  <td style={hotkeysTdStyle}>Zet de datumselectie op de laatste maand.</td>
+                </tr>
+                <tr>
+                  <td style={hotkeysTdStyle}><span style={hotkeysKeyStyle}>J</span></td>
+                  <td style={hotkeysTdStyle}>Zet de datumselectie op het laatste jaar.</td>
+                </tr>
+                <tr>
+                  <td style={hotkeysTdStyle}><span style={hotkeysKeyStyle}>R</span></td>
+                  <td style={hotkeysTdStyle}>Reset alle filters naar de standaardwaarden.</td>
+                </tr>
+                <tr>
+                  <td style={hotkeysTdStyle}><span style={hotkeysKeyStyle}>S</span></td>
+                  <td style={hotkeysTdStyle}>Start een synchronisatie (of toont dat sync al loopt).</td>
+                </tr>
+                <tr>
+                  <td style={hotkeysTdStyle}><span style={hotkeysKeyStyle}>Esc</span></td>
+                  <td style={hotkeysTdStyle}>Sluit open panelen zoals deze popup en andere dialogen.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+
       <div
         aria-hidden={!selectedWeek}
         onClick={closeDrilldown}
@@ -2462,6 +2450,20 @@ export default function Home() {
           )}
         </div>
       </div>
+
+      {syncStatus ? (
+        <div style={{ marginTop: 20, color: "var(--text-muted)", display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <div>
+            {syncStatus.running ? (
+              <>Bezig met synchroniseren…</>
+            ) : (
+              <>Voor het laatst bijgewerkt op {syncStatus.last_sync ? fmtDateTime(syncStatus.last_sync) : "—"}</>
+            )}
+            {syncStatus.last_result?.upserts != null ? ` · ${syncStatus.last_result.upserts} bijgewerkt` : ""}
+            {syncStatus.last_error ? ` · fout: ${syncStatus.last_error}` : ""}
+          </div>
+        </div>
+      ) : null}
 
       <style jsx global>{`
         :root {
