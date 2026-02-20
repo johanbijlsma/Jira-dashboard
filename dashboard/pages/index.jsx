@@ -27,6 +27,7 @@ ChartJS.register(
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
 const JIRA_BASE = "https://planningsagenda.atlassian.net";
 const DEFAULT_SERVICEDESK_ONLY = true;
+const DASHBOARD_CONFIG_STORAGE_KEY = "jsm_dashboard_visible_sections_v1";
 const TYPE_COLORS = {
   rfc: "#2e7d32",
   incident: "#c62828",
@@ -35,6 +36,17 @@ const TYPE_COLORS = {
   vraag: "#e65100",
   vragen: "#e65100",
   totaal: "#374151",
+};
+const CARD_TITLES = {
+  volume: "Volume per week",
+  onderwerp: "Onderwerp logging",
+  priority: "Issues per priority",
+  assignee: "Issues per assignee",
+  p90: "Doorlooptijd p50/p75/p90",
+  inflowVsClosed: "Binnengekomen vs afgesloten",
+  incidentResolution: "Time to Resolution",
+  firstResponseAll: "Time to First Response (alle requests)",
+  organizationWeekly: "Tickets per partner per week",
 };
 
 function isoDate(d) {
@@ -317,14 +329,19 @@ export default function Home() {
   const [onderwerp, setOnderwerp] = useState("");
   const [priority, setPriority] = useState("");
   const [assignee, setAssignee] = useState("");
+  const [organization, setOrganization] = useState("");
   const [servicedeskOnly, setServicedeskOnly] = useState(DEFAULT_SERVICEDESK_ONLY);
 
-  const [meta, setMeta] = useState({ request_types: [], onderwerpen: [], priorities: [], assignees: [] });
+  const [meta, setMeta] = useState({ request_types: [], onderwerpen: [], priorities: [], assignees: [], organizations: [] });
   const [volume, setVolume] = useState([]);
   const [onderwerpVolume, setOnderwerpVolume] = useState([]);
   const [priorityVolume, setPriorityVolume] = useState([]);
   const [assigneeVolume, setAssigneeVolume] = useState([]);
+  const [organizationVolume, setOrganizationVolume] = useState([]);
   const [p90, setP90] = useState([]);
+  const [inflowVsClosedWeekly, setInflowVsClosedWeekly] = useState([]);
+  const [incidentResolutionWeekly, setIncidentResolutionWeekly] = useState([]);
+  const [firstResponseWeekly, setFirstResponseWeekly] = useState([]);
 
   const [syncStatus, setSyncStatus] = useState(null);
   const [syncLoading, setSyncLoading] = useState(false);
@@ -346,9 +363,47 @@ export default function Home() {
   const [showAssignee, setShowAssignee] = useState(false);
   const [expandedCard, setExpandedCard] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [visibleSections, setVisibleSections] = useState(() => ({
+    kpis: true,
+    topOnderwerpen: true,
+    ...Object.fromEntries(Object.keys(CARD_TITLES).map((key) => [key, true])),
+  }));
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
   const [topOnderwerpSort, setTopOnderwerpSort] = useState("wow");
   const autoSyncAttemptRef = useRef(0);
+
+  const defaultVisibleSections = useMemo(
+    () => ({
+      kpis: true,
+      topOnderwerpen: true,
+      ...Object.fromEntries(Object.keys(CARD_TITLES).map((key) => [key, true])),
+    }),
+    []
+  );
+
+  const normalizeVisibleSections = useCallback((input) => {
+    const normalized = { ...defaultVisibleSections };
+    if (!input || typeof input !== "object") return normalized;
+    Object.keys(defaultVisibleSections).forEach((key) => {
+      if (typeof input[key] === "boolean") normalized[key] = input[key];
+    });
+    return normalized;
+  }, [defaultVisibleSections]);
+
+  const restoreVisibleSectionsFromStorage = useCallback(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(DASHBOARD_CONFIG_STORAGE_KEY);
+      if (!raw) {
+        setVisibleSections(defaultVisibleSections);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      setVisibleSections(normalizeVisibleSections(parsed));
+    } catch {
+      setVisibleSections(defaultVisibleSections);
+    }
+  }, [defaultVisibleSections, normalizeVisibleSections]);
 
   const DRILL_LIMIT = 100;
   const syncBusy = syncLoading || !!syncStatus?.running;
@@ -358,6 +413,7 @@ export default function Home() {
     if (onderwerp) items.push(`Onderwerp: ${onderwerp}`);
     if (priority) items.push(`Prioriteit: ${priority}`);
     if (assignee) items.push(`Assignee: ${assignee}`);
+    if (organization) items.push(`Partner: ${organization}`);
     if (servicedeskOnly !== DEFAULT_SERVICEDESK_ONLY) {
       items.push(servicedeskOnly ? "Scope: alleen servicedesk" : "Scope: alle tickets");
     }
@@ -367,6 +423,7 @@ export default function Home() {
     onderwerp,
     priority,
     assignee,
+    organization,
     servicedeskOnly,
   ]);
   const p90Period = useMemo(() => {
@@ -425,9 +482,11 @@ export default function Home() {
     setOnderwerp("");
     setPriority("");
     setAssignee("");
+    setOrganization("");
     setServicedeskOnly(DEFAULT_SERVICEDESK_ONLY);
+    restoreVisibleSectionsFromStorage();
     if (showToast) flashToast("Filters gereset");
-  }, [flashToast]);
+  }, [flashToast, restoreVisibleSectionsFromStorage]);
 
   const refreshSyncStatus = useCallback(async () => {
     const r = await fetch(`${API}/sync/status`);
@@ -442,6 +501,7 @@ export default function Home() {
     if (onderwerp) params.set("onderwerp", onderwerp);
     if (priority) params.set("priority", priority);
     if (assignee) params.set("assignee", assignee);
+    if (organization) params.set("organization", organization);
     if (servicedeskOnly) params.set("servicedesk_only", "true");
 
     fetch(`${API}/metrics/volume_weekly?` + params.toString())
@@ -460,6 +520,24 @@ export default function Home() {
       .then((r) => r.json())
       .then((data) => (Array.isArray(data) ? setAssigneeVolume(data) : setAssigneeVolume([])));
 
+    fetch(`${API}/metrics/volume_weekly_by_organization?` + params.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setOrganizationVolume(data) : setOrganizationVolume([])));
+
+    fetch(`${API}/metrics/inflow_vs_closed_weekly?` + params.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setInflowVsClosedWeekly(data) : setInflowVsClosedWeekly([])));
+
+    const ttrParams = new URLSearchParams(params);
+    ttrParams.delete("request_type");
+    fetch(`${API}/metrics/time_to_resolution_weekly_by_type?` + ttrParams.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setIncidentResolutionWeekly(data) : setIncidentResolutionWeekly([])));
+
+    fetch(`${API}/metrics/time_to_first_response_weekly?` + params.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setFirstResponseWeekly(data) : setFirstResponseWeekly([])));
+
     if (!p90Period.hasData) {
       setP90([]);
     } else {
@@ -467,6 +545,7 @@ export default function Home() {
       if (onderwerp) p.set("onderwerp", onderwerp);
       if (priority) p.set("priority", priority);
       if (assignee) p.set("assignee", assignee);
+      if (organization) p.set("organization", organization);
       if (servicedeskOnly) p.set("servicedesk_only", "true");
 
       fetch(`${API}/metrics/leadtime_p90_by_type?` + p.toString())
@@ -475,11 +554,11 @@ export default function Home() {
     }
 
     fetch(`${API}/meta`).then((r) => r.json()).then(setMeta);
-  }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee, servicedeskOnly, p90Period]);
+  }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee, organization, servicedeskOnly, p90Period]);
 
-  const triggerSync = useCallback(async () => {
+  const triggerSync = useCallback(async ({ silent = false } = {}) => {
     setSyncLoading(true);
-    setSyncMessage("");
+    if (!silent) setSyncMessage("");
 
     try {
       await fetch(`${API}/sync`, { method: "POST" });
@@ -494,14 +573,18 @@ export default function Home() {
 
       await refreshDashboard();
 
-      const upserts = last?.last_result?.upserts;
-      setSyncMessage(`Sync klaar${upserts != null ? `: ${upserts} tickets geüpdatet` : ""}`);
-      setSyncMessageKind("success");
-      setTimeout(() => setSyncMessage(""), 5000);
+      if (!silent) {
+        const upserts = last?.last_result?.upserts;
+        setSyncMessage(`Sync klaar${upserts != null ? `: ${upserts} tickets geüpdatet` : ""}`);
+        setSyncMessageKind("success");
+        setTimeout(() => setSyncMessage(""), 5000);
+      }
     } catch (e) {
-      setSyncMessage("Sync mislukt (zie status/error)");
-      setSyncMessageKind("error");
-      setTimeout(() => setSyncMessage(""), 8000);
+      if (!silent) {
+        setSyncMessage("Sync mislukt (zie status/error)");
+        setSyncMessageKind("error");
+        setTimeout(() => setSyncMessage(""), 8000);
+      }
       throw e;
     } finally {
       setSyncLoading(false);
@@ -510,7 +593,7 @@ export default function Home() {
 
   useEffect(() => {
     fetch(`${API}/meta`).then((r) => r.json()).then(setMeta);
-  }, []);
+  }, [normalizeVisibleSections]);
 
   useEffect(() => {
     fetch(`${API}/sync/status`)
@@ -528,6 +611,14 @@ export default function Home() {
     }, 15000);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (syncBusy) return;
+      triggerSync({ silent: true }).catch(() => {});
+    }, 5 * 60 * 1000);
+    return () => clearInterval(t);
+  }, [syncBusy, triggerSync]);
 
   useEffect(() => {
     if (!syncStatus || syncBusy) return;
@@ -668,6 +759,7 @@ export default function Home() {
     if (onderwerp) params.set("onderwerp", onderwerp);
     if (priority) params.set("priority", priority);
     if (assignee) params.set("assignee", assignee);
+    if (organization) params.set("organization", organization);
     if (servicedeskOnly) params.set("servicedesk_only", "true");
 
     fetch(`${API}/metrics/volume_weekly?` + params.toString())
@@ -686,6 +778,24 @@ export default function Home() {
       .then((r) => r.json())
       .then((data) => (Array.isArray(data) ? setAssigneeVolume(data) : setAssigneeVolume([])));
 
+    fetch(`${API}/metrics/volume_weekly_by_organization?` + params.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setOrganizationVolume(data) : setOrganizationVolume([])));
+
+    fetch(`${API}/metrics/inflow_vs_closed_weekly?` + params.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setInflowVsClosedWeekly(data) : setInflowVsClosedWeekly([])));
+
+    const ttrParams = new URLSearchParams(params);
+    ttrParams.delete("request_type");
+    fetch(`${API}/metrics/time_to_resolution_weekly_by_type?` + ttrParams.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setIncidentResolutionWeekly(data) : setIncidentResolutionWeekly([])));
+
+    fetch(`${API}/metrics/time_to_first_response_weekly?` + params.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setFirstResponseWeekly(data) : setFirstResponseWeekly([])));
+
     if (!p90Period.hasData) {
       setP90([]);
     } else {
@@ -696,13 +806,14 @@ export default function Home() {
       if (onderwerp) p.set("onderwerp", onderwerp);
       if (priority) p.set("priority", priority);
       if (assignee) p.set("assignee", assignee);
+      if (organization) p.set("organization", organization);
       if (servicedeskOnly) p.set("servicedesk_only", "true");
 
       fetch(`${API}/metrics/leadtime_p90_by_type?` + p.toString())
         .then((r) => r.json())
         .then(setP90);
     }
-  }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee, servicedeskOnly, p90Period]);
+  }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee, organization, servicedeskOnly, p90Period]);
 
   // volume -> weeks x series (use full range so empty weeks show as 0)
   const weeks = useMemo(() => buildWeekStartsFromRange(dateFrom, dateTo), [dateFrom, dateTo]);
@@ -965,6 +1076,139 @@ export default function Home() {
     [p90]
   );
 
+  const inflowVsClosedLineData = useMemo(() => {
+    const rows = Array.isArray(inflowVsClosedWeekly) ? inflowVsClosedWeekly : [];
+    const labels = weeks.map((w) => fmtDate(w));
+    const incomingData = weeks.map((w) => {
+      const row = rows.find((x) => String(x?.week || "").slice(0, 10) === w);
+      return row?.incoming_count != null ? Number(row.incoming_count) : 0;
+    });
+    const closedData = weeks.map((w) => {
+      const row = rows.find((x) => String(x?.week || "").slice(0, 10) === w);
+      return row?.closed_count != null ? Number(row.closed_count) : 0;
+    });
+    return {
+      labels,
+      datasets: [
+        {
+          label: "Binnengekomen",
+          data: incomingData,
+          tension: 0.2,
+          borderColor: "#1565c0",
+          backgroundColor: "#1565c0",
+          pointBackgroundColor: "#1565c0",
+          pointBorderColor: "#1565c0",
+        },
+        {
+          label: "Afgesloten",
+          data: closedData,
+          tension: 0.2,
+          borderColor: "#2e7d32",
+          backgroundColor: "#2e7d32",
+          pointBackgroundColor: "#2e7d32",
+          pointBorderColor: "#2e7d32",
+        },
+      ],
+    };
+  }, [inflowVsClosedWeekly, weeks]);
+
+  const incidentResolutionLineData = useMemo(() => {
+    const rows = Array.isArray(incidentResolutionWeekly) ? incidentResolutionWeekly : [];
+    const labels = weeks.map((w) => fmtDate(w));
+    const allTypes = (Array.isArray(meta.request_types) ? meta.request_types : []).filter(Boolean);
+    const typeSetFromRows = Array.from(
+      new Set(rows.map((x) => String(x?.request_type || "").trim()).filter(Boolean))
+    );
+    const types = allTypes.length ? allTypes : typeSetFromRows;
+    return {
+      labels,
+      datasets: types.map((typeLabel) => ({
+        label: typeLabel,
+        data: weeks.map((w) => {
+          const row = rows.find(
+            (x) =>
+              String(x?.week || "").slice(0, 10) === w &&
+              String(x?.request_type || "") === String(typeLabel)
+          );
+          return row?.avg_hours != null ? Number(row.avg_hours) : null;
+        }),
+        tension: 0.2,
+        borderColor: typeColor(typeLabel),
+        backgroundColor: typeColor(typeLabel),
+        pointBackgroundColor: typeColor(typeLabel),
+        pointBorderColor: typeColor(typeLabel),
+      })),
+    };
+  }, [incidentResolutionWeekly, weeks, meta.request_types, typeColor]);
+
+  const firstResponseLineData = useMemo(() => {
+    const rows = Array.isArray(firstResponseWeekly) ? firstResponseWeekly : [];
+    const labels = weeks.map((w) => fmtDate(w));
+    const avgData = weeks.map((w) => {
+      const row = rows.find((x) => String(x?.week || "").slice(0, 10) === w);
+      return row?.avg_hours != null ? Number(row.avg_hours) : null;
+    });
+    const medianData = weeks.map((w) => {
+      const row = rows.find((x) => String(x?.week || "").slice(0, 10) === w);
+      if (row?.median_hours != null) return Number(row.median_hours);
+      return row?.p50_hours != null ? Number(row.p50_hours) : null;
+    });
+    return {
+      labels,
+      datasets: [
+        {
+          label: "Gemiddelde TTFR (uren)",
+          data: avgData,
+          tension: 0.2,
+          borderColor: "#1565c0",
+          backgroundColor: "#1565c0",
+          pointBackgroundColor: "#1565c0",
+          pointBorderColor: "#1565c0",
+        },
+        {
+          label: "Mediaan TTFR (uren)",
+          data: medianData,
+          tension: 0.2,
+          borderColor: "#00897b",
+          backgroundColor: "#00897b",
+          pointBackgroundColor: "#00897b",
+          pointBorderColor: "#00897b",
+          borderDash: [6, 4],
+        },
+      ],
+    };
+  }, [firstResponseWeekly, weeks]);
+
+  const organizationBarData = useMemo(() => {
+    const rows = Array.isArray(organizationVolume) ? organizationVolume : [];
+    const labels = weeks.map((w) => fmtDate(w));
+    const totalsByOrganization = new Map();
+    rows.forEach((row) => {
+      const org = String(row?.organization || "");
+      if (!org) return;
+      const cur = totalsByOrganization.get(org) || 0;
+      totalsByOrganization.set(org, cur + (Number(row?.tickets) || 0));
+    });
+    const topOrganizations = Array.from(totalsByOrganization.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([org]) => org);
+    return {
+      labels,
+      datasets: topOrganizations.map((org, index) => ({
+        label: org,
+        data: weeks.map((w) => {
+          const row = rows.find(
+            (x) => String(x?.week || "").slice(0, 10) === w && String(x?.organization || "") === org
+          );
+          return row ? Number(row.tickets) : 0;
+        }),
+        backgroundColor: uniqueChartColor(index, topOrganizations.length, 68, 45),
+        borderColor: uniqueChartColor(index, topOrganizations.length, 68, 35),
+      })),
+    };
+  }, [organizationVolume, weeks]);
+
   const kpiStats = useMemo(() => {
     const indices = fullWeekInfo.indices;
 
@@ -1102,6 +1346,7 @@ export default function Home() {
       else if (onderwerp) params.set("onderwerp", onderwerp);
       if (priority) params.set("priority", priority);
       if (assignee) params.set("assignee", assignee);
+      if (organization) params.set("organization", organization);
       if (servicedeskOnly) params.set("servicedesk_only", "true");
 
       const res = await fetch(`${API}/issues?` + params.toString());
@@ -1534,13 +1779,23 @@ export default function Home() {
     letterSpacing: 0.3,
   };
 
-  const cardTitles = {
-    volume: "Volume per week",
-    onderwerp: "Onderwerp logging",
-    priority: "Issues per priority",
-    assignee: "Issues per assignee",
-    p90: "Doorlooptijd p50/p75/p90",
-  };
+  const dashboardConfigItems = useMemo(
+    () => [
+      { key: "kpis", label: "KPI-overzicht" },
+      { key: "topOnderwerpen", label: "Top 10 onderwerpen" },
+      ...Object.entries(CARD_TITLES).map(([key, label]) => ({ key, label })),
+    ],
+    []
+  );
+
+  useEffect(() => {
+    if (!expandedCard) return;
+    if (visibleSections[expandedCard] === false) setExpandedCard("");
+  }, [expandedCard, visibleSections]);
+
+  useEffect(() => {
+    restoreVisibleSectionsFromStorage();
+  }, [restoreVisibleSectionsFromStorage]);
 
   function renderCardContent(cardKey, expanded = false) {
     const bodyStyle = expanded ? { height: "100%", minHeight: 0, position: "relative" } : chartBodyStyle;
@@ -1732,6 +1987,147 @@ export default function Home() {
             Tip: filter op “Onderwerp” om p90 per type te zien voor één categorie.
           </p>
         </>
+      );
+    }
+
+    if (cardKey === "inflowVsClosed") {
+      return (
+        <div style={bodyStyle}>
+          {hasDataPoints(inflowVsClosedLineData) ? (
+            <Line
+              data={inflowVsClosedLineData}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                  legend: { display: true, position: "top" },
+                  tooltip: {
+                    mode: "nearest",
+                    intersect: false,
+                    callbacks: {
+                      label: (ctx) => `${ctx.dataset.label}: ${num(ctx.parsed.y)} items`,
+                    },
+                  },
+                  simpleDataLabels: false,
+                },
+                interaction: { mode: "nearest", intersect: false },
+                scales: {
+                  x: {
+                    ticks: { color: "var(--text-muted)" },
+                  },
+                  y: {
+                    title: { display: true, text: "Aantal items", color: "var(--text-muted)" },
+                    ticks: {
+                      color: "var(--text-muted)",
+                      callback: (value) => num(value),
+                    },
+                  },
+                },
+              }}
+            />
+          ) : (
+            <EmptyChartState filterLabel="Binnengekomen/Afgesloten" style={emptyStyle} />
+          )}
+        </div>
+      );
+    }
+
+    if (cardKey === "incidentResolution") {
+      return (
+        <div style={bodyStyle}>
+          {hasDataPoints(incidentResolutionLineData) ? (
+            <Line
+              data={incidentResolutionLineData}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                  legend: { display: true, position: "top" },
+                  tooltip: { mode: "nearest", intersect: false },
+                  simpleDataLabels: false,
+                },
+                interaction: { mode: "nearest", intersect: false },
+                scales: {
+                  x: {
+                    ticks: { color: "var(--text-muted)" },
+                  },
+                  y: {
+                    title: { display: true, text: "Uren", color: "var(--text-muted)" },
+                    ticks: { color: "var(--text-muted)" },
+                  },
+                },
+              }}
+            />
+          ) : (
+            <EmptyChartState filterLabel="Time to Resolution" style={emptyStyle} />
+          )}
+        </div>
+      );
+    }
+
+    if (cardKey === "firstResponseAll") {
+      return (
+        <div style={bodyStyle}>
+          {hasDataPoints(firstResponseLineData) ? (
+            <Line
+              data={firstResponseLineData}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                  legend: { display: true, position: "top" },
+                  tooltip: { mode: "nearest", intersect: false },
+                  simpleDataLabels: false,
+                },
+                interaction: { mode: "nearest", intersect: false },
+                scales: {
+                  x: {
+                    ticks: { color: "var(--text-muted)" },
+                  },
+                  y: {
+                    title: { display: true, text: "Uren", color: "var(--text-muted)" },
+                    ticks: { color: "var(--text-muted)" },
+                  },
+                },
+              }}
+            />
+          ) : (
+            <EmptyChartState filterLabel="Time to First Response" style={emptyStyle} />
+          )}
+        </div>
+      );
+    }
+
+    if (cardKey === "organizationWeekly") {
+      return (
+        <div style={bodyStyle}>
+          {hasDataPoints(organizationBarData) ? (
+            <Bar
+              data={organizationBarData}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                  legend: { display: true, position: "top" },
+                  tooltip: { mode: "nearest", intersect: false },
+                  simpleDataLabels: false,
+                },
+                interaction: { mode: "nearest", intersect: false },
+                scales: {
+                  x: {
+                    ticks: { color: "var(--text-muted)" },
+                  },
+                  y: {
+                    title: { display: true, text: "Aantal tickets", color: "var(--text-muted)" },
+                    ticks: { color: "var(--text-muted)" },
+                  },
+                },
+              }}
+            />
+          ) : (
+            <EmptyChartState filterLabel="Partners" style={emptyStyle} />
+          )}
+        </div>
       );
     }
 
@@ -2009,6 +2405,25 @@ export default function Home() {
             </select>
           </label>
 
+          <label style={fieldStyle}>
+            <span style={labelStyle}>Partner</span>
+          <select
+            value={organization}
+            onChange={(e) => {
+              setOrganization(e.target.value);
+              e.target.blur();
+            }}
+            style={inputBaseStyle}
+          >
+            <option value="">(alle)</option>
+            {meta.organizations.map((o) => (
+              <option key={o} value={o}>
+                {o}
+              </option>
+              ))}
+            </select>
+          </label>
+
           <label style={fieldStyle} title="Sluit uit: Koppelingen, datadump, Rest-endpoints, migratie, SSO-koppeling">
             <span style={labelStyle}>Scope</span>
             <div style={{ display: "flex", gap: 8, alignItems: "center", height: 36, padding: "0 4px" }}>
@@ -2038,11 +2453,64 @@ export default function Home() {
 
         </div>
 
+        <div style={{ marginTop: 16 }}>
+          <h3 style={{ margin: "0 0 8px", fontSize: 16 }}>Dashboard configuratie</h3>
+          <div
+            style={{
+              border: "1px solid var(--border)",
+              borderRadius: 10,
+              padding: 10,
+              background: "var(--surface)",
+            }}
+          >
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+                gap: 8,
+              }}
+            >
+              {dashboardConfigItems.map((item) => (
+                <label key={item.key} style={{ display: "flex", gap: 8, alignItems: "center", minHeight: 28 }}>
+                  <input
+                    type="checkbox"
+                    checked={visibleSections[item.key] !== false}
+                    onChange={(e) =>
+                      setVisibleSections((prev) => ({
+                        ...prev,
+                        [item.key]: e.target.checked,
+                      }))
+                    }
+                  />
+                  <span>{item.label}</span>
+                </label>
+              ))}
+            </div>
+            <div style={{ marginTop: 8, display: "flex", justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof window === "undefined") return;
+                  window.localStorage.setItem(
+                    DASHBOARD_CONFIG_STORAGE_KEY,
+                    JSON.stringify(normalizeVisibleSections(visibleSections))
+                  );
+                  flashToast("Dashboard configuratie opgeslagen");
+                }}
+                style={buttonBaseStyle}
+              >
+                Opslaan
+              </button>
+            </div>
+          </div>
+        </div>
+
             </div>
           </div>
         </>
       ) : null}
 
+      {visibleSections.kpis ? (
       <div style={kpiGridStyle}>
         <div style={kpiCardStyle}>
           <div style={kpiLabelStyle}>Totaal tickets (volledige weken)</div>
@@ -2075,8 +2543,11 @@ export default function Home() {
           <div style={kpiSubStyle}>{num(kpiStats.topSubjectTotal)} tickets</div>
         </div>
       </div>
+      ) : null}
 
+      {(visibleSections.topOnderwerpen || visibleSections.priority) ? (
       <div style={topListGridStyle}>
+        {visibleSections.topOnderwerpen ? (
         <div style={topListCardStyle}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 4 }}>
             <h3 style={{ ...topListHeaderStyle, margin: 0 }}>Top 10 onderwerpen</h3>
@@ -2135,7 +2606,9 @@ export default function Home() {
             )}
           </div>
         </div>
+        ) : null}
 
+        {visibleSections.priority ? (
         <div style={chartShellStyle}>
           <button
             type="button"
@@ -2143,14 +2616,18 @@ export default function Home() {
             style={cardTitleButtonStyle}
             onClick={() => setExpandedCard("priority")}
           >
-            <span style={chartTitleStyle}>{cardTitles.priority}</span>
+            <span style={chartTitleStyle}>{CARD_TITLES.priority}</span>
             <span style={cardTitleHintStyle}>Vergroot</span>
           </button>
           {renderCardContent("priority")}
         </div>
+        ) : null}
       </div>
+      ) : null}
 
+      {(visibleSections.volume || visibleSections.organizationWeekly) ? (
       <div style={topChartsGridStyle}>
+        {visibleSections.volume ? (
         <div style={chartShellStyle}>
           <button
             type="button"
@@ -2158,28 +2635,38 @@ export default function Home() {
             style={cardTitleButtonStyle}
             onClick={() => setExpandedCard("volume")}
           >
-            <span style={chartTitleStyle}>{cardTitles.volume}</span>
+            <span style={chartTitleStyle}>{CARD_TITLES.volume}</span>
             <span style={cardTitleHintStyle}>Vergroot</span>
           </button>
           {renderCardContent("volume")}
         </div>
+        ) : null}
 
+        {visibleSections.organizationWeekly ? (
         <div style={chartShellStyle}>
           <button
             type="button"
             className="card-expand-title"
             style={cardTitleButtonStyle}
-            onClick={() => setExpandedCard("onderwerp")}
+            onClick={() => setExpandedCard("organizationWeekly")}
           >
-            <span style={chartTitleStyle}>{cardTitles.onderwerp}</span>
+            <span style={chartTitleStyle}>{CARD_TITLES.organizationWeekly}</span>
             <span style={cardTitleHintStyle}>Vergroot</span>
           </button>
-          {renderCardContent("onderwerp")}
+          {renderCardContent("organizationWeekly")}
         </div>
-
+        ) : null}
       </div>
+      ) : null}
 
+      {(visibleSections.assignee ||
+        visibleSections.onderwerp ||
+        visibleSections.p90 ||
+        visibleSections.inflowVsClosed ||
+        visibleSections.incidentResolution ||
+        visibleSections.firstResponseAll) ? (
       <div style={lowerChartsGridStyle}>
+        {visibleSections.assignee ? (
         <div style={chartShellStyle}>
           <button
             type="button"
@@ -2187,12 +2674,29 @@ export default function Home() {
             style={cardTitleButtonStyle}
             onClick={() => setExpandedCard("assignee")}
           >
-            <span style={chartTitleStyle}>{cardTitles.assignee}</span>
+            <span style={chartTitleStyle}>{CARD_TITLES.assignee}</span>
             <span style={cardTitleHintStyle}>Vergroot</span>
           </button>
           {renderCardContent("assignee")}
         </div>
+        ) : null}
 
+        {visibleSections.onderwerp ? (
+        <div style={chartShellStyle}>
+          <button
+            type="button"
+            className="card-expand-title"
+            style={cardTitleButtonStyle}
+            onClick={() => setExpandedCard("onderwerp")}
+          >
+            <span style={chartTitleStyle}>{CARD_TITLES.onderwerp}</span>
+            <span style={cardTitleHintStyle}>Vergroot</span>
+          </button>
+          {renderCardContent("onderwerp")}
+        </div>
+        ) : null}
+
+        {visibleSections.p90 ? (
         <div style={chartShellStyle}>
           <button
             type="button"
@@ -2200,19 +2704,67 @@ export default function Home() {
             style={cardTitleButtonStyle}
             onClick={() => setExpandedCard("p90")}
           >
-            <span style={chartTitleStyle}>{cardTitles.p90}</span>
+            <span style={chartTitleStyle}>{CARD_TITLES.p90}</span>
             <span style={cardTitleHintStyle}>Vergroot</span>
           </button>
           {renderCardContent("p90")}
         </div>
+        ) : null}
+
+        {visibleSections.inflowVsClosed ? (
+        <div style={chartShellStyle}>
+          <button
+            type="button"
+            className="card-expand-title"
+            style={cardTitleButtonStyle}
+            onClick={() => setExpandedCard("inflowVsClosed")}
+          >
+            <span style={chartTitleStyle}>{CARD_TITLES.inflowVsClosed}</span>
+            <span style={cardTitleHintStyle}>Vergroot</span>
+          </button>
+          {renderCardContent("inflowVsClosed")}
+        </div>
+        ) : null}
+
+        {visibleSections.incidentResolution ? (
+        <div style={chartShellStyle}>
+          <button
+            type="button"
+            className="card-expand-title"
+            style={cardTitleButtonStyle}
+            onClick={() => setExpandedCard("incidentResolution")}
+          >
+            <span style={chartTitleStyle}>{CARD_TITLES.incidentResolution}</span>
+            <span style={cardTitleHintStyle}>Vergroot</span>
+          </button>
+          {renderCardContent("incidentResolution")}
+        </div>
+        ) : null}
+
+        {visibleSections.firstResponseAll ? (
+        <div style={chartShellStyle}>
+          <button
+            type="button"
+            className="card-expand-title"
+            style={cardTitleButtonStyle}
+            onClick={() => setExpandedCard("firstResponseAll")}
+          >
+            <span style={chartTitleStyle}>{CARD_TITLES.firstResponseAll}</span>
+            <span style={cardTitleHintStyle}>Vergroot</span>
+          </button>
+          {renderCardContent("firstResponseAll")}
+        </div>
+        ) : null}
+
       </div>
+      ) : null}
 
       {expandedCard ? (
-        <div role="dialog" aria-modal="true" aria-label={cardTitles[expandedCard]} style={modalOverlayStyle} onClick={() => setExpandedCard("")}>
+        <div role="dialog" aria-modal="true" aria-label={CARD_TITLES[expandedCard]} style={modalOverlayStyle} onClick={() => setExpandedCard("")}>
           <div style={modalFrameStyle}>
             <div style={modalCardStyle} onClick={(e) => e.stopPropagation()}>
               <div style={modalHeaderStyle}>
-                <h2 style={{ margin: 0, fontSize: 20 }}>{cardTitles[expandedCard]}</h2>
+                <h2 style={{ margin: 0, fontSize: 20 }}>{CARD_TITLES[expandedCard]}</h2>
                 <button type="button" onClick={() => setExpandedCard("")} style={modalCloseStyle}>
                   Sluiten
                 </button>

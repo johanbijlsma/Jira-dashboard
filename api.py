@@ -20,6 +20,7 @@ JIRA_PROJECT = os.environ.get("JIRA_PROJECT", "SD")
 
 REQUEST_TYPE_FIELD = os.environ.get("REQUEST_TYPE_FIELD", "customfield_10010")
 ONDERWERP_FIELD = os.environ.get("ONDERWERP_FIELD", "customfield_10143")
+ORGANIZATION_FIELD = os.environ.get("ORGANIZATION_FIELD", "customfield_10002")
 CORS_ORIGINS_RAW = os.environ.get(
     "BACKEND_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
 )
@@ -35,6 +36,7 @@ _sync_running = False
 _sync_last_error = None
 _sync_last_run = None
 _sync_last_result = None
+_schema_checked = False
 
 # Prefer POSTGRES_* (from docker/.env). Fall back to DB_* for backward compatibility.
 PG_HOST = os.environ.get("POSTGRES_HOST") or os.environ.get("DB_HOST") or "localhost"
@@ -53,6 +55,16 @@ def conn():
         user=PG_USER,
         password=PG_PASSWORD,
     )
+
+
+def ensure_schema():
+    global _schema_checked
+    if _schema_checked:
+        return
+    with conn() as c, c.cursor() as cur:
+        cur.execute("alter table issues add column if not exists organizations text[];")
+        c.commit()
+    _schema_checked = True
 
 
 def get_last_sync():
@@ -84,6 +96,7 @@ def jira_search(jql: str, max_results: int = 100, next_page_token: Optional[str]
             "assignee",
             REQUEST_TYPE_FIELD,
             ONDERWERP_FIELD,
+            ORGANIZATION_FIELD,
         ],
     }
     if next_page_token:
@@ -141,8 +154,28 @@ def norm_assignee(v):
     return None if v is None else str(v)
 
 
+def norm_organizations(v):
+    # JSM Organizations field usually comes as a list of objects with a name.
+    if v is None:
+        return []
+    items = v if isinstance(v, list) else [v]
+    out = []
+    for item in items:
+        name = None
+        if isinstance(item, dict):
+            name = item.get("name") or item.get("value") or item.get("title")
+        elif item is not None:
+            name = str(item)
+        name = (name or "").strip()
+        if name:
+            out.append(name)
+    # Keep stable ordering and remove duplicates
+    return list(dict.fromkeys(out))
+
+
 
 def upsert_issues(issues):
+    ensure_schema()
     with conn() as c, c.cursor() as cur:
         for it in issues:
             f = it["fields"]
@@ -158,14 +191,16 @@ def upsert_issues(issues):
             status = (f.get("status") or {}).get("name")
             priority = (f.get("priority") or {}).get("name")
             assignee = norm_assignee(f.get("assignee"))
+            organizations = norm_organizations(f.get(ORGANIZATION_FIELD))
 
             cur.execute(
                 """
-                insert into issues(issue_key, request_type, onderwerp_logging, created_at, resolved_at, updated_at, priority, assignee, current_status)
-                values (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                insert into issues(issue_key, request_type, onderwerp_logging, organizations, created_at, resolved_at, updated_at, priority, assignee, current_status)
+                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 on conflict (issue_key) do update set
                   request_type=excluded.request_type,
                   onderwerp_logging=excluded.onderwerp_logging,
+                  organizations=excluded.organizations,
                   created_at=excluded.created_at,
                   resolved_at=excluded.resolved_at,
                   updated_at=excluded.updated_at,
@@ -173,7 +208,18 @@ def upsert_issues(issues):
                   assignee=excluded.assignee,
                   current_status=excluded.current_status
                 """,
-                (issue_key, request_type, onderwerp, created_at, resolved_at, updated_at, priority, assignee, status),
+                (
+                    issue_key,
+                    request_type,
+                    onderwerp,
+                    organizations if organizations else None,
+                    created_at,
+                    resolved_at,
+                    updated_at,
+                    priority,
+                    assignee,
+                    status,
+                ),
             )
         c.commit()
 
@@ -269,6 +315,7 @@ app.add_middleware(
 
 @app.get("/meta")
 def meta():
+    ensure_schema()
     with conn() as c, c.cursor() as cur:
         cur.execute("select distinct request_type from issues where request_type is not null order by 1;")
         request_types = [r[0] for r in cur.fetchall()]
@@ -278,11 +325,25 @@ def meta():
         priorities = [r[0] for r in cur.fetchall()]
         cur.execute("select distinct assignee from issues where assignee is not null order by 1;")
         assignees = [r[0] for r in cur.fetchall()]
+        cur.execute(
+            """
+            select distinct org_name
+            from (
+              select unnest(organizations) as org_name
+              from issues
+              where organizations is not null
+            ) t
+            where org_name is not null and org_name <> ''
+            order by 1;
+            """
+        )
+        organizations = [r[0] for r in cur.fetchall()]
     return {
         "request_types": request_types,
         "onderwerpen": onderwerpen,
         "priorities": priorities,
         "assignees": assignees,
+        "organizations": organizations,
     }
 
 
@@ -294,8 +355,10 @@ def volume_weekly(
     onderwerp: Optional[str] = None,
     priority: Optional[str] = None,
     assignee: Optional[str] = None,
+    organization: Optional[str] = None,
     servicedesk_only: bool = False,
 ):
+    ensure_schema()
     q = """
     select
       date_trunc('week', created_at) as week,
@@ -307,6 +370,7 @@ def volume_weekly(
       and (%s is null or onderwerp_logging = %s)
       and (%s is null or priority = %s)
       and (%s is null or assignee = %s)
+      and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
       and (
         not %s
         or onderwerp_logging is null
@@ -329,6 +393,8 @@ def volume_weekly(
                 priority,
                 assignee,
                 assignee,
+                organization,
+                organization,
                 servicedesk_only,
             ),
         )
@@ -338,6 +404,104 @@ def volume_weekly(
     return [{"week": r[0].isoformat(), "request_type": r[1], "tickets": r[2]} for r in rows]
 
 
+@app.get("/metrics/inflow_vs_closed_weekly")
+def inflow_vs_closed_weekly(
+    date_from: str = Query(..., description="ISO date/time, e.g. 2025-01-01"),
+    date_to: str = Query(..., description="ISO date/time, e.g. 2026-01-01"),
+    request_type: Optional[str] = None,
+    onderwerp: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee: Optional[str] = None,
+    organization: Optional[str] = None,
+    servicedesk_only: bool = False,
+):
+    ensure_schema()
+    q = """
+    with incoming as (
+      select
+        date_trunc('week', created_at) as week,
+        count(*) as incoming_count
+      from issues
+      where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
+        and (%s is null or request_type = %s)
+        and (%s is null or onderwerp_logging = %s)
+        and (%s is null or priority = %s)
+        and (%s is null or assignee = %s)
+        and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
+        and (
+          not %s
+          or onderwerp_logging is null
+          or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+        )
+      group by 1
+    ),
+    closed as (
+      select
+        date_trunc('week', resolved_at) as week,
+        count(*) as closed_count
+      from issues
+      where resolved_at is not null
+        and resolved_at >= %s::timestamptz and resolved_at < (%s::timestamptz + interval '1 day')
+        and (%s is null or request_type = %s)
+        and (%s is null or onderwerp_logging = %s)
+        and (%s is null or priority = %s)
+        and (%s is null or assignee = %s)
+        and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
+        and (
+          not %s
+          or onderwerp_logging is null
+          or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+        )
+      group by 1
+    )
+    select
+      coalesce(i.week, c.week) as week,
+      coalesce(i.incoming_count, 0) as incoming_count,
+      coalesce(c.closed_count, 0) as closed_count
+    from incoming i
+    full outer join closed c on c.week = i.week
+    order by 1;
+    """
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            q,
+            (
+                date_from,
+                date_to,
+                request_type,
+                request_type,
+                onderwerp,
+                onderwerp,
+                priority,
+                priority,
+                assignee,
+                assignee,
+                organization,
+                organization,
+                servicedesk_only,
+                date_from,
+                date_to,
+                request_type,
+                request_type,
+                onderwerp,
+                onderwerp,
+                priority,
+                priority,
+                assignee,
+                assignee,
+                organization,
+                organization,
+                servicedesk_only,
+            ),
+        )
+        rows = cur.fetchall()
+
+    return [
+        {"week": r[0].isoformat(), "incoming_count": int(r[1] or 0), "closed_count": int(r[2] or 0)}
+        for r in rows
+    ]
+
+
 @app.get("/metrics/leadtime_p90_by_type")
 def leadtime_p90_by_type(
     date_from: str = Query(...),
@@ -345,8 +509,10 @@ def leadtime_p90_by_type(
     onderwerp: Optional[str] = None,
     priority: Optional[str] = None,
     assignee: Optional[str] = None,
+    organization: Optional[str] = None,
     servicedesk_only: bool = False,
 ):
+    ensure_schema()
     q = """
     select
       request_type,
@@ -366,6 +532,7 @@ def leadtime_p90_by_type(
       and (%s is null or onderwerp_logging = %s)
       and (%s is null or priority = %s)
       and (%s is null or assignee = %s)
+      and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
       and (
         not %s
         or onderwerp_logging is null
@@ -377,7 +544,19 @@ def leadtime_p90_by_type(
     with conn() as c, c.cursor() as cur:
         cur.execute(
             q,
-            (date_from, date_to, onderwerp, onderwerp, priority, priority, assignee, assignee, servicedesk_only),
+            (
+                date_from,
+                date_to,
+                onderwerp,
+                onderwerp,
+                priority,
+                priority,
+                assignee,
+                assignee,
+                organization,
+                organization,
+                servicedesk_only,
+            ),
         )
         rows = cur.fetchall()
     return [
@@ -392,6 +571,223 @@ def leadtime_p90_by_type(
     ]
 
 
+@app.get("/metrics/time_summary")
+def time_summary(
+    date_from: str = Query(...),
+    date_to: str = Query(...),
+    request_type: Optional[str] = None,
+    onderwerp: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee: Optional[str] = None,
+    organization: Optional[str] = None,
+    servicedesk_only: bool = False,
+):
+    ensure_schema()
+    q = """
+    select
+      avg(case
+        when resolved_at is not null and resolved_at >= created_at
+        then extract(epoch from (resolved_at - created_at))/3600.0
+      end) as time_to_resolution_hours,
+      percentile_cont(0.50) within group (
+        order by extract(epoch from (resolved_at - created_at))/3600.0
+      ) filter (
+        where resolved_at is not null and resolved_at >= created_at
+      ) as time_to_resolution_p50_hours,
+      avg(case
+        when updated_at is not null and updated_at >= created_at
+        then extract(epoch from (updated_at - created_at))/3600.0
+      end) as time_to_first_response_hours,
+      percentile_cont(0.50) within group (
+        order by extract(epoch from (updated_at - created_at))/3600.0
+      ) filter (
+        where updated_at is not null and updated_at >= created_at
+      ) as time_to_first_response_p50_hours,
+      count(*) filter (
+        where resolved_at is not null and resolved_at >= created_at
+      ) as resolution_n,
+      count(*) filter (
+        where updated_at is not null and updated_at >= created_at
+      ) as first_response_n
+    from issues
+    where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
+      and (%s is null or request_type = %s)
+      and (%s is null or onderwerp_logging = %s)
+      and (%s is null or priority = %s)
+      and (%s is null or assignee = %s)
+      and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
+      and (
+        not %s
+        or onderwerp_logging is null
+        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+      );
+    """
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            q,
+            (
+                date_from,
+                date_to,
+                request_type,
+                request_type,
+                onderwerp,
+                onderwerp,
+                priority,
+                priority,
+                assignee,
+                assignee,
+                organization,
+                organization,
+                servicedesk_only,
+            ),
+        )
+        row = cur.fetchone() or (None, None, None, None, 0, 0)
+
+    return {
+        "time_to_resolution_hours": float(row[0]) if row[0] is not None else None,
+        "time_to_resolution_p50_hours": float(row[1]) if row[1] is not None else None,
+        "time_to_first_response_hours": float(row[2]) if row[2] is not None else None,
+        "time_to_first_response_p50_hours": float(row[3]) if row[3] is not None else None,
+        "resolution_n": int(row[4] or 0),
+        "first_response_n": int(row[5] or 0),
+    }
+
+
+@app.get("/metrics/time_to_resolution_weekly_by_type")
+def time_to_resolution_weekly_by_type(
+    date_from: str = Query(...),
+    date_to: str = Query(...),
+    onderwerp: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee: Optional[str] = None,
+    organization: Optional[str] = None,
+    servicedesk_only: bool = False,
+):
+    ensure_schema()
+    q = """
+    select
+      date_trunc('week', created_at) as week,
+      request_type,
+      avg(extract(epoch from (resolved_at - created_at))/3600.0) as avg_hours,
+      percentile_cont(0.50) within group (
+        order by extract(epoch from (resolved_at - created_at))/3600.0
+      ) as p50_hours,
+      count(*) as n
+    from issues
+    where resolved_at is not null
+      and resolved_at >= created_at
+      and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
+      and request_type is not null
+      and (%s is null or onderwerp_logging = %s)
+      and (%s is null or priority = %s)
+      and (%s is null or assignee = %s)
+      and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
+      and (
+        not %s
+        or onderwerp_logging is null
+        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+      )
+    group by 1,2
+    order by 1,2;
+    """
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            q,
+            (
+                date_from,
+                date_to,
+                onderwerp,
+                onderwerp,
+                priority,
+                priority,
+                assignee,
+                assignee,
+                organization,
+                organization,
+                servicedesk_only,
+            ),
+        )
+        rows = cur.fetchall()
+
+    return [
+        {
+            "week": r[0].isoformat(),
+            "request_type": r[1],
+            "avg_hours": float(r[2]) if r[2] is not None else None,
+            "p50_hours": float(r[3]) if r[3] is not None else None,
+            "median_hours": float(r[3]) if r[3] is not None else None,
+            "n": int(r[4] or 0),
+        }
+        for r in rows
+    ]
+
+
+@app.get("/metrics/time_to_first_response_weekly")
+def time_to_first_response_weekly(
+    date_from: str = Query(...),
+    date_to: str = Query(...),
+    onderwerp: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee: Optional[str] = None,
+    organization: Optional[str] = None,
+    servicedesk_only: bool = False,
+):
+    ensure_schema()
+    q = """
+    select
+      date_trunc('week', created_at) as week,
+      avg(extract(epoch from (updated_at - created_at))/3600.0) as avg_hours,
+      percentile_cont(0.50) within group (
+        order by extract(epoch from (updated_at - created_at))/3600.0
+      ) as p50_hours,
+      count(*) as n
+    from issues
+    where updated_at is not null
+      and updated_at >= created_at
+      and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
+      and (%s is null or onderwerp_logging = %s)
+      and (%s is null or priority = %s)
+      and (%s is null or assignee = %s)
+      and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
+      and (
+        not %s
+        or onderwerp_logging is null
+        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+      )
+    group by 1
+    order by 1;
+    """
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            q,
+            (
+                date_from,
+                date_to,
+                onderwerp,
+                onderwerp,
+                priority,
+                priority,
+                assignee,
+                assignee,
+                organization,
+                organization,
+                servicedesk_only,
+            ),
+        )
+        rows = cur.fetchall()
+
+    return [
+        {
+            "week": r[0].isoformat(),
+            "avg_hours": float(r[1]) if r[1] is not None else None,
+            "p50_hours": float(r[2]) if r[2] is not None else None,
+            "median_hours": float(r[2]) if r[2] is not None else None,
+            "n": int(r[3] or 0),
+        }
+        for r in rows
+    ]
+
+
 @app.get("/metrics/volume_by_priority")
 def volume_by_priority(
     date_from: str = Query(...),
@@ -400,8 +796,10 @@ def volume_by_priority(
     onderwerp: Optional[str] = None,
     priority: Optional[str] = None,
     assignee: Optional[str] = None,
+    organization: Optional[str] = None,
     servicedesk_only: bool = False,
 ):
+    ensure_schema()
     q = """
     select
       priority,
@@ -413,6 +811,7 @@ def volume_by_priority(
       and (%s is null or onderwerp_logging = %s)
       and (%s is null or priority = %s)
       and (%s is null or assignee = %s)
+      and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
       and (
         not %s
         or onderwerp_logging is null
@@ -435,6 +834,8 @@ def volume_by_priority(
                 priority,
                 assignee,
                 assignee,
+                organization,
+                organization,
                 servicedesk_only,
             ),
         )
@@ -450,8 +851,10 @@ def volume_by_assignee(
     onderwerp: Optional[str] = None,
     priority: Optional[str] = None,
     assignee: Optional[str] = None,
+    organization: Optional[str] = None,
     servicedesk_only: bool = False,
 ):
+    ensure_schema()
     q = """
     select
       assignee,
@@ -463,6 +866,7 @@ def volume_by_assignee(
       and (%s is null or onderwerp_logging = %s)
       and (%s is null or priority = %s)
       and (%s is null or assignee = %s)
+      and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
       and (
         not %s
         or onderwerp_logging is null
@@ -485,6 +889,8 @@ def volume_by_assignee(
                 priority,
                 assignee,
                 assignee,
+                organization,
+                organization,
                 servicedesk_only,
             ),
         )
@@ -500,8 +906,10 @@ def volume_weekly_by_onderwerp(
     onderwerp: Optional[str] = None,
     priority: Optional[str] = None,
     assignee: Optional[str] = None,
+    organization: Optional[str] = None,
     servicedesk_only: bool = False,
 ):
+    ensure_schema()
     q = """
     select
       date_trunc('week', created_at) as week,
@@ -513,6 +921,7 @@ def volume_weekly_by_onderwerp(
       and (%s is null or onderwerp_logging = %s)
       and (%s is null or priority = %s)
       and (%s is null or assignee = %s)
+      and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
       and (
         not %s
         or onderwerp_logging is null
@@ -535,11 +944,69 @@ def volume_weekly_by_onderwerp(
                 priority,
                 assignee,
                 assignee,
+                organization,
+                organization,
                 servicedesk_only,
             ),
         )
         rows = cur.fetchall()
     return [{"week": r[0].isoformat(), "onderwerp": r[1], "tickets": r[2]} for r in rows]
+
+
+@app.get("/metrics/volume_weekly_by_organization")
+def volume_weekly_by_organization(
+    date_from: str = Query(..., description="ISO date/time, e.g. 2025-01-01"),
+    date_to: str = Query(..., description="ISO date/time, e.g. 2026-01-01"),
+    request_type: Optional[str] = None,
+    onderwerp: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee: Optional[str] = None,
+    organization: Optional[str] = None,
+    servicedesk_only: bool = False,
+):
+    ensure_schema()
+    q = """
+    select
+      date_trunc('week', i.created_at) as week,
+      org.org_name as organization,
+      count(*) as tickets
+    from issues i
+    cross join lateral unnest(i.organizations) as org(org_name)
+    where i.created_at >= %s::timestamptz and i.created_at < (%s::timestamptz + interval '1 day')
+      and (%s is null or i.request_type = %s)
+      and (%s is null or i.onderwerp_logging = %s)
+      and (%s is null or i.priority = %s)
+      and (%s is null or i.assignee = %s)
+      and (%s is null or org.org_name = %s)
+      and (
+        not %s
+        or i.onderwerp_logging is null
+        or i.onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+      )
+    group by 1,2
+    order by 1,2;
+    """
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            q,
+            (
+                date_from,
+                date_to,
+                request_type,
+                request_type,
+                onderwerp,
+                onderwerp,
+                priority,
+                priority,
+                assignee,
+                assignee,
+                organization,
+                organization,
+                servicedesk_only,
+            ),
+        )
+        rows = cur.fetchall()
+    return [{"week": r[0].isoformat(), "organization": r[1], "tickets": r[2]} for r in rows]
 
 
 @app.get("/issues")
@@ -550,10 +1017,12 @@ def issues(
     onderwerp: Optional[str] = None,
     priority: Optional[str] = None,
     assignee: Optional[str] = None,
+    organization: Optional[str] = None,
     servicedesk_only: bool = False,
     limit: int = 100,
     offset: int = 0,
 ):
+    ensure_schema()
     q = """
     select issue_key, request_type, onderwerp_logging, created_at, resolved_at, priority, assignee, current_status
     from issues
@@ -562,6 +1031,7 @@ def issues(
       and (%s is null or onderwerp_logging = %s)
       and (%s is null or priority = %s)
       and (%s is null or assignee = %s)
+      and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
       and (
         not %s
         or onderwerp_logging is null
@@ -584,6 +1054,8 @@ def issues(
                 priority,
                 assignee,
                 assignee,
+                organization,
+                organization,
                 servicedesk_only,
                 limit,
                 offset,
