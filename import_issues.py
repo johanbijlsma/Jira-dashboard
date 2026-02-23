@@ -1,6 +1,7 @@
 import os
 import time
 import json
+from datetime import datetime, timezone
 import psycopg2
 import requests
 
@@ -14,6 +15,7 @@ JQL = os.environ.get("JQL", f'project = {PROJECT_KEY} AND "cf[10010]" is not EMP
 REQUEST_TYPE_FIELD = os.environ.get("REQUEST_TYPE_FIELD", "customfield_10010")
 ONDERWERP_FIELD = os.environ.get("ONDERWERP_FIELD", "customfield_10143")
 ORGANIZATION_FIELD = os.environ.get("ORGANIZATION_FIELD", "customfield_10002")
+FIRST_RESPONSE_SLA_FIELD = os.environ.get("FIRST_RESPONSE_SLA_FIELD", "customfield_10131")
 
 DB_HOST = os.environ.get("DB_HOST", "localhost")
 DB_PORT = int(os.environ.get("DB_PORT", "5432"))
@@ -47,6 +49,7 @@ def api_search(next_page_token=None):
             REQUEST_TYPE_FIELD,
             ONDERWERP_FIELD,
             ORGANIZATION_FIELD,
+            FIRST_RESPONSE_SLA_FIELD,
         ],
     }
     if next_page_token:
@@ -96,6 +99,31 @@ def norm_organizations(v):
             out.append(name)
     return list(dict.fromkeys(out))
 
+
+def parse_jira_datetime(value):
+    if not value:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def norm_first_response_due_at(v):
+    if not isinstance(v, dict):
+        return None
+    ongoing = v.get("ongoingCycle") or {}
+    breach_time = ongoing.get("breachTime") or {}
+    iso = breach_time.get("iso8601")
+    if not iso:
+        return None
+    dt = parse_jira_datetime(iso)
+    if dt is None:
+        return None
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
 def main():
     inserted = 0
     page = 0
@@ -114,7 +142,8 @@ def main():
               updated_at timestamptz,
               priority text,
               assignee text,
-              current_status text
+              current_status text,
+              first_response_due_at timestamptz
             );
             """
         )
@@ -127,6 +156,7 @@ def main():
         cur.execute("alter table issues add column if not exists priority text;")
         cur.execute("alter table issues add column if not exists assignee text;")
         cur.execute("alter table issues add column if not exists current_status text;")
+        cur.execute("alter table issues add column if not exists first_response_due_at timestamptz;")
         c.commit()
         while True:
             page += 1
@@ -152,11 +182,12 @@ def main():
                 priority = (f.get("priority") or {}).get("name")
                 assignee = norm_assignee(f.get("assignee"))
                 organizations = norm_organizations(f.get(ORGANIZATION_FIELD))
+                first_response_due_at = norm_first_response_due_at(f.get(FIRST_RESPONSE_SLA_FIELD))
 
                 cur.execute(
                     """
-                    insert into issues(issue_key, request_type, onderwerp_logging, organizations, created_at, resolved_at, updated_at, priority, assignee, current_status)
-                    values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    insert into issues(issue_key, request_type, onderwerp_logging, organizations, created_at, resolved_at, updated_at, priority, assignee, current_status, first_response_due_at)
+                    values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     on conflict (issue_key) do update set
                       request_type=excluded.request_type,
                       onderwerp_logging=excluded.onderwerp_logging,
@@ -166,7 +197,8 @@ def main():
                       updated_at=excluded.updated_at,
                       priority=excluded.priority,
                       assignee=excluded.assignee,
-                      current_status=excluded.current_status
+                      current_status=excluded.current_status,
+                      first_response_due_at=excluded.first_response_due_at
                     """,
                     (
                         issue_key,
@@ -179,6 +211,7 @@ def main():
                         priority,
                         assignee,
                         status,
+                        first_response_due_at,
                     ),
                 )
                 inserted += 1

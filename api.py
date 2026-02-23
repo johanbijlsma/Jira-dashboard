@@ -1,6 +1,7 @@
 import os
 import time
 import threading
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -21,6 +22,15 @@ JIRA_PROJECT = os.environ.get("JIRA_PROJECT", "SD")
 REQUEST_TYPE_FIELD = os.environ.get("REQUEST_TYPE_FIELD", "customfield_10010")
 ONDERWERP_FIELD = os.environ.get("ONDERWERP_FIELD", "customfield_10143")
 ORGANIZATION_FIELD = os.environ.get("ORGANIZATION_FIELD", "customfield_10002")
+FIRST_RESPONSE_SLA_FIELD = os.environ.get("FIRST_RESPONSE_SLA_FIELD", "customfield_10131")
+ALERT_P1_PRIORITIES = [
+    p.strip().lower()
+    for p in os.environ.get(
+        "ALERT_P1_PRIORITIES",
+        "priority 1,p1,highest,critical,kritiek,hoogst,urgent,urgentie 1,level 1",
+    ).split(",")
+    if p.strip()
+]
 CORS_ORIGINS_RAW = os.environ.get(
     "BACKEND_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
 )
@@ -37,6 +47,8 @@ _sync_last_error = None
 _sync_last_run = None
 _sync_last_result = None
 _schema_checked = False
+_issue_existence_cache = {}
+_issue_existence_cache_ttl_seconds = 60
 
 # Prefer POSTGRES_* (from docker/.env). Fall back to DB_* for backward compatibility.
 PG_HOST = os.environ.get("POSTGRES_HOST") or os.environ.get("DB_HOST") or "localhost"
@@ -76,7 +88,8 @@ def ensure_schema():
               updated_at timestamptz,
               priority text,
               assignee text,
-              current_status text
+              current_status text,
+              first_response_due_at timestamptz
             );
             """
         )
@@ -98,6 +111,7 @@ def ensure_schema():
         cur.execute("alter table issues add column if not exists priority text;")
         cur.execute("alter table issues add column if not exists assignee text;")
         cur.execute("alter table issues add column if not exists current_status text;")
+        cur.execute("alter table issues add column if not exists first_response_due_at timestamptz;")
         c.commit()
     _schema_checked = True
 
@@ -132,6 +146,7 @@ def jira_search(jql: str, max_results: int = 100, next_page_token: Optional[str]
             REQUEST_TYPE_FIELD,
             ONDERWERP_FIELD,
             ORGANIZATION_FIELD,
+            FIRST_RESPONSE_SLA_FIELD,
         ],
     }
     if next_page_token:
@@ -208,6 +223,86 @@ def norm_organizations(v):
     return list(dict.fromkeys(out))
 
 
+def norm_first_response_due_at(v):
+    """
+    Parse Jira SLA field and return ISO datetime when breach is expected.
+    For active SLAs Jira commonly provides ongoingCycle.breachTime.iso8601.
+    """
+    if not isinstance(v, dict):
+        return None
+    ongoing = v.get("ongoingCycle") or {}
+    breach_time = ongoing.get("breachTime") or {}
+    iso = breach_time.get("iso8601")
+    if not iso:
+        return None
+    dt = parse_jira_datetime(iso)
+    if dt is None:
+        return None
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def is_priority1_priority(value: Optional[str]) -> bool:
+    if not value:
+        return False
+    normalized = re.sub(r"\s+", " ", str(value).strip().lower())
+    if normalized in ALERT_P1_PRIORITIES:
+        return True
+    if re.search(r"(^|[^a-z0-9])p1([^a-z0-9]|$)", normalized):
+        return True
+    if "priority 1" in normalized or "prioriteit 1" in normalized:
+        return True
+    if re.search(r"(^|[^a-z0-9])level\\s*1([^a-z0-9]|$)", normalized):
+        return True
+    return False
+
+
+def _jira_existing_issue_keys(keys):
+    """
+    Validate issue existence in Jira for alert candidates.
+    Uses a short in-memory cache because frontend polls every ~20s.
+    """
+    unique_keys = [k for k in dict.fromkeys(keys) if k]
+    if not unique_keys:
+        return set()
+    if not (JIRA_EMAIL and JIRA_TOKEN):
+        return set(unique_keys)
+
+    now_ts = time.time()
+    existing = set()
+    to_query = []
+
+    for key in unique_keys:
+        cached = _issue_existence_cache.get(key)
+        if cached and now_ts - cached["checked_at"] <= _issue_existence_cache_ttl_seconds:
+            if cached["exists"]:
+                existing.add(key)
+            continue
+        to_query.append(key)
+
+    if to_query:
+        found = set()
+        chunk_size = 100
+        for i in range(0, len(to_query), chunk_size):
+            chunk = to_query[i : i + chunk_size]
+            quoted = ",".join([f'"{k}"' for k in chunk])
+            jql = f"key in ({quoted})"
+            try:
+                data = jira_search(jql, max_results=min(chunk_size, len(chunk)))
+                found.update([x.get("key") for x in data.get("issues", []) if x.get("key")])
+            except Exception:
+                # Keep alerts available if Jira is temporarily unavailable.
+                found.update(chunk)
+                break
+
+        for key in to_query:
+            exists = key in found
+            _issue_existence_cache[key] = {"exists": exists, "checked_at": now_ts}
+            if exists:
+                existing.add(key)
+
+    return existing
+
+
 
 def upsert_issues(issues):
     ensure_schema()
@@ -227,11 +322,12 @@ def upsert_issues(issues):
             priority = (f.get("priority") or {}).get("name")
             assignee = norm_assignee(f.get("assignee"))
             organizations = norm_organizations(f.get(ORGANIZATION_FIELD))
+            first_response_due_at = norm_first_response_due_at(f.get(FIRST_RESPONSE_SLA_FIELD))
 
             cur.execute(
                 """
-                insert into issues(issue_key, request_type, onderwerp_logging, organizations, created_at, resolved_at, updated_at, priority, assignee, current_status)
-                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                insert into issues(issue_key, request_type, onderwerp_logging, organizations, created_at, resolved_at, updated_at, priority, assignee, current_status, first_response_due_at)
+                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 on conflict (issue_key) do update set
                   request_type=excluded.request_type,
                   onderwerp_logging=excluded.onderwerp_logging,
@@ -241,7 +337,8 @@ def upsert_issues(issues):
                   updated_at=excluded.updated_at,
                   priority=excluded.priority,
                   assignee=excluded.assignee,
-                  current_status=excluded.current_status
+                  current_status=excluded.current_status,
+                  first_response_due_at=excluded.first_response_due_at
                 """,
                 (
                     issue_key,
@@ -254,6 +351,7 @@ def upsert_issues(issues):
                     priority,
                     assignee,
                     status,
+                    first_response_due_at,
                 ),
             )
         c.commit()
@@ -409,7 +507,7 @@ def volume_weekly(
       and (
         not %s
         or onderwerp_logging is null
-        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
       )
     group by 1,2
     order by 1,2;
@@ -466,7 +564,7 @@ def inflow_vs_closed_weekly(
         and (
           not %s
           or onderwerp_logging is null
-          or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+          or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
         )
       group by 1
     ),
@@ -485,7 +583,7 @@ def inflow_vs_closed_weekly(
         and (
           not %s
           or onderwerp_logging is null
-          or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+          or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
         )
       group by 1
     )
@@ -571,7 +669,7 @@ def leadtime_p90_by_type(
       and (
         not %s
         or onderwerp_logging is null
-        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
       )
     group by 1
     order by p90_hours desc nulls last, 1;
@@ -654,7 +752,7 @@ def time_summary(
       and (
         not %s
         or onderwerp_logging is null
-        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
       );
     """
     with conn() as c, c.cursor() as cur:
@@ -720,7 +818,7 @@ def time_to_resolution_weekly_by_type(
       and (
         not %s
         or onderwerp_logging is null
-        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
       )
     group by 1,2
     order by 1,2;
@@ -787,7 +885,7 @@ def time_to_first_response_weekly(
       and (
         not %s
         or onderwerp_logging is null
-        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
       )
     group by 1
     order by 1;
@@ -850,7 +948,7 @@ def volume_by_priority(
       and (
         not %s
         or onderwerp_logging is null
-        or onderwerp_logging not in ('Koppelingen', 'Datadump', 'Rest-endpoints', 'Migratie', 'SSO-koppeling')
+        or onderwerp_logging not in ('Koppelingen', 'Datadump', 'Rest-endpoints', 'Migratie', 'SSO-koppeling', 'UWV-koppeling')
       )
     group by 1
     order by 2 desc, 1;
@@ -905,7 +1003,7 @@ def volume_by_assignee(
       and (
         not %s
         or onderwerp_logging is null
-        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
       )
     group by 1
     order by 2 desc, 1;
@@ -960,7 +1058,7 @@ def volume_weekly_by_onderwerp(
       and (
         not %s
         or onderwerp_logging is null
-        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
       )
     group by 1,2
     order by 1,2;
@@ -1016,7 +1114,7 @@ def volume_weekly_by_organization(
       and (
         not %s
         or i.onderwerp_logging is null
-        or i.onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+        or i.onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
       )
     group by 1,2
     order by 1,2;
@@ -1070,7 +1168,7 @@ def issues(
       and (
         not %s
         or onderwerp_logging is null
-        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling')
+        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
       )
     order by created_at desc
     limit %s offset %s;
@@ -1111,6 +1209,114 @@ def issues(
         }
         for r in rows
     ]
+
+
+@app.get("/alerts/live")
+def alerts_live(servicedesk_only: bool = True):
+    """
+    Live alert feed for dashboard badges/cards.
+    - priority1: open P1 tickets
+    - first_response_due_soon: status 'Nieuwe melding' and SLA breach within 5 minutes
+    - first_response_overdue: status 'Nieuwe melding' and SLA already breached
+    """
+    ensure_schema()
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            select issue_key, created_at, priority, current_status
+            from issues
+            where created_at >= now() - interval '24 hours'
+              and (
+                not %s
+                or onderwerp_logging is null
+                or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
+              )
+            order by created_at desc
+            limit 500;
+            """,
+            (servicedesk_only,),
+        )
+        p1_rows = [r for r in cur.fetchall() if is_priority1_priority(r[2])][:25]
+
+        cur.execute(
+            """
+            select
+              issue_key,
+              first_response_due_at,
+              greatest(0, ceil(extract(epoch from (first_response_due_at - now())) / 60.0))::int as minutes_left
+            from issues
+            where resolved_at is null
+              and lower(coalesce(current_status, '')) = 'nieuwe melding'
+              and first_response_due_at is not null
+              and first_response_due_at >= now()
+              and first_response_due_at <= now() + interval '5 minutes'
+              and (
+                not %s
+                or onderwerp_logging is null
+                or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
+              )
+            order by first_response_due_at asc
+            limit 25;
+            """,
+            (servicedesk_only,),
+        )
+        sla_rows = cur.fetchall()
+
+        cur.execute(
+            """
+            select
+              issue_key,
+              first_response_due_at,
+              ceil(extract(epoch from (now() - first_response_due_at)) / 60.0)::int as minutes_overdue
+            from issues
+            where lower(coalesce(current_status, '')) = 'nieuwe melding'
+              and first_response_due_at is not null
+              and first_response_due_at < now()
+              and (
+                not %s
+                or onderwerp_logging is null
+                or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
+              )
+            order by first_response_due_at asc
+            limit 25;
+            """,
+            (servicedesk_only,),
+        )
+        overdue_rows = cur.fetchall()
+
+    all_keys = [r[0] for r in p1_rows] + [r[0] for r in sla_rows] + [r[0] for r in overdue_rows]
+    existing_keys = _jira_existing_issue_keys(all_keys)
+
+    return {
+        "priority1": [
+            {
+                "issue_key": r[0],
+                "created_at": r[1].isoformat() if r[1] else None,
+                "priority": r[2],
+                "status": r[3],
+            }
+            for r in p1_rows
+            if r[0] in existing_keys
+        ],
+        "first_response_due_soon": [
+            {
+                "issue_key": r[0],
+                "due_at": r[1].isoformat() if r[1] else None,
+                "minutes_left": int(r[2] or 0),
+            }
+            for r in sla_rows
+            if r[0] in existing_keys
+        ],
+        "first_response_overdue": [
+            {
+                "issue_key": r[0],
+                "due_at": r[1].isoformat() if r[1] else None,
+                "minutes_overdue": int(r[2] or 0),
+            }
+            for r in overdue_rows
+            if r[0] in existing_keys
+        ],
+    }
 
 
 @app.get("/sync/status")

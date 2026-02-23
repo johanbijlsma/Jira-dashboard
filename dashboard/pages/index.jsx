@@ -161,6 +161,165 @@ function Toast({ message, kind, onClose }) {
   );
 }
 
+function LiveAlertStack({ alerts }) {
+  const p1Items = Array.isArray(alerts?.priority1) ? alerts.priority1 : [];
+  const slaItems = Array.isArray(alerts?.first_response_due_soon) ? alerts.first_response_due_soon : [];
+  const overdueItems = Array.isArray(alerts?.first_response_overdue) ? alerts.first_response_overdue : [];
+  if (!p1Items.length && !slaItems.length && !overdueItems.length) return null;
+
+  const shellStyle = {
+    position: "fixed",
+    top: 16,
+    right: 16,
+    zIndex: 1004,
+    width: "min(420px, calc(100vw - 32px))",
+    display: "grid",
+    gap: 10,
+  };
+
+  const cardStyle = {
+    borderRadius: 12,
+    border: "1px solid",
+    boxShadow: "0 10px 22px var(--shadow-medium)",
+    overflow: "hidden",
+    backdropFilter: "blur(2px)",
+    animation: "alertIn 220ms ease",
+  };
+
+  const titleRowStyle = {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    padding: "10px 12px",
+    borderBottom: "1px solid rgba(255,255,255,0.18)",
+    fontWeight: 800,
+    letterSpacing: 0.2,
+  };
+
+  const listStyle = {
+    margin: 0,
+    padding: "8px 12px 12px",
+    listStyle: "none",
+    display: "grid",
+    gap: 6,
+  };
+
+  const itemStyle = {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 12,
+    alignItems: "baseline",
+    fontSize: 13,
+    lineHeight: 1.3,
+  };
+
+  return (
+    <div style={shellStyle} aria-live="assertive" aria-atomic="false">
+      {p1Items.length ? (
+        <section
+          style={{
+            ...cardStyle,
+            borderColor: "rgba(127, 29, 29, 0.45)",
+            background: "linear-gradient(135deg, #7f1d1d, #991b1b)",
+            color: "#fee2e2",
+          }}
+        >
+          <div style={titleRowStyle}>
+            <span style={{ fontSize: 11, border: "1px solid rgba(254,226,226,0.45)", borderRadius: 999, padding: "2px 8px" }}>
+              P1
+            </span>
+            <span>Priority 1 binnengekomen</span>
+            <strong style={{ marginLeft: "auto", fontSize: 12 }}>{p1Items.length}</strong>
+          </div>
+          <ul style={listStyle}>
+            {p1Items.slice(0, 5).map((item) => (
+              <li key={`p1-${item.issue_key}`} style={itemStyle}>
+                <a
+                  href={`${JIRA_BASE}/browse/${item.issue_key}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: "#fff", fontWeight: 700 }}
+                >
+                  {item.issue_key}
+                </a>
+                <span>{item.status || "Open"}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {slaItems.length ? (
+        <section
+          style={{
+            ...cardStyle,
+            borderColor: "rgba(120, 53, 15, 0.45)",
+            background: "linear-gradient(135deg, #78350f, #b45309)",
+            color: "#ffedd5",
+          }}
+        >
+          <div style={titleRowStyle}>
+            <span style={{ fontSize: 11, border: "1px solid rgba(255,237,213,0.45)", borderRadius: 999, padding: "2px 8px" }}>
+              SLA
+            </span>
+            <span>First response bijna verlopen</span>
+            <strong style={{ marginLeft: "auto", fontSize: 12 }}>{slaItems.length}</strong>
+          </div>
+          <ul style={listStyle}>
+            {slaItems.slice(0, 5).map((item) => (
+              <li key={`sla-${item.issue_key}`} style={itemStyle}>
+                <a
+                  href={`${JIRA_BASE}/browse/${item.issue_key}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: "#fff", fontWeight: 700 }}
+                >
+                  {item.issue_key}
+                </a>
+                <span>{Math.max(0, Number(item.minutes_left) || 0)} min</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {overdueItems.length ? (
+        <section
+          style={{
+            ...cardStyle,
+            borderColor: "rgba(120, 16, 16, 0.55)",
+            background: "linear-gradient(135deg, #581c87, #7f1d1d)",
+            color: "#f5d0fe",
+          }}
+        >
+          <div style={titleRowStyle}>
+            <span style={{ fontSize: 11, border: "1px solid rgba(245,208,254,0.45)", borderRadius: 999, padding: "2px 8px" }}>
+              SLA X
+            </span>
+            <span>First response verlopen</span>
+            <strong style={{ marginLeft: "auto", fontSize: 12 }}>{overdueItems.length}</strong>
+          </div>
+          <ul style={listStyle}>
+            {overdueItems.slice(0, 5).map((item) => (
+              <li key={`sla-overdue-${item.issue_key}`} style={itemStyle}>
+                <a
+                  href={`${JIRA_BASE}/browse/${item.issue_key}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: "#fff", fontWeight: 700 }}
+                >
+                  {item.issue_key}
+                </a>
+                <span>{Math.max(0, Number(item.minutes_overdue) || 0)} min te laat</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
 function hasDataPoints(chartData) {
   if (!chartData || !Array.isArray(chartData.datasets)) return false;
   return chartData.datasets.some((ds) =>
@@ -347,6 +506,11 @@ export default function Home() {
   const [syncLoading, setSyncLoading] = useState(false);
   const [syncMessage, setSyncMessage] = useState("");
   const [syncMessageKind, setSyncMessageKind] = useState("success"); // "success" | "error"
+  const [liveAlerts, setLiveAlerts] = useState({
+    priority1: [],
+    first_response_due_soon: [],
+    first_response_overdue: [],
+  });
 
   const [selectedWeek, setSelectedWeek] = useState("");
   const [selectedType, setSelectedType] = useState("");
@@ -371,6 +535,7 @@ export default function Home() {
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
   const [topOnderwerpSort, setTopOnderwerpSort] = useState("wow");
   const autoSyncAttemptRef = useRef(0);
+  const seenLiveAlertKeysRef = useRef(new Set());
 
   const defaultVisibleSections = useMemo(
     () => ({
@@ -495,6 +660,47 @@ export default function Home() {
     return s;
   }, []);
 
+  const refreshLiveAlerts = useCallback(async () => {
+    const params = new URLSearchParams();
+    if (servicedeskOnly) params.set("servicedesk_only", "true");
+    const r = await fetch(`${API}/alerts/live?${params.toString()}`);
+    const data = await r.json();
+    const normalized = {
+      priority1: Array.isArray(data?.priority1) ? data.priority1 : [],
+      first_response_due_soon: Array.isArray(data?.first_response_due_soon) ? data.first_response_due_soon : [],
+      first_response_overdue: Array.isArray(data?.first_response_overdue) ? data.first_response_overdue : [],
+    };
+    setLiveAlerts(normalized);
+
+    const seen = seenLiveAlertKeysRef.current;
+    const newP1 = normalized.priority1.filter((item) => {
+      const key = `p1:${item.issue_key}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const newSla = normalized.first_response_due_soon.filter((item) => {
+      const key = `sla:${item.issue_key}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const newOverdue = normalized.first_response_overdue.filter((item) => {
+      const key = `sla-overdue:${item.issue_key}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    if (newP1.length) {
+      flashToast(`ALERT P1: ${newP1[0].issue_key}${newP1.length > 1 ? ` +${newP1.length - 1}` : ""}`, "error", 9000);
+    } else if (newOverdue.length) {
+      flashToast(`ALERT SLA VERLOPEN: ${newOverdue[0].issue_key}${newOverdue.length > 1 ? ` +${newOverdue.length - 1}` : ""}`, "error", 9000);
+    } else if (newSla.length) {
+      flashToast(`ALERT SLA <5m: ${newSla[0].issue_key}${newSla.length > 1 ? ` +${newSla.length - 1}` : ""}`, "error", 9000);
+    }
+  }, [flashToast, servicedeskOnly]);
+
   const refreshDashboard = useCallback(async () => {
     const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
     if (requestType) params.set("request_type", requestType);
@@ -603,6 +809,10 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    refreshLiveAlerts().catch(() => {});
+  }, [refreshLiveAlerts]);
+
+  useEffect(() => {
     const t = setInterval(() => {
       fetch(`${API}/sync/status`)
         .then((r) => r.json())
@@ -611,6 +821,13 @@ export default function Home() {
     }, 15000);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      refreshLiveAlerts().catch(() => {});
+    }, 20000);
+    return () => clearInterval(t);
+  }, [refreshLiveAlerts]);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -640,7 +857,7 @@ export default function Home() {
       if (hotkeysOpen) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const key = e.key?.toLowerCase();
-      if (!["m", "j", "r", "s"].includes(key)) return;
+      if (!["m", "j", "r", "s", "f"].includes(key)) return;
       e.preventDefault();
       const active = document.activeElement;
       if (active && typeof active.blur === "function") active.blur();
@@ -659,6 +876,8 @@ export default function Home() {
         } else {
           flashToast("Sync is al bezig", "error");
         }
+      } else if (key === "f") {
+        setFiltersOpen(true);
       }
     }
     window.addEventListener("keydown", onKeyDown);
@@ -2137,6 +2356,7 @@ export default function Home() {
   return (
     <div style={pageStyle}>
       <Toast message={syncMessage} kind={syncMessageKind} onClose={() => setSyncMessage("")} />
+      <LiveAlertStack alerts={liveAlerts} />
       <button
         ref={hotkeysButtonRef}
         type="button"
@@ -2808,6 +3028,10 @@ export default function Home() {
                   <td style={hotkeysTdStyle}>Reset alle filters naar de standaardwaarden.</td>
                 </tr>
                 <tr>
+                  <td style={hotkeysTdStyle}><span style={hotkeysKeyStyle}>F</span></td>
+                  <td style={hotkeysTdStyle}>Open het filterscherm.</td>
+                </tr>
+                <tr>
                   <td style={hotkeysTdStyle}><span style={hotkeysKeyStyle}>S</span></td>
                   <td style={hotkeysTdStyle}>Start een synchronisatie (of toont dat sync al loopt).</td>
                 </tr>
@@ -3097,6 +3321,16 @@ export default function Home() {
           from {
             opacity: 0;
             transform: translateY(12px) scale(0.985);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
+        @keyframes alertIn {
+          from {
+            opacity: 0;
+            transform: translateY(-8px) scale(0.98);
           }
           to {
             opacity: 1;
