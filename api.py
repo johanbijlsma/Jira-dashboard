@@ -1152,14 +1152,22 @@ def issues(
     assignee: Optional[str] = None,
     organization: Optional[str] = None,
     servicedesk_only: bool = False,
+    date_field: str = "created",
     limit: int = 100,
     offset: int = 0,
 ):
     ensure_schema()
-    q = """
+    date_field_norm = (date_field or "created").strip().lower()
+    if date_field_norm not in ("created", "resolved"):
+        date_field_norm = "created"
+
+    date_column = "resolved_at" if date_field_norm == "resolved" else "created_at"
+    date_null_guard = "and resolved_at is not null" if date_field_norm == "resolved" else ""
+    q = f"""
     select issue_key, request_type, onderwerp_logging, created_at, resolved_at, priority, assignee, current_status
     from issues
-    where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
+    where {date_column} >= %s::timestamptz and {date_column} < (%s::timestamptz + interval '1 day')
+      {date_null_guard}
       and (%s is null or request_type = %s)
       and (%s is null or onderwerp_logging = %s)
       and (%s is null or priority = %s)
@@ -1170,7 +1178,7 @@ def issues(
         or onderwerp_logging is null
         or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
       )
-    order by created_at desc
+    order by {date_column} desc
     limit %s offset %s;
     """
     with conn() as c, c.cursor() as cur:
