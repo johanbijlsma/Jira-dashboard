@@ -102,7 +102,31 @@ def main():
     next_token = None
 
     with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            create table if not exists issues (
+              issue_key text primary key,
+              request_type text,
+              onderwerp_logging text,
+              organizations text[],
+              created_at timestamptz,
+              resolved_at timestamptz,
+              updated_at timestamptz,
+              priority text,
+              assignee text,
+              current_status text
+            );
+            """
+        )
+        cur.execute("alter table issues add column if not exists request_type text;")
+        cur.execute("alter table issues add column if not exists onderwerp_logging text;")
         cur.execute("alter table issues add column if not exists organizations text[];")
+        cur.execute("alter table issues add column if not exists created_at timestamptz;")
+        cur.execute("alter table issues add column if not exists resolved_at timestamptz;")
+        cur.execute("alter table issues add column if not exists updated_at timestamptz;")
+        cur.execute("alter table issues add column if not exists priority text;")
+        cur.execute("alter table issues add column if not exists assignee text;")
+        cur.execute("alter table issues add column if not exists current_status text;")
         c.commit()
         while True:
             page += 1

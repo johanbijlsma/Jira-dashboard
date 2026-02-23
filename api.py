@@ -62,7 +62,42 @@ def ensure_schema():
     if _schema_checked:
         return
     with conn() as c, c.cursor() as cur:
+        # Fresh Docker/Postgres installs may start with an empty database.
+        # Bootstrap required tables first, then heal missing columns.
+        cur.execute(
+            """
+            create table if not exists issues (
+              issue_key text primary key,
+              request_type text,
+              onderwerp_logging text,
+              organizations text[],
+              created_at timestamptz,
+              resolved_at timestamptz,
+              updated_at timestamptz,
+              priority text,
+              assignee text,
+              current_status text
+            );
+            """
+        )
+        cur.execute(
+            """
+            create table if not exists sync_state (
+              id integer primary key,
+              last_sync timestamp
+            );
+            """
+        )
+        cur.execute("insert into sync_state(id, last_sync) values (1, null) on conflict (id) do nothing;")
+        cur.execute("alter table issues add column if not exists request_type text;")
+        cur.execute("alter table issues add column if not exists onderwerp_logging text;")
         cur.execute("alter table issues add column if not exists organizations text[];")
+        cur.execute("alter table issues add column if not exists created_at timestamptz;")
+        cur.execute("alter table issues add column if not exists resolved_at timestamptz;")
+        cur.execute("alter table issues add column if not exists updated_at timestamptz;")
+        cur.execute("alter table issues add column if not exists priority text;")
+        cur.execute("alter table issues add column if not exists assignee text;")
+        cur.execute("alter table issues add column if not exists current_status text;")
         c.commit()
     _schema_checked = True
 
