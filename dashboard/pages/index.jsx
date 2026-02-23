@@ -27,6 +27,7 @@ ChartJS.register(
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
 const JIRA_BASE = "https://planningsagenda.atlassian.net";
 const DEFAULT_SERVICEDESK_ONLY = true;
+const DASHBOARD_CONFIG_STORAGE_KEY = "jsm_dashboard_layout_v2";
 const TYPE_COLORS = {
   rfc: "#2e7d32",
   incident: "#c62828",
@@ -36,6 +37,34 @@ const TYPE_COLORS = {
   vragen: "#e65100",
   totaal: "#374151",
 };
+const CARD_TITLES = {
+  volume: "Aantal tickets per week",
+  onderwerp: "Onderwerp logging",
+  priority: "Tickets per priority",
+  assignee: "Tickets per assignee",
+  p90: "Doorlooptijd p50/p75/p90",
+  inflowVsClosed: "Binnengekomen vs afgesloten",
+  incidentResolution: "Time to Resolution",
+  firstResponseAll: "Time to First Response (alle tickets)",
+  organizationWeekly: "Tickets per partner per week",
+};
+const KPI_KEYS = ["totalTickets", "latestTickets", "avgPerWeek", "topType", "topSubject", "topPartner"];
+const NON_KPI_CARD_KEYS = ["topOnderwerpen", ...Object.keys(CARD_TITLES)];
+const MAX_CARDS_PER_ROW = 5;
+const MAX_KPI_TILES = 6;
+
+function createDefaultDashboardLayout() {
+  return {
+    kpiRow: [...KPI_KEYS],
+    hiddenKpis: [],
+    cardRows: [
+      ["topOnderwerpen", "volume", "priority", "organizationWeekly"],
+      ["assignee", "onderwerp", "p90", "inflowVsClosed", "incidentResolution", "firstResponseAll"],
+    ],
+    hiddenCards: [],
+    expandedByRow: [null, null],
+  };
+}
 
 function isoDate(d) {
   // yyyy-mm-dd
@@ -145,6 +174,165 @@ function Toast({ message, kind, onClose }) {
       >
         ×
       </button>
+    </div>
+  );
+}
+
+function LiveAlertStack({ alerts }) {
+  const p1Items = Array.isArray(alerts?.priority1) ? alerts.priority1 : [];
+  const slaItems = Array.isArray(alerts?.first_response_due_soon) ? alerts.first_response_due_soon : [];
+  const overdueItems = Array.isArray(alerts?.first_response_overdue) ? alerts.first_response_overdue : [];
+  if (!p1Items.length && !slaItems.length && !overdueItems.length) return null;
+
+  const shellStyle = {
+    position: "fixed",
+    top: 16,
+    right: 16,
+    zIndex: 1004,
+    width: "min(420px, calc(100vw - 32px))",
+    display: "grid",
+    gap: 10,
+  };
+
+  const cardStyle = {
+    borderRadius: 12,
+    border: "1px solid",
+    boxShadow: "0 10px 22px var(--shadow-medium)",
+    overflow: "hidden",
+    backdropFilter: "blur(2px)",
+    animation: "alertIn 220ms ease",
+  };
+
+  const titleRowStyle = {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    padding: "10px 12px",
+    borderBottom: "1px solid rgba(255,255,255,0.18)",
+    fontWeight: 800,
+    letterSpacing: 0.2,
+  };
+
+  const listStyle = {
+    margin: 0,
+    padding: "8px 12px 12px",
+    listStyle: "none",
+    display: "grid",
+    gap: 6,
+  };
+
+  const itemStyle = {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 12,
+    alignItems: "baseline",
+    fontSize: 13,
+    lineHeight: 1.3,
+  };
+
+  return (
+    <div style={shellStyle} aria-live="assertive" aria-atomic="false">
+      {p1Items.length ? (
+        <section
+          style={{
+            ...cardStyle,
+            borderColor: "rgba(127, 29, 29, 0.45)",
+            background: "linear-gradient(135deg, #7f1d1d, #991b1b)",
+            color: "#fee2e2",
+          }}
+        >
+          <div style={titleRowStyle}>
+            <span style={{ fontSize: 11, border: "1px solid rgba(254,226,226,0.45)", borderRadius: 999, padding: "2px 8px" }}>
+              P1
+            </span>
+            <span>Priority 1 binnengekomen</span>
+            <strong style={{ marginLeft: "auto", fontSize: 12 }}>{p1Items.length}</strong>
+          </div>
+          <ul style={listStyle}>
+            {p1Items.slice(0, 5).map((item) => (
+              <li key={`p1-${item.issue_key}`} style={itemStyle}>
+                <a
+                  href={`${JIRA_BASE}/browse/${item.issue_key}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: "#fff", fontWeight: 700 }}
+                >
+                  {item.issue_key}
+                </a>
+                <span>{item.status || "Open"}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {slaItems.length ? (
+        <section
+          style={{
+            ...cardStyle,
+            borderColor: "rgba(120, 53, 15, 0.45)",
+            background: "linear-gradient(135deg, #78350f, #b45309)",
+            color: "#ffedd5",
+          }}
+        >
+          <div style={titleRowStyle}>
+            <span style={{ fontSize: 11, border: "1px solid rgba(255,237,213,0.45)", borderRadius: 999, padding: "2px 8px" }}>
+              SLA
+            </span>
+            <span>First response bijna verlopen</span>
+            <strong style={{ marginLeft: "auto", fontSize: 12 }}>{slaItems.length}</strong>
+          </div>
+          <ul style={listStyle}>
+            {slaItems.slice(0, 5).map((item) => (
+              <li key={`sla-${item.issue_key}`} style={itemStyle}>
+                <a
+                  href={`${JIRA_BASE}/browse/${item.issue_key}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: "#fff", fontWeight: 700 }}
+                >
+                  {item.issue_key}
+                </a>
+                <span>{Math.max(0, Number(item.minutes_left) || 0)} min</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {overdueItems.length ? (
+        <section
+          style={{
+            ...cardStyle,
+            borderColor: "rgba(120, 16, 16, 0.55)",
+            background: "linear-gradient(135deg, #581c87, #7f1d1d)",
+            color: "#f5d0fe",
+          }}
+        >
+          <div style={titleRowStyle}>
+            <span style={{ fontSize: 11, border: "1px solid rgba(245,208,254,0.45)", borderRadius: 999, padding: "2px 8px" }}>
+              SLA X
+            </span>
+            <span>First response verlopen</span>
+            <strong style={{ marginLeft: "auto", fontSize: 12 }}>{overdueItems.length}</strong>
+          </div>
+          <ul style={listStyle}>
+            {overdueItems.slice(0, 5).map((item) => (
+              <li key={`sla-overdue-${item.issue_key}`} style={itemStyle}>
+                <a
+                  href={`${JIRA_BASE}/browse/${item.issue_key}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: "#fff", fontWeight: 700 }}
+                >
+                  {item.issue_key}
+                </a>
+                <span>{Math.max(0, Number(item.minutes_overdue) || 0)} min te laat</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -317,23 +505,35 @@ export default function Home() {
   const [onderwerp, setOnderwerp] = useState("");
   const [priority, setPriority] = useState("");
   const [assignee, setAssignee] = useState("");
+  const [organization, setOrganization] = useState("");
   const [servicedeskOnly, setServicedeskOnly] = useState(DEFAULT_SERVICEDESK_ONLY);
 
-  const [meta, setMeta] = useState({ request_types: [], onderwerpen: [], priorities: [], assignees: [] });
+  const [meta, setMeta] = useState({ request_types: [], onderwerpen: [], priorities: [], assignees: [], organizations: [] });
   const [volume, setVolume] = useState([]);
   const [onderwerpVolume, setOnderwerpVolume] = useState([]);
   const [priorityVolume, setPriorityVolume] = useState([]);
   const [assigneeVolume, setAssigneeVolume] = useState([]);
+  const [organizationVolume, setOrganizationVolume] = useState([]);
   const [p90, setP90] = useState([]);
+  const [inflowVsClosedWeekly, setInflowVsClosedWeekly] = useState([]);
+  const [incidentResolutionWeekly, setIncidentResolutionWeekly] = useState([]);
+  const [firstResponseWeekly, setFirstResponseWeekly] = useState([]);
 
   const [syncStatus, setSyncStatus] = useState(null);
   const [syncLoading, setSyncLoading] = useState(false);
   const [syncMessage, setSyncMessage] = useState("");
   const [syncMessageKind, setSyncMessageKind] = useState("success"); // "success" | "error"
+  const [liveAlerts, setLiveAlerts] = useState({
+    priority1: [],
+    first_response_due_soon: [],
+    first_response_overdue: [],
+  });
 
   const [selectedWeek, setSelectedWeek] = useState("");
   const [selectedType, setSelectedType] = useState("");
   const [selectedOnderwerp, setSelectedOnderwerp] = useState("");
+  const [selectedDrillDateField, setSelectedDrillDateField] = useState("created");
+  const [selectedDrillBasisLabel, setSelectedDrillBasisLabel] = useState("Binnengekomen");
   const [drillIssues, setDrillIssues] = useState([]);
   const [drillLoading, setDrillLoading] = useState(false);
   const [drillOffset, setDrillOffset] = useState(0);
@@ -346,9 +546,107 @@ export default function Home() {
   const [showAssignee, setShowAssignee] = useState(false);
   const [expandedCard, setExpandedCard] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [dashboardLayout, setDashboardLayout] = useState(createDefaultDashboardLayout);
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
   const [topOnderwerpSort, setTopOnderwerpSort] = useState("wow");
   const autoSyncAttemptRef = useRef(0);
+  const seenLiveAlertKeysRef = useRef(new Set());
+  const dragStateRef = useRef(null);
+  const [layoutSavedSnapshot, setLayoutSavedSnapshot] = useState("");
+  const [isLayoutEditing, setIsLayoutEditing] = useState(false);
+  const [cardDropHint, setCardDropHint] = useState(null);
+  const [kpiDropHint, setKpiDropHint] = useState(null);
+  const [hiddenDropTarget, setHiddenDropTarget] = useState(null);
+
+  const normalizeDashboardLayout = useCallback((input) => {
+    const fallback = createDefaultDashboardLayout();
+    if (!input || typeof input !== "object") return fallback;
+
+    const allKpis = new Set(KPI_KEYS);
+    const allCards = new Set(NON_KPI_CARD_KEYS);
+    const normalizeList = (arr, allowedSet) =>
+      Array.from(new Set((Array.isArray(arr) ? arr : []).filter((key) => allowedSet.has(key))));
+
+    let kpiRow = normalizeList(input.kpiRow, allKpis);
+    let hiddenKpis = normalizeList(input.hiddenKpis, allKpis).filter((key) => !kpiRow.includes(key));
+    KPI_KEYS.forEach((key) => {
+      if (!kpiRow.includes(key) && !hiddenKpis.includes(key)) kpiRow.push(key);
+    });
+    if (kpiRow.length > MAX_KPI_TILES) {
+      const overflow = kpiRow.slice(MAX_KPI_TILES);
+      kpiRow = kpiRow.slice(0, MAX_KPI_TILES);
+      overflow.forEach((key) => {
+        if (!hiddenKpis.includes(key)) hiddenKpis.push(key);
+      });
+    }
+
+    const inputRows = Array.isArray(input.cardRows) ? input.cardRows : [];
+    let cardRows = [
+      normalizeList(inputRows[0], allCards),
+      normalizeList(inputRows[1], allCards),
+    ];
+    cardRows[1] = cardRows[1].filter((key) => !cardRows[0].includes(key));
+    let hiddenCards = normalizeList(input.hiddenCards, allCards).filter(
+      (key) => !cardRows[0].includes(key) && !cardRows[1].includes(key)
+    );
+    NON_KPI_CARD_KEYS.forEach((key) => {
+      if (!cardRows[0].includes(key) && !cardRows[1].includes(key) && !hiddenCards.includes(key)) {
+        cardRows[1].push(key);
+      }
+    });
+
+    // Enforce max cards per row; overflow goes to hidden cards.
+    [0, 1].forEach((idx) => {
+      if (cardRows[idx].length > MAX_CARDS_PER_ROW) {
+        const overflow = cardRows[idx].slice(MAX_CARDS_PER_ROW);
+        cardRows[idx] = cardRows[idx].slice(0, MAX_CARDS_PER_ROW);
+        overflow.forEach((key) => {
+          if (!hiddenCards.includes(key)) hiddenCards.push(key);
+        });
+      }
+    });
+
+    // Backward compatibility for previous layout versions
+    if (!input.kpiRow && Array.isArray(input.kpiOrder)) {
+      const legacyVisible = KPI_KEYS.filter((key) => input?.kpiVisibility?.[key] !== false);
+      const legacyHidden = KPI_KEYS.filter((key) => input?.kpiVisibility?.[key] === false);
+      kpiRow = [
+        ...input.kpiOrder.filter((key) => legacyVisible.includes(key)),
+        ...legacyVisible.filter((key) => !input.kpiOrder.includes(key)),
+      ];
+      hiddenKpis = [
+        ...input.kpiOrder.filter((key) => legacyHidden.includes(key)),
+        ...legacyHidden.filter((key) => !input.kpiOrder.includes(key)),
+      ];
+    }
+    if (!input.cardRows && Array.isArray(input.cardOrder)) {
+      const legacyVisible = NON_KPI_CARD_KEYS.filter((key) => input?.cardVisibility?.[key] !== false);
+      const legacyHidden = NON_KPI_CARD_KEYS.filter((key) => input?.cardVisibility?.[key] === false);
+      const visibleOrdered = [
+        ...input.cardOrder.filter((key) => legacyVisible.includes(key)),
+        ...legacyVisible.filter((key) => !input.cardOrder.includes(key)),
+      ];
+      const split = Math.ceil(visibleOrdered.length / 2);
+      cardRows = [visibleOrdered.slice(0, split), visibleOrdered.slice(split)];
+      hiddenCards = [
+        ...input.cardOrder.filter((key) => legacyHidden.includes(key)),
+        ...legacyHidden.filter((key) => !input.cardOrder.includes(key)),
+      ];
+    }
+
+    const expandedByRowInput = Array.isArray(input.expandedByRow) ? input.expandedByRow : [];
+    const expandedByRow = [0, 1].map((idx) => {
+      const key = expandedByRowInput[idx];
+      return cardRows[idx].includes(key) ? key : null;
+    });
+
+    return { kpiRow, hiddenKpis, cardRows, hiddenCards, expandedByRow };
+  }, []);
+
+  const layoutDirty = useMemo(
+    () => layoutSavedSnapshot !== JSON.stringify(dashboardLayout),
+    [layoutSavedSnapshot, dashboardLayout]
+  );
 
   const DRILL_LIMIT = 100;
   const syncBusy = syncLoading || !!syncStatus?.running;
@@ -358,6 +656,7 @@ export default function Home() {
     if (onderwerp) items.push(`Onderwerp: ${onderwerp}`);
     if (priority) items.push(`Prioriteit: ${priority}`);
     if (assignee) items.push(`Assignee: ${assignee}`);
+    if (organization) items.push(`Partner: ${organization}`);
     if (servicedeskOnly !== DEFAULT_SERVICEDESK_ONLY) {
       items.push(servicedeskOnly ? "Scope: alleen servicedesk" : "Scope: alle tickets");
     }
@@ -367,6 +666,7 @@ export default function Home() {
     onderwerp,
     priority,
     assignee,
+    organization,
     servicedeskOnly,
   ]);
   const p90Period = useMemo(() => {
@@ -395,6 +695,8 @@ export default function Home() {
     setSelectedWeek("");
     setSelectedType("");
     setSelectedOnderwerp("");
+    setSelectedDrillDateField("created");
+    setSelectedDrillBasisLabel("Binnengekomen");
     setDrillIssues([]);
     setDrillOffset(0);
     setDrillHasNext(false);
@@ -425,9 +727,51 @@ export default function Home() {
     setOnderwerp("");
     setPriority("");
     setAssignee("");
+    setOrganization("");
     setServicedeskOnly(DEFAULT_SERVICEDESK_ONLY);
     if (showToast) flashToast("Filters gereset");
   }, [flashToast]);
+
+  const saveDashboardLayout = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const serialized = JSON.stringify(dashboardLayout);
+    window.localStorage.setItem(DASHBOARD_CONFIG_STORAGE_KEY, serialized);
+    setLayoutSavedSnapshot(serialized);
+    setIsLayoutEditing(false);
+    flashToast("Dashboard layout opgeslagen");
+  }, [dashboardLayout, flashToast]);
+
+  const startLayoutEditing = useCallback(() => {
+    setIsLayoutEditing(true);
+  }, []);
+
+  const cancelLayoutEditing = useCallback(() => {
+    try {
+      const parsed = layoutSavedSnapshot ? JSON.parse(layoutSavedSnapshot) : createDefaultDashboardLayout();
+      setDashboardLayout(normalizeDashboardLayout(parsed));
+    } catch {
+      setDashboardLayout(normalizeDashboardLayout(createDefaultDashboardLayout()));
+    }
+    setIsLayoutEditing(false);
+    setCardDropHint(null);
+    setKpiDropHint(null);
+    dragStateRef.current = null;
+  }, [layoutSavedSnapshot, normalizeDashboardLayout]);
+
+  const resetLayoutAndClose = useCallback(() => {
+    const next = normalizeDashboardLayout(createDefaultDashboardLayout());
+    const serialized = JSON.stringify(next);
+    setDashboardLayout(next);
+    setLayoutSavedSnapshot(serialized);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(DASHBOARD_CONFIG_STORAGE_KEY, serialized);
+    }
+    setIsLayoutEditing(false);
+    setCardDropHint(null);
+    setKpiDropHint(null);
+    dragStateRef.current = null;
+    flashToast("Layout hersteld naar beginwaarden");
+  }, [flashToast, normalizeDashboardLayout]);
 
   const refreshSyncStatus = useCallback(async () => {
     const r = await fetch(`${API}/sync/status`);
@@ -436,12 +780,54 @@ export default function Home() {
     return s;
   }, []);
 
+  const refreshLiveAlerts = useCallback(async () => {
+    const params = new URLSearchParams();
+    if (servicedeskOnly) params.set("servicedesk_only", "true");
+    const r = await fetch(`${API}/alerts/live?${params.toString()}`);
+    const data = await r.json();
+    const normalized = {
+      priority1: Array.isArray(data?.priority1) ? data.priority1 : [],
+      first_response_due_soon: Array.isArray(data?.first_response_due_soon) ? data.first_response_due_soon : [],
+      first_response_overdue: Array.isArray(data?.first_response_overdue) ? data.first_response_overdue : [],
+    };
+    setLiveAlerts(normalized);
+
+    const seen = seenLiveAlertKeysRef.current;
+    const newP1 = normalized.priority1.filter((item) => {
+      const key = `p1:${item.issue_key}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const newSla = normalized.first_response_due_soon.filter((item) => {
+      const key = `sla:${item.issue_key}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const newOverdue = normalized.first_response_overdue.filter((item) => {
+      const key = `sla-overdue:${item.issue_key}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    if (newP1.length) {
+      flashToast(`ALERT P1: ${newP1[0].issue_key}${newP1.length > 1 ? ` +${newP1.length - 1}` : ""}`, "error", 9000);
+    } else if (newOverdue.length) {
+      flashToast(`ALERT SLA VERLOPEN: ${newOverdue[0].issue_key}${newOverdue.length > 1 ? ` +${newOverdue.length - 1}` : ""}`, "error", 9000);
+    } else if (newSla.length) {
+      flashToast(`ALERT SLA <5m: ${newSla[0].issue_key}${newSla.length > 1 ? ` +${newSla.length - 1}` : ""}`, "error", 9000);
+    }
+  }, [flashToast, servicedeskOnly]);
+
   const refreshDashboard = useCallback(async () => {
     const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
     if (requestType) params.set("request_type", requestType);
     if (onderwerp) params.set("onderwerp", onderwerp);
     if (priority) params.set("priority", priority);
     if (assignee) params.set("assignee", assignee);
+    if (organization) params.set("organization", organization);
     if (servicedeskOnly) params.set("servicedesk_only", "true");
 
     fetch(`${API}/metrics/volume_weekly?` + params.toString())
@@ -460,6 +846,24 @@ export default function Home() {
       .then((r) => r.json())
       .then((data) => (Array.isArray(data) ? setAssigneeVolume(data) : setAssigneeVolume([])));
 
+    fetch(`${API}/metrics/volume_weekly_by_organization?` + params.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setOrganizationVolume(data) : setOrganizationVolume([])));
+
+    fetch(`${API}/metrics/inflow_vs_closed_weekly?` + params.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setInflowVsClosedWeekly(data) : setInflowVsClosedWeekly([])));
+
+    const ttrParams = new URLSearchParams(params);
+    ttrParams.delete("request_type");
+    fetch(`${API}/metrics/time_to_resolution_weekly_by_type?` + ttrParams.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setIncidentResolutionWeekly(data) : setIncidentResolutionWeekly([])));
+
+    fetch(`${API}/metrics/time_to_first_response_weekly?` + params.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setFirstResponseWeekly(data) : setFirstResponseWeekly([])));
+
     if (!p90Period.hasData) {
       setP90([]);
     } else {
@@ -467,6 +871,7 @@ export default function Home() {
       if (onderwerp) p.set("onderwerp", onderwerp);
       if (priority) p.set("priority", priority);
       if (assignee) p.set("assignee", assignee);
+      if (organization) p.set("organization", organization);
       if (servicedeskOnly) p.set("servicedesk_only", "true");
 
       fetch(`${API}/metrics/leadtime_p90_by_type?` + p.toString())
@@ -475,11 +880,11 @@ export default function Home() {
     }
 
     fetch(`${API}/meta`).then((r) => r.json()).then(setMeta);
-  }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee, servicedeskOnly, p90Period]);
+  }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee, organization, servicedeskOnly, p90Period]);
 
-  const triggerSync = useCallback(async () => {
+  const triggerSync = useCallback(async ({ silent = false } = {}) => {
     setSyncLoading(true);
-    setSyncMessage("");
+    if (!silent) setSyncMessage("");
 
     try {
       await fetch(`${API}/sync`, { method: "POST" });
@@ -494,14 +899,18 @@ export default function Home() {
 
       await refreshDashboard();
 
-      const upserts = last?.last_result?.upserts;
-      setSyncMessage(`Sync klaar${upserts != null ? `: ${upserts} tickets geüpdatet` : ""}`);
-      setSyncMessageKind("success");
-      setTimeout(() => setSyncMessage(""), 5000);
+      if (!silent) {
+        const upserts = last?.last_result?.upserts;
+        setSyncMessage(`Sync klaar${upserts != null ? `: ${upserts} tickets geüpdatet` : ""}`);
+        setSyncMessageKind("success");
+        setTimeout(() => setSyncMessage(""), 5000);
+      }
     } catch (e) {
-      setSyncMessage("Sync mislukt (zie status/error)");
-      setSyncMessageKind("error");
-      setTimeout(() => setSyncMessage(""), 8000);
+      if (!silent) {
+        setSyncMessage("Sync mislukt (zie status/error)");
+        setSyncMessageKind("error");
+        setTimeout(() => setSyncMessage(""), 8000);
+      }
       throw e;
     } finally {
       setSyncLoading(false);
@@ -513,11 +922,41 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (typeof document !== "undefined") {
+      document.title = "Dashboard Servicedesk Planningsagenda";
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(DASHBOARD_CONFIG_STORAGE_KEY);
+      if (!raw) {
+        const normalizedDefault = normalizeDashboardLayout(createDefaultDashboardLayout());
+        setDashboardLayout(normalizedDefault);
+        setLayoutSavedSnapshot(JSON.stringify(normalizedDefault));
+        return;
+      }
+      const normalizedStored = normalizeDashboardLayout(JSON.parse(raw));
+      setDashboardLayout(normalizedStored);
+      setLayoutSavedSnapshot(JSON.stringify(normalizedStored));
+    } catch {
+      const normalizedDefault = normalizeDashboardLayout(createDefaultDashboardLayout());
+      setDashboardLayout(normalizedDefault);
+      setLayoutSavedSnapshot(JSON.stringify(normalizedDefault));
+    }
+  }, [normalizeDashboardLayout]);
+
+  useEffect(() => {
     fetch(`${API}/sync/status`)
       .then((r) => r.json())
       .then(setSyncStatus)
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    refreshLiveAlerts().catch(() => {});
+  }, [refreshLiveAlerts]);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -528,6 +967,21 @@ export default function Home() {
     }, 15000);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      refreshLiveAlerts().catch(() => {});
+    }, 20000);
+    return () => clearInterval(t);
+  }, [refreshLiveAlerts]);
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (syncBusy) return;
+      triggerSync({ silent: true }).catch(() => {});
+    }, 5 * 60 * 1000);
+    return () => clearInterval(t);
+  }, [syncBusy, triggerSync]);
 
   useEffect(() => {
     if (!syncStatus || syncBusy) return;
@@ -549,7 +1003,7 @@ export default function Home() {
       if (hotkeysOpen) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const key = e.key?.toLowerCase();
-      if (!["m", "j", "r", "s"].includes(key)) return;
+      if (!["m", "j", "r", "s", "f"].includes(key)) return;
       e.preventDefault();
       const active = document.activeElement;
       if (active && typeof active.blur === "function") active.blur();
@@ -568,6 +1022,8 @@ export default function Home() {
         } else {
           flashToast("Sync is al bezig", "error");
         }
+      } else if (key === "f") {
+        setFiltersOpen(true);
       }
     }
     window.addEventListener("keydown", onKeyDown);
@@ -668,6 +1124,7 @@ export default function Home() {
     if (onderwerp) params.set("onderwerp", onderwerp);
     if (priority) params.set("priority", priority);
     if (assignee) params.set("assignee", assignee);
+    if (organization) params.set("organization", organization);
     if (servicedeskOnly) params.set("servicedesk_only", "true");
 
     fetch(`${API}/metrics/volume_weekly?` + params.toString())
@@ -686,6 +1143,24 @@ export default function Home() {
       .then((r) => r.json())
       .then((data) => (Array.isArray(data) ? setAssigneeVolume(data) : setAssigneeVolume([])));
 
+    fetch(`${API}/metrics/volume_weekly_by_organization?` + params.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setOrganizationVolume(data) : setOrganizationVolume([])));
+
+    fetch(`${API}/metrics/inflow_vs_closed_weekly?` + params.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setInflowVsClosedWeekly(data) : setInflowVsClosedWeekly([])));
+
+    const ttrParams = new URLSearchParams(params);
+    ttrParams.delete("request_type");
+    fetch(`${API}/metrics/time_to_resolution_weekly_by_type?` + ttrParams.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setIncidentResolutionWeekly(data) : setIncidentResolutionWeekly([])));
+
+    fetch(`${API}/metrics/time_to_first_response_weekly?` + params.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setFirstResponseWeekly(data) : setFirstResponseWeekly([])));
+
     if (!p90Period.hasData) {
       setP90([]);
     } else {
@@ -696,13 +1171,14 @@ export default function Home() {
       if (onderwerp) p.set("onderwerp", onderwerp);
       if (priority) p.set("priority", priority);
       if (assignee) p.set("assignee", assignee);
+      if (organization) p.set("organization", organization);
       if (servicedeskOnly) p.set("servicedesk_only", "true");
 
       fetch(`${API}/metrics/leadtime_p90_by_type?` + p.toString())
         .then((r) => r.json())
         .then(setP90);
     }
-  }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee, servicedeskOnly, p90Period]);
+  }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee, organization, servicedeskOnly, p90Period]);
 
   // volume -> weeks x series (use full range so empty weeks show as 0)
   const weeks = useMemo(() => buildWeekStartsFromRange(dateFrom, dateTo), [dateFrom, dateTo]);
@@ -903,7 +1379,7 @@ export default function Home() {
       labels: priorityVolume.map((x) => x.priority),
       datasets: [
         {
-          label: "Totaal issues per priority",
+          label: "Totaal tickets per priority",
           data: priorityVolume.map((x) => x.tickets),
           backgroundColor: priorityColors,
           borderColor: priorityColors,
@@ -928,7 +1404,7 @@ export default function Home() {
       labels: assigneeTopVolume.map((x) => x.assignee),
       datasets: [
         {
-          label: "Totaal issues per assignee",
+          label: "Totaal tickets per assignee",
           data: assigneeTopVolume.map((x) => x.tickets),
           backgroundColor: assigneeColors,
           borderColor: assigneeColors,
@@ -964,6 +1440,139 @@ export default function Home() {
     }),
     [p90]
   );
+
+  const inflowVsClosedLineData = useMemo(() => {
+    const rows = Array.isArray(inflowVsClosedWeekly) ? inflowVsClosedWeekly : [];
+    const labels = weeks.map((w) => fmtDate(w));
+    const incomingData = weeks.map((w) => {
+      const row = rows.find((x) => String(x?.week || "").slice(0, 10) === w);
+      return row?.incoming_count != null ? Number(row.incoming_count) : 0;
+    });
+    const closedData = weeks.map((w) => {
+      const row = rows.find((x) => String(x?.week || "").slice(0, 10) === w);
+      return row?.closed_count != null ? Number(row.closed_count) : 0;
+    });
+    return {
+      labels,
+      datasets: [
+        {
+          label: "Binnengekomen",
+          data: incomingData,
+          tension: 0.2,
+          borderColor: "#1565c0",
+          backgroundColor: "#1565c0",
+          pointBackgroundColor: "#1565c0",
+          pointBorderColor: "#1565c0",
+        },
+        {
+          label: "Afgesloten",
+          data: closedData,
+          tension: 0.2,
+          borderColor: "#2e7d32",
+          backgroundColor: "#2e7d32",
+          pointBackgroundColor: "#2e7d32",
+          pointBorderColor: "#2e7d32",
+        },
+      ],
+    };
+  }, [inflowVsClosedWeekly, weeks]);
+
+  const incidentResolutionLineData = useMemo(() => {
+    const rows = Array.isArray(incidentResolutionWeekly) ? incidentResolutionWeekly : [];
+    const labels = weeks.map((w) => fmtDate(w));
+    const allTypes = (Array.isArray(meta.request_types) ? meta.request_types : []).filter(Boolean);
+    const typeSetFromRows = Array.from(
+      new Set(rows.map((x) => String(x?.request_type || "").trim()).filter(Boolean))
+    );
+    const types = allTypes.length ? allTypes : typeSetFromRows;
+    return {
+      labels,
+      datasets: types.map((typeLabel) => ({
+        label: typeLabel,
+        data: weeks.map((w) => {
+          const row = rows.find(
+            (x) =>
+              String(x?.week || "").slice(0, 10) === w &&
+              String(x?.request_type || "") === String(typeLabel)
+          );
+          return row?.avg_hours != null ? Number(row.avg_hours) : null;
+        }),
+        tension: 0.2,
+        borderColor: typeColor(typeLabel),
+        backgroundColor: typeColor(typeLabel),
+        pointBackgroundColor: typeColor(typeLabel),
+        pointBorderColor: typeColor(typeLabel),
+      })),
+    };
+  }, [incidentResolutionWeekly, weeks, meta.request_types, typeColor]);
+
+  const firstResponseLineData = useMemo(() => {
+    const rows = Array.isArray(firstResponseWeekly) ? firstResponseWeekly : [];
+    const labels = weeks.map((w) => fmtDate(w));
+    const avgData = weeks.map((w) => {
+      const row = rows.find((x) => String(x?.week || "").slice(0, 10) === w);
+      return row?.avg_hours != null ? Number(row.avg_hours) : null;
+    });
+    const medianData = weeks.map((w) => {
+      const row = rows.find((x) => String(x?.week || "").slice(0, 10) === w);
+      if (row?.median_hours != null) return Number(row.median_hours);
+      return row?.p50_hours != null ? Number(row.p50_hours) : null;
+    });
+    return {
+      labels,
+      datasets: [
+        {
+          label: "Gemiddelde TTFR (uren)",
+          data: avgData,
+          tension: 0.2,
+          borderColor: "#1565c0",
+          backgroundColor: "#1565c0",
+          pointBackgroundColor: "#1565c0",
+          pointBorderColor: "#1565c0",
+        },
+        {
+          label: "Mediaan TTFR (uren)",
+          data: medianData,
+          tension: 0.2,
+          borderColor: "#00897b",
+          backgroundColor: "#00897b",
+          pointBackgroundColor: "#00897b",
+          pointBorderColor: "#00897b",
+          borderDash: [6, 4],
+        },
+      ],
+    };
+  }, [firstResponseWeekly, weeks]);
+
+  const organizationBarData = useMemo(() => {
+    const rows = Array.isArray(organizationVolume) ? organizationVolume : [];
+    const labels = weeks.map((w) => fmtDate(w));
+    const totalsByOrganization = new Map();
+    rows.forEach((row) => {
+      const org = String(row?.organization || "");
+      if (!org) return;
+      const cur = totalsByOrganization.get(org) || 0;
+      totalsByOrganization.set(org, cur + (Number(row?.tickets) || 0));
+    });
+    const topOrganizations = Array.from(totalsByOrganization.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([org]) => org);
+    return {
+      labels,
+      datasets: topOrganizations.map((org, index) => ({
+        label: org,
+        data: weeks.map((w) => {
+          const row = rows.find(
+            (x) => String(x?.week || "").slice(0, 10) === w && String(x?.organization || "") === org
+          );
+          return row ? Number(row.tickets) : 0;
+        }),
+        backgroundColor: uniqueChartColor(index, topOrganizations.length, 68, 45),
+        borderColor: uniqueChartColor(index, topOrganizations.length, 68, 35),
+      })),
+    };
+  }, [organizationVolume, weeks]);
 
   const kpiStats = useMemo(() => {
     const indices = fullWeekInfo.indices;
@@ -1004,6 +1613,38 @@ export default function Home() {
       .sort((a, b) => b.total - a.total);
     const topSubject = onderwerpTotals[0];
 
+    const orgRows = Array.isArray(organizationVolume) ? organizationVolume : [];
+    const partnerMapLast = new Map();
+    const partnerMapPrev = new Map();
+    const weekLastIso = lastCompletedIdx >= 0 ? weeks[lastCompletedIdx] : null;
+    const weekPrevIso = prevCompletedIdx >= 0 ? weeks[prevCompletedIdx] : null;
+    orgRows.forEach((row) => {
+      const weekIso = String(row?.week || "").slice(0, 10);
+      const partner = String(row?.organization || "").trim();
+      const tickets = Number(row?.tickets) || 0;
+      if (!partner || tickets <= 0) return;
+      if (weekLastIso && weekIso === weekLastIso) {
+        partnerMapLast.set(partner, (partnerMapLast.get(partner) || 0) + tickets);
+      }
+      if (weekPrevIso && weekIso === weekPrevIso) {
+        partnerMapPrev.set(partner, (partnerMapPrev.get(partner) || 0) + tickets);
+      }
+    });
+    const summarizeTopPartners = (partnerMap) => {
+      const entries = Array.from(partnerMap.entries()).sort((a, b) => b[1] - a[1]);
+      if (!entries.length) return { label: "—", tickets: 0 };
+      const topTickets = Number(entries[0][1]) || 0;
+      const tiedPartners = entries
+        .filter(([, tickets]) => Number(tickets) === topTickets)
+        .map(([partner]) => partner);
+      return {
+        label: tiedPartners.join(" / "),
+        tickets: topTickets,
+      };
+    };
+    const topPartnerLast = summarizeTopPartners(partnerMapLast);
+    const topPartnerPrev = summarizeTopPartners(partnerMapPrev);
+
     return {
       totalTickets,
       latestTickets,
@@ -1015,10 +1656,14 @@ export default function Home() {
       topTypeTickets: topType?.total || 0,
       topSubjectLabel: topSubject?.label || "—",
       topSubjectTotal: topSubject?.total || 0,
+      topPartnerLabel: topPartnerLast.label,
+      topPartnerTickets: topPartnerLast.tickets,
+      topPartnerPrevLabel: topPartnerPrev.label,
+      topPartnerPrevTickets: topPartnerPrev.tickets,
       periodLabel: fullWeekInfo.periodLabel,
       completeWeeksCount: fullWeekInfo.count,
     };
-  }, [series, weeks, onderwerpVolume, fullWeekInfo]);
+  }, [series, weeks, onderwerpVolume, organizationVolume, fullWeekInfo]);
 
   const topOnderwerpRows = useMemo(() => {
     if (!fullWeekInfo.count) return [];
@@ -1080,10 +1725,21 @@ export default function Home() {
     return addDaysIso(yyyyMmDd, days);
   }
 
-  async function fetchDrilldown(weekStart, typeLabel, onderwerpLabel, offset = 0) {
+  async function fetchDrilldown(
+    weekStart,
+    typeLabel,
+    onderwerpLabel,
+    offset = 0,
+    options = {}
+  ) {
+    if (isLayoutEditing) return;
+    const dateField = options?.dateField === "resolved" ? "resolved" : "created";
+    const basisLabel = options?.basisLabel || (dateField === "resolved" ? "Afgesloten" : "Binnengekomen");
     setSelectedWeek(weekStart);
     setSelectedType(typeLabel || "");
     setSelectedOnderwerp(onderwerpLabel || onderwerp || "");
+    setSelectedDrillDateField(dateField);
+    setSelectedDrillBasisLabel(basisLabel);
     setDrillOffset(offset);
     setDrillLoading(true);
 
@@ -1093,6 +1749,7 @@ export default function Home() {
       const params = new URLSearchParams({
         date_from: weekStart,
         date_to: weekEnd,
+        date_field: dateField,
         limit: String(DRILL_LIMIT),
         offset: String(offset),
       });
@@ -1102,6 +1759,7 @@ export default function Home() {
       else if (onderwerp) params.set("onderwerp", onderwerp);
       if (priority) params.set("priority", priority);
       if (assignee) params.set("assignee", assignee);
+      if (organization) params.set("organization", organization);
       if (servicedeskOnly) params.set("servicedesk_only", "true");
 
       const res = await fetch(`${API}/issues?` + params.toString());
@@ -1182,6 +1840,7 @@ export default function Home() {
     minHeight: 0,
     position: "relative",
   };
+  const interactionDisabledStyle = isLayoutEditing ? { pointerEvents: "none", userSelect: "none" } : null;
   const pageStyle = {
     fontFamily: "system-ui",
     padding: 10,
@@ -1190,21 +1849,8 @@ export default function Home() {
     background: "var(--page-bg)",
     color: "var(--text-main)",
     minHeight: "100vh",
-  };
-  const topChartsGridStyle = {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))",
-    gap: 8,
-    alignItems: "start",
-    width: "100%",
-    marginBottom: 8,
-  };
-  const lowerChartsGridStyle = {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-    gap: 8,
-    alignItems: "start",
-    width: "100%",
+    height: "100vh",
+    overflow: "hidden",
   };
   const kpiGridStyle = {
     display: "grid",
@@ -1212,6 +1858,21 @@ export default function Home() {
     gap: 8,
     marginBottom: 8,
     width: "100%",
+  };
+  const cardRowsWrapStyle = {
+    display: "grid",
+    gap: 8,
+    width: "100%",
+  };
+  const cardRowStyle = {
+    display: "grid",
+    gap: 8,
+    minHeight: rowCardHeight,
+  };
+  const foldNoticeStyle = {
+    marginTop: 6,
+    fontSize: 12,
+    color: "var(--text-muted)",
   };
   const kpiCardStyle = {
     border: "1px solid var(--border)",
@@ -1248,13 +1909,6 @@ export default function Home() {
     fontWeight: 700,
     lineHeight: 1.2,
     whiteSpace: "nowrap",
-  };
-  const topListGridStyle = {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))",
-    gap: 8,
-    width: "100%",
-    marginBottom: 8,
   };
   const topListCardStyle = {
     border: "1px solid var(--border)",
@@ -1336,6 +1990,42 @@ export default function Home() {
     display: "inline-flex",
     alignItems: "center",
     gap: 8,
+  };
+  const layoutPrimaryButtonStyle = {
+    ...buttonBaseStyle,
+    borderColor: "var(--accent)",
+    background: "var(--accent)",
+    color: "#fff",
+    fontWeight: 700,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 8,
+  };
+  const iconButtonStyle = {
+    ...buttonBaseStyle,
+    height: 28,
+    width: 28,
+    padding: 0,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    borderColor: "var(--danger)",
+    color: "var(--danger)",
+    background: "color-mix(in srgb, var(--danger) 10%, var(--surface))",
+  };
+  const dragHandleStyle = {
+    width: 18,
+    height: 18,
+    borderRadius: 6,
+    border: "1px solid var(--border)",
+    background: "var(--surface-muted)",
+    color: "var(--text-muted)",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: 12,
+    lineHeight: 1,
+    flexShrink: 0,
   };
   const filterOverlayStyle = {
     position: "fixed",
@@ -1502,6 +2192,77 @@ export default function Home() {
     boxShadow: "0 24px 70px var(--shadow-strong)",
     overflow: "hidden",
   };
+  const hiddenOverlayStyle = {
+    position: "fixed",
+    left: 12,
+    right: 12,
+    bottom: 12,
+    zIndex: 1002,
+    border: "1px solid var(--border)",
+    borderRadius: 12,
+    background: "color-mix(in srgb, var(--surface) 96%, transparent)",
+    boxShadow: "0 20px 50px var(--shadow-strong)",
+    padding: 10,
+    display: "grid",
+    gap: 8,
+  };
+  const hiddenOverlayDropStyle = {
+    borderColor: "var(--danger)",
+    background: "color-mix(in srgb, var(--danger) 8%, var(--surface))",
+  };
+  const hiddenOverlayTitleStyle = {
+    margin: 0,
+    fontSize: 13,
+    color: "var(--text-subtle)",
+  };
+  const hiddenPoolStyle = {
+    minHeight: 64,
+    border: "1px dashed var(--border)",
+    borderRadius: 10,
+    padding: 8,
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 8,
+    alignItems: "center",
+  };
+  const hiddenPoolDropStyle = {
+    borderColor: "var(--danger)",
+    background: "color-mix(in srgb, var(--danger) 8%, var(--surface))",
+  };
+  const hiddenDropCueStyle = {
+    width: "100%",
+    minHeight: 48,
+    borderRadius: 8,
+    border: "1px dashed color-mix(in srgb, var(--danger) 45%, var(--border))",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    color: "var(--danger)",
+    fontWeight: 700,
+    fontSize: 12,
+  };
+  const hiddenChipStyle = {
+    border: "1px solid var(--border)",
+    borderRadius: 10,
+    padding: "10px 12px",
+    background: "var(--surface)",
+    fontSize: 13,
+    cursor: "grab",
+    minHeight: 42,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 8,
+  };
+  const dropSkeletonStyle = {
+    border: "1px dashed color-mix(in srgb, var(--accent) 65%, var(--border))",
+    borderRadius: 10,
+    minHeight: rowCardHeight,
+    background:
+      "linear-gradient(110deg, color-mix(in srgb, var(--accent) 16%, var(--surface)) 8%, color-mix(in srgb, var(--accent) 28%, var(--surface)) 18%, color-mix(in srgb, var(--accent) 16%, var(--surface)) 33%)",
+    backgroundSize: "220% 100%",
+    animation: "dropPulse 900ms ease-in-out infinite",
+  };
   const hotkeysTableStyle = {
     width: "100%",
     borderCollapse: "collapse",
@@ -1534,18 +2295,92 @@ export default function Home() {
     letterSpacing: 0.3,
   };
 
-  const cardTitles = {
-    volume: "Volume per week",
-    onderwerp: "Onderwerp logging",
-    priority: "Issues per priority",
-    assignee: "Issues per assignee",
-    p90: "Doorlooptijd p50/p75/p90",
-  };
+  useEffect(() => {
+    if (!expandedCard) return;
+    const isVisible = dashboardLayout.cardRows.some((row) => row.includes(expandedCard));
+    if (!isVisible) setExpandedCard("");
+  }, [expandedCard, dashboardLayout.cardRows]);
+
+  useEffect(() => {
+    setDashboardLayout((prev) => {
+      const current = prev.expandedByRow || [null, null];
+      const next = [0, 1].map((idx) => {
+        const key = current[idx];
+        const row = prev.cardRows[idx] || [];
+        if (!key || !row.includes(key)) return null;
+        return key;
+      });
+      if (next[0] === current[0] && next[1] === current[1]) return prev;
+      return { ...prev, expandedByRow: next };
+    });
+  }, [dashboardLayout.cardRows]);
 
   function renderCardContent(cardKey, expanded = false) {
     const bodyStyle = expanded ? { height: "100%", minHeight: 0, position: "relative" } : chartBodyStyle;
     const donutStyle = expanded ? { ...donutBodyStyle, minHeight: 0 } : donutBodyStyle;
     const emptyStyle = expanded ? { ...hiddenChartPlaceholderStyle, minHeight: 0 } : hiddenChartPlaceholderStyle;
+    if (cardKey === "topOnderwerpen") {
+      return (
+        <div style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4 }}>
+            <span style={fixedMetricBadgeStyle}>Periode: laatste week</span>
+          </div>
+          <p style={topListHintStyle}>Tickets en trend per laatste volledige week ({fullWeekInfo.periodLabel})</p>
+          <div style={topListTableWrapStyle}>
+            {topOnderwerpRows.length ? (
+              <table style={topListTableStyle}>
+                <thead>
+                  <tr>
+                    <th style={topListThStyle}>Onderwerp</th>
+                    <th
+                      style={{
+                        ...topListThStyle,
+                        textAlign: "right",
+                        cursor: "pointer",
+                        color: topOnderwerpSort === "tickets" ? "var(--accent)" : "var(--text-muted)",
+                      }}
+                      onClick={() => setTopOnderwerpSort("tickets")}
+                      title="Sorteer op tickets (laatste volledige week)"
+                    >
+                      Tickets {topOnderwerpSort === "tickets" ? "↓" : ""}
+                    </th>
+                    <th
+                      style={{
+                        ...topListThStyle,
+                        textAlign: "right",
+                        cursor: "pointer",
+                        color: topOnderwerpSort === "wow" ? "var(--accent)" : "var(--text-muted)",
+                      }}
+                      onClick={() => setTopOnderwerpSort("wow")}
+                      title="Sorteer op WoW"
+                    >
+                      Δ WoW {topOnderwerpSort === "wow" ? "↓" : ""}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topOnderwerpRows.map((row) => {
+                    const trend = trendInfo(row.last, row.prev);
+                    return (
+                      <tr key={row.label}>
+                        <td style={topListTdStyle}>{row.label}</td>
+                        <td style={{ ...topListTdStyle, textAlign: "right" }}>{num(row.last)}</td>
+                        <td style={{ ...topListTdStyle, textAlign: "right", color: trend.color }}>
+                          {trend.symbol} {trend.text}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ) : (
+              <div style={emptyStyle}>Verborgen omdat filter `Periode` actief is.</div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
     if (cardKey === "volume") {
       return (
         <div style={bodyStyle}>
@@ -1735,12 +2570,425 @@ export default function Home() {
       );
     }
 
+    if (cardKey === "inflowVsClosed") {
+      return (
+        <div style={bodyStyle}>
+          {hasDataPoints(inflowVsClosedLineData) ? (
+            <Line
+              data={inflowVsClosedLineData}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                onClick: (_evt, elements) => {
+                  const el = elements?.[0];
+                  if (!el) return;
+                  const weekStart = weeks[el.index];
+                  const datasetLabel = inflowVsClosedLineData.datasets?.[el.datasetIndex]?.label || "";
+                  const isClosed = String(datasetLabel).toLowerCase().includes("afgesloten");
+                  fetchDrilldown(
+                    weekStart,
+                    requestType,
+                    onderwerp || "",
+                    0,
+                    {
+                      dateField: isClosed ? "resolved" : "created",
+                      basisLabel: isClosed ? "Afgesloten" : "Binnengekomen",
+                    }
+                  );
+                },
+                plugins: {
+                  legend: { display: true, position: "top" },
+                  tooltip: {
+                    mode: "nearest",
+                    intersect: false,
+                    callbacks: {
+                      label: (ctx) => `${ctx.dataset.label}: ${num(ctx.parsed.y)} tickets`,
+                    },
+                  },
+                  simpleDataLabels: false,
+                },
+                interaction: { mode: "nearest", intersect: false },
+                scales: {
+                  x: {
+                    ticks: { color: "var(--text-muted)" },
+                  },
+                  y: {
+                    title: { display: true, text: "Aantal tickets", color: "var(--text-muted)" },
+                    ticks: {
+                      color: "var(--text-muted)",
+                      callback: (value) => num(value),
+                    },
+                  },
+                },
+              }}
+            />
+          ) : (
+            <EmptyChartState filterLabel="Binnengekomen/Afgesloten" style={emptyStyle} />
+          )}
+        </div>
+      );
+    }
+
+    if (cardKey === "incidentResolution") {
+      return (
+        <div style={bodyStyle}>
+          {hasDataPoints(incidentResolutionLineData) ? (
+            <Line
+              data={incidentResolutionLineData}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                  legend: { display: true, position: "top" },
+                  tooltip: { mode: "nearest", intersect: false },
+                  simpleDataLabels: false,
+                },
+                interaction: { mode: "nearest", intersect: false },
+                scales: {
+                  x: {
+                    ticks: { color: "var(--text-muted)" },
+                  },
+                  y: {
+                    title: { display: true, text: "Uren", color: "var(--text-muted)" },
+                    ticks: { color: "var(--text-muted)" },
+                  },
+                },
+              }}
+            />
+          ) : (
+            <EmptyChartState filterLabel="Time to Resolution" style={emptyStyle} />
+          )}
+        </div>
+      );
+    }
+
+    if (cardKey === "firstResponseAll") {
+      return (
+        <div style={bodyStyle}>
+          {hasDataPoints(firstResponseLineData) ? (
+            <Line
+              data={firstResponseLineData}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                  legend: { display: true, position: "top" },
+                  tooltip: { mode: "nearest", intersect: false },
+                  simpleDataLabels: false,
+                },
+                interaction: { mode: "nearest", intersect: false },
+                scales: {
+                  x: {
+                    ticks: { color: "var(--text-muted)" },
+                  },
+                  y: {
+                    title: { display: true, text: "Uren", color: "var(--text-muted)" },
+                    ticks: { color: "var(--text-muted)" },
+                  },
+                },
+              }}
+            />
+          ) : (
+            <EmptyChartState filterLabel="Time to First Response" style={emptyStyle} />
+          )}
+        </div>
+      );
+    }
+
+    if (cardKey === "organizationWeekly") {
+      return (
+        <div style={bodyStyle}>
+          {hasDataPoints(organizationBarData) ? (
+            <Bar
+              data={organizationBarData}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                  legend: { display: true, position: "top" },
+                  tooltip: { mode: "nearest", intersect: false },
+                  simpleDataLabels: false,
+                },
+                interaction: { mode: "nearest", intersect: false },
+                scales: {
+                  x: {
+                    ticks: { color: "var(--text-muted)" },
+                  },
+                  y: {
+                    title: { display: true, text: "Aantal tickets", color: "var(--text-muted)" },
+                    ticks: { color: "var(--text-muted)" },
+                  },
+                },
+              }}
+            />
+          ) : (
+            <EmptyChartState filterLabel="Partners" style={emptyStyle} />
+          )}
+        </div>
+      );
+    }
+
     return null;
   }
+
+  const kpiTiles = useMemo(
+    () => ({
+      totalTickets: {
+        label: "Totaal tickets (volledige weken)",
+        value: num(kpiStats.totalTickets),
+        sub: kpiStats.periodLabel,
+      },
+      latestTickets: {
+        label: "Tickets laatste volledige week",
+        value: num(kpiStats.latestTickets),
+        sub: `Week van ${kpiStats.lastCompletedWeekLabel} · WoW: ${pct(kpiStats.wowChangePct)}`,
+        badge: "Periode: laatste week",
+      },
+      avgPerWeek: {
+        label: "Gemiddeld aantal tickets (volledige weken)",
+        value: num(kpiStats.avgPerWeek, 1),
+        sub: `${num(kpiStats.completeWeeksCount)} volledige weken`,
+      },
+      topType: {
+        label: "Top request type (volledige weken)",
+        value: kpiStats.topTypeLabel,
+        sub: `${num(kpiStats.topTypeTickets)} tickets`,
+      },
+      topSubject: {
+        label: "Top onderwerp (volledige weken)",
+        value: kpiStats.topSubjectLabel,
+        sub: `${num(kpiStats.topSubjectTotal)} tickets`,
+      },
+      topPartner: {
+        label: "Partner met meeste tickets volledige week",
+        value: `${kpiStats.topPartnerLabel} (${num(kpiStats.topPartnerTickets)})`,
+        sub: `Week ervoor: ${kpiStats.topPartnerPrevLabel} (${num(kpiStats.topPartnerPrevTickets)})`,
+      },
+    }),
+    [kpiStats]
+  );
+
+  const visibleKpiKeys = dashboardLayout.kpiRow;
+  const hiddenKpiKeys = dashboardLayout.hiddenKpis;
+  const visibleCardRows = dashboardLayout.cardRows;
+  const hiddenCardKeys = dashboardLayout.hiddenCards;
+  const cardTitleByKey = useCallback(
+    (key) => (key === "topOnderwerpen" ? "Top 10 onderwerpen" : CARD_TITLES[key] || key),
+    []
+  );
+
+  function startDrag(kind, key, source) {
+    if (!isLayoutEditing) return;
+    dragStateRef.current = { kind, key, source };
+    if (kind !== "card") setCardDropHint(null);
+    if (kind !== "kpi") setKpiDropHint(null);
+  }
+
+  function clearDrag() {
+    dragStateRef.current = null;
+    setCardDropHint(null);
+    setKpiDropHint(null);
+    setHiddenDropTarget(null);
+  }
+
+  function moveKpiToVisible(targetKey = null, position = "before") {
+    const state = dragStateRef.current;
+    clearDrag();
+    if (!state || state.kind !== "kpi") return;
+    setDashboardLayout((prev) => {
+      const key = state.key;
+      let row = prev.kpiRow.filter((k) => k !== key);
+      const hidden = prev.hiddenKpis.filter((k) => k !== key);
+      if (targetKey && row.includes(targetKey)) {
+        const baseIndex = row.indexOf(targetKey);
+        const insertIndex = position === "after" ? baseIndex + 1 : baseIndex;
+        row.splice(insertIndex, 0, key);
+      } else {
+        row.push(key);
+      }
+      if (row.length > MAX_KPI_TILES) {
+        const overflow = row.slice(MAX_KPI_TILES);
+        row = row.slice(0, MAX_KPI_TILES);
+        overflow.forEach((k) => {
+          if (!hidden.includes(k)) hidden.push(k);
+        });
+      }
+      return { ...prev, kpiRow: row, hiddenKpis: hidden };
+    });
+  }
+
+  function hideKpi() {
+    const state = dragStateRef.current;
+    clearDrag();
+    if (!state || state.kind !== "kpi") return;
+    setDashboardLayout((prev) => {
+      const key = state.key;
+      const row = prev.kpiRow.filter((k) => k !== key);
+      const hidden = prev.hiddenKpis.includes(key) ? prev.hiddenKpis : [...prev.hiddenKpis, key];
+      return { ...prev, kpiRow: row, hiddenKpis: hidden };
+    });
+  }
+
+  function hideKpiByKey(key) {
+    setDashboardLayout((prev) => ({
+      ...prev,
+      kpiRow: prev.kpiRow.filter((k) => k !== key),
+      hiddenKpis: prev.hiddenKpis.includes(key) ? prev.hiddenKpis : [...prev.hiddenKpis, key],
+    }));
+  }
+
+  function moveCardToRow(rowIndex, targetKey = null, position = "before") {
+    const state = dragStateRef.current;
+    clearDrag();
+    if (!state || state.kind !== "card" || rowIndex < 0 || rowIndex > 1) return;
+    setDashboardLayout((prev) => {
+      const key = state.key;
+      const nextRows = prev.cardRows.map((row) => row.filter((k) => k !== key));
+      const hidden = prev.hiddenCards.filter((k) => k !== key);
+      const expandedByRow = [...(prev.expandedByRow || [null, null])].map((v) => (v === key ? null : v));
+      if (targetKey && nextRows[rowIndex].includes(targetKey)) {
+        const baseIndex = nextRows[rowIndex].indexOf(targetKey);
+        const insertIndex = position === "after" ? baseIndex + 1 : baseIndex;
+        nextRows[rowIndex].splice(insertIndex, 0, key);
+      } else {
+        nextRows[rowIndex].push(key);
+      }
+
+      // Keep rows readable: max 5 cards per row, overflow to hidden cards.
+      [0, 1].forEach((idx) => {
+        if (nextRows[idx].length > MAX_CARDS_PER_ROW) {
+          const overflow = nextRows[idx].slice(MAX_CARDS_PER_ROW);
+          nextRows[idx] = nextRows[idx].slice(0, MAX_CARDS_PER_ROW);
+          overflow.forEach((k) => {
+            if (!hidden.includes(k)) hidden.push(k);
+          });
+        }
+      });
+      [0, 1].forEach((idx) => {
+        if (expandedByRow[idx] && !nextRows[idx].includes(expandedByRow[idx])) expandedByRow[idx] = null;
+      });
+
+      return { ...prev, cardRows: nextRows, hiddenCards: hidden, expandedByRow };
+    });
+  }
+
+  function hideCard() {
+    const state = dragStateRef.current;
+    clearDrag();
+    if (!state || state.kind !== "card") return;
+    setDashboardLayout((prev) => {
+      const key = state.key;
+      const nextRows = prev.cardRows.map((row) => row.filter((k) => k !== key));
+      const hidden = prev.hiddenCards.includes(key) ? prev.hiddenCards : [...prev.hiddenCards, key];
+      const expandedByRow = [...(prev.expandedByRow || [null, null])].map((v) => (v === key ? null : v));
+      return { ...prev, cardRows: nextRows, hiddenCards: hidden, expandedByRow };
+    });
+  }
+
+  function hideCardByKey(key) {
+    setDashboardLayout((prev) => ({
+      ...prev,
+      cardRows: prev.cardRows.map((row) => row.filter((k) => k !== key)),
+      hiddenCards: prev.hiddenCards.includes(key) ? prev.hiddenCards : [...prev.hiddenCards, key],
+      expandedByRow: [...(prev.expandedByRow || [null, null])].map((v) => (v === key ? null : v)),
+    }));
+  }
+
+  function toggleRowExpandCard(rowIndex, key) {
+    if (!isLayoutEditing || rowIndex < 0 || rowIndex > 1) return;
+    setDashboardLayout((prev) => {
+      const row = prev.cardRows[rowIndex] || [];
+      if (!row.includes(key)) return prev;
+      const current = (prev.expandedByRow || [null, null])[rowIndex];
+      if (current === key) {
+        const next = [...(prev.expandedByRow || [null, null])];
+        next[rowIndex] = null;
+        return { ...prev, expandedByRow: next };
+      }
+      if (row.length > 4) return prev;
+      const next = [...(prev.expandedByRow || [null, null])];
+      next[rowIndex] = key;
+      return { ...prev, expandedByRow: next };
+    });
+  }
+
+  function hideDraggedToOverlay() {
+    const kind = dragStateRef.current?.kind;
+    if (kind === "kpi") {
+      hideKpi();
+    } else if (kind === "card") {
+      hideCard();
+    }
+    setHiddenDropTarget(null);
+  }
+
+  function setCardHintFromEvent(rowIndex, targetKey, e) {
+    if (!isLayoutEditing) return;
+    if (dragStateRef.current?.kind !== "card") return;
+    if (hiddenDropTarget) setHiddenDropTarget(null);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const position = e.clientX < rect.left + rect.width / 2 ? "before" : "after";
+    setCardDropHint({ rowIndex, targetKey, position });
+  }
+
+  function setKpiHintFromEvent(targetKey, e) {
+    if (!isLayoutEditing) return;
+    if (dragStateRef.current?.kind !== "kpi") return;
+    if (hiddenDropTarget) setHiddenDropTarget(null);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const position = e.clientX < rect.left + rect.width / 2 ? "before" : "after";
+    setKpiDropHint({ targetKey, position });
+  }
+
+  function renderKpiRowWithHint(row) {
+    if (!isLayoutEditing) return row;
+    const draggingKey = dragStateRef.current?.kind === "kpi" ? dragStateRef.current.key : null;
+    const cleanRow = row.filter((key) => key !== draggingKey);
+    if (!kpiDropHint) return cleanRow;
+    const withHint = [...cleanRow];
+    if (!kpiDropHint.targetKey || !withHint.includes(kpiDropHint.targetKey)) {
+      withHint.push("__KPI_DROP_HINT__");
+      return withHint;
+    }
+    const targetIndex = withHint.indexOf(kpiDropHint.targetKey);
+    const insertIndex = kpiDropHint.position === "after" ? targetIndex + 1 : targetIndex;
+    withHint.splice(insertIndex, 0, "__KPI_DROP_HINT__");
+    return withHint;
+  }
+
+  function renderCardRowWithHint(row, rowIndex) {
+    if (!isLayoutEditing) return row;
+    const draggingKey = dragStateRef.current?.kind === "card" ? dragStateRef.current.key : null;
+    const cleanRow = row.filter((key) => key !== draggingKey);
+    const hint = cardDropHint && cardDropHint.rowIndex === rowIndex ? cardDropHint : null;
+    if (!hint) return cleanRow;
+    const withHint = [...cleanRow];
+    if (!hint.targetKey || !withHint.includes(hint.targetKey)) {
+      withHint.push("__DROP_HINT__");
+      return withHint;
+    }
+    const targetIndex = withHint.indexOf(hint.targetKey);
+    const insertIndex = hint.position === "after" ? targetIndex + 1 : targetIndex;
+    withHint.splice(insertIndex, 0, "__DROP_HINT__");
+    return withHint;
+  }
+
+  useEffect(() => {
+    if (!isLayoutEditing) {
+      setCardDropHint(null);
+      setKpiDropHint(null);
+      setHiddenDropTarget(null);
+      dragStateRef.current = null;
+    } else {
+      closeDrilldown();
+      setExpandedCard("");
+    }
+  }, [isLayoutEditing]);
 
   return (
     <div style={pageStyle}>
       <Toast message={syncMessage} kind={syncMessageKind} onClose={() => setSyncMessage("")} />
+      <LiveAlertStack alerts={liveAlerts} />
       <button
         ref={hotkeysButtonRef}
         type="button"
@@ -1753,7 +3001,7 @@ export default function Home() {
         ?
       </button>
       <div style={headerRowStyle}>
-        <h1 style={titleStyle}>JSM Dashboard (SD)</h1>
+        <h1 style={titleStyle}>Dashboard Servicedesk Planningsagenda</h1>
         <div style={headerActionsStyle}>
           {activeFilterItems.length ? (
             <>
@@ -1768,6 +3016,15 @@ export default function Home() {
               </button>
             </>
           ) : null}
+          {isLayoutEditing ? (
+            <button type="button" onClick={cancelLayoutEditing} style={filterOpenButtonStyle}>
+              Annuleren
+            </button>
+          ) : (
+            <button type="button" onClick={startLayoutEditing} style={filterOpenButtonStyle}>
+              Layout aanpassen
+            </button>
+          )}
           <button type="button" onClick={() => setFiltersOpen(true)} style={filterOpenButtonStyle}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <path
@@ -2009,6 +3266,25 @@ export default function Home() {
             </select>
           </label>
 
+          <label style={fieldStyle}>
+            <span style={labelStyle}>Partner</span>
+          <select
+            value={organization}
+            onChange={(e) => {
+              setOrganization(e.target.value);
+              e.target.blur();
+            }}
+            style={inputBaseStyle}
+          >
+            <option value="">(alle)</option>
+            {meta.organizations.map((o) => (
+              <option key={o} value={o}>
+                {o}
+              </option>
+              ))}
+            </select>
+          </label>
+
           <label style={fieldStyle} title="Sluit uit: Koppelingen, datadump, Rest-endpoints, migratie, SSO-koppeling">
             <span style={labelStyle}>Scope</span>
             <div style={{ display: "flex", gap: 8, alignItems: "center", height: 36, padding: "0 4px" }}>
@@ -2043,176 +3319,233 @@ export default function Home() {
         </>
       ) : null}
 
-      <div style={kpiGridStyle}>
-        <div style={kpiCardStyle}>
-          <div style={kpiLabelStyle}>Totaal tickets (volledige weken)</div>
-          <div style={kpiValueStyle}>{num(kpiStats.totalTickets)}</div>
-          <div style={kpiSubStyle}>{kpiStats.periodLabel}</div>
-        </div>
-        <div style={kpiCardStyle}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 2 }}>
-            <div style={{ ...kpiLabelStyle, marginBottom: 0 }}>Tickets laatste volledige week</div>
-            <span style={fixedMetricBadgeStyle}>Periode: laatste week</span>
-          </div>
-          <div style={kpiValueStyle}>{num(kpiStats.latestTickets)}</div>
-          <div style={kpiSubStyle}>
-            Week van {kpiStats.lastCompletedWeekLabel} · WoW: {pct(kpiStats.wowChangePct)}
-          </div>
-        </div>
-        <div style={kpiCardStyle}>
-          <div style={kpiLabelStyle}>Gemiddeld per volledige week</div>
-          <div style={kpiValueStyle}>{num(kpiStats.avgPerWeek, 1)}</div>
-          <div style={kpiSubStyle}>{num(kpiStats.completeWeeksCount)} volledige weken</div>
-        </div>
-        <div style={kpiCardStyle}>
-          <div style={kpiLabelStyle}>Top request type (volledige weken)</div>
-          <div style={{ ...kpiValueStyle, fontSize: 20 }}>{kpiStats.topTypeLabel}</div>
-          <div style={kpiSubStyle}>{num(kpiStats.topTypeTickets)} tickets</div>
-        </div>
-        <div style={kpiCardStyle}>
-          <div style={kpiLabelStyle}>Top onderwerp (volledige weken)</div>
-          <div style={{ ...kpiValueStyle, fontSize: 20 }}>{kpiStats.topSubjectLabel}</div>
-          <div style={kpiSubStyle}>{num(kpiStats.topSubjectTotal)} tickets</div>
-        </div>
-      </div>
-
-      <div style={topListGridStyle}>
-        <div style={topListCardStyle}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 4 }}>
-            <h3 style={{ ...topListHeaderStyle, margin: 0 }}>Top 10 onderwerpen</h3>
-            <span style={fixedMetricBadgeStyle}>Periode: laatste week</span>
-          </div>
-          <p style={topListHintStyle}>Tickets en trend per laatste volledige week ({fullWeekInfo.periodLabel})</p>
-          <div style={topListTableWrapStyle}>
-            {topOnderwerpRows.length ? (
-              <table style={topListTableStyle}>
-                <thead>
-                  <tr>
-                    <th style={topListThStyle}>Onderwerp</th>
-                    <th
-                      style={{
-                        ...topListThStyle,
-                        textAlign: "right",
-                        cursor: "pointer",
-                        color: topOnderwerpSort === "tickets" ? "var(--accent)" : "var(--text-muted)",
-                      }}
-                      onClick={() => setTopOnderwerpSort("tickets")}
-                      title="Sorteer op tickets (laatste volledige week)"
+      {(() => {
+        const renderedKpis = renderKpiRowWithHint(visibleKpiKeys);
+        const hintActive = renderedKpis.includes("__KPI_DROP_HINT__");
+        return (
+          <div
+            style={{
+              ...kpiGridStyle,
+              gridTemplateColumns: `repeat(${Math.max(2, renderedKpis.length || 2)}, minmax(0, 1fr))`,
+            }}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={() => {
+              const hint = kpiDropHint;
+              moveKpiToVisible(hint?.targetKey || null, hint?.position || "after");
+            }}
+          >
+        {renderedKpis.length ? renderedKpis.map((key) => {
+          if (key === "__KPI_DROP_HINT__") {
+            return <div key="kpi-drop-hint" style={dropSkeletonStyle} />;
+          }
+          const tile = kpiTiles[key];
+          if (!tile) return null;
+          return (
+            <div
+              key={key}
+              style={{
+                ...kpiCardStyle,
+                cursor: isLayoutEditing ? "grab" : "default",
+                transform: hintActive ? "scale(0.86)" : "scale(1)",
+                transformOrigin: "center center",
+                transition: "transform 170ms ease, opacity 170ms ease",
+                opacity: hintActive ? 0.94 : 1,
+              }}
+              draggable={isLayoutEditing}
+              onDragStart={() => startDrag("kpi", key, { zone: "kpiRow" })}
+              onDragEnd={clearDrag}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setKpiHintFromEvent(key, e);
+              }}
+              onDrop={() => {
+                const hint = kpiDropHint;
+                moveKpiToVisible(hint?.targetKey || key, hint?.position || "before");
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 2 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  {isLayoutEditing ? (
+                    <span style={dragHandleStyle} aria-hidden>
+                      <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                        <circle cx="2" cy="2" r="1" />
+                        <circle cx="2" cy="5" r="1" />
+                        <circle cx="2" cy="8" r="1" />
+                        <circle cx="8" cy="2" r="1" />
+                        <circle cx="8" cy="5" r="1" />
+                        <circle cx="8" cy="8" r="1" />
+                      </svg>
+                    </span>
+                  ) : null}
+                  <div style={{ ...kpiLabelStyle, marginBottom: 0 }}>{tile.label}</div>
+                </div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  {tile.badge ? <span style={fixedMetricBadgeStyle}>{tile.badge}</span> : null}
+                  {isLayoutEditing ? (
+                    <button
+                      type="button"
+                      onClick={() => hideKpiByKey(key)}
+                      style={iconButtonStyle}
+                      title="Verberg kaart"
+                      aria-label="Verberg kaart"
                     >
-                      Tickets {topOnderwerpSort === "tickets" ? "↓" : ""}
-                    </th>
-                    <th
-                      style={{
-                        ...topListThStyle,
-                        textAlign: "right",
-                        cursor: "pointer",
-                        color: topOnderwerpSort === "wow" ? "var(--accent)" : "var(--text-muted)",
-                      }}
-                      onClick={() => setTopOnderwerpSort("wow")}
-                      title="Sorteer op WoW"
-                    >
-                      Δ WoW {topOnderwerpSort === "wow" ? "↓" : ""}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {topOnderwerpRows.map((row) => {
-                    const trend = trendInfo(row.last, row.prev);
-                    return (
-                      <tr key={row.label}>
-                        <td style={topListTdStyle}>{row.label}</td>
-                        <td style={{ ...topListTdStyle, textAlign: "right" }}>{num(row.last)}</td>
-                        <td style={{ ...topListTdStyle, textAlign: "right", color: trend.color }}>
-                          {trend.symbol} {trend.text}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            ) : (
-              <div style={hiddenChartPlaceholderStyle}>Verborgen omdat filter `Periode` actief is.</div>
-            )}
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path d="M4 7h16M10 3h4M7 7l1 13h8l1-13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <div style={{ ...kpiValueStyle, fontSize: key === "topType" || key === "topSubject" ? 20 : 20 }}>{tile.value}</div>
+              <div style={kpiSubStyle}>{tile.sub}</div>
+              {tile.subSecondary ? <div style={{ ...kpiSubStyle, marginTop: 2, fontSize: 11 }}>{tile.subSecondary}</div> : null}
+            </div>
+          );
+        }) : (
+          <div style={{ ...hiddenChartPlaceholderStyle, gridColumn: "1 / -1" }}>
+            KPI-rij is leeg. Sleep KPI-kaarten terug vanuit Verborgen kaarten.
           </div>
-        </div>
-
-        <div style={chartShellStyle}>
-          <button
-            type="button"
-            className="card-expand-title"
-            style={cardTitleButtonStyle}
-            onClick={() => setExpandedCard("priority")}
-          >
-            <span style={chartTitleStyle}>{cardTitles.priority}</span>
-            <span style={cardTitleHintStyle}>Vergroot</span>
-          </button>
-          {renderCardContent("priority")}
-        </div>
+        )}
       </div>
+        );
+      })()}
 
-      <div style={topChartsGridStyle}>
-        <div style={chartShellStyle}>
-          <button
-            type="button"
-            className="card-expand-title"
-            style={cardTitleButtonStyle}
-            onClick={() => setExpandedCard("volume")}
-          >
-            <span style={chartTitleStyle}>{cardTitles.volume}</span>
-            <span style={cardTitleHintStyle}>Vergroot</span>
-          </button>
-          {renderCardContent("volume")}
-        </div>
-
-        <div style={chartShellStyle}>
-          <button
-            type="button"
-            className="card-expand-title"
-            style={cardTitleButtonStyle}
-            onClick={() => setExpandedCard("onderwerp")}
-          >
-            <span style={chartTitleStyle}>{cardTitles.onderwerp}</span>
-            <span style={cardTitleHintStyle}>Vergroot</span>
-          </button>
-          {renderCardContent("onderwerp")}
-        </div>
-
+      <div style={cardRowsWrapStyle}>
+        {visibleCardRows.map((row, rowIndex) => {
+          const renderedRow = renderCardRowWithHint(row, rowIndex);
+          const hintActive = renderedRow.includes("__DROP_HINT__");
+          const expandedKey = (dashboardLayout.expandedByRow || [null, null])[rowIndex];
+          const hasExpanded = !!expandedKey && row.includes(expandedKey);
+          const rowColumns = Math.max(2, (renderedRow.length || 2) + (hasExpanded ? 1 : 0));
+          return (
+            <div
+              key={`row-${rowIndex}`}
+              style={{ ...cardRowStyle, gridTemplateColumns: `repeat(${rowColumns}, minmax(0, 1fr))` }}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={() => {
+                const hint = cardDropHint && cardDropHint.rowIndex === rowIndex ? cardDropHint : null;
+                moveCardToRow(rowIndex, hint?.targetKey || null, hint?.position || "after");
+              }}
+            >
+              {!renderedRow.length ? (
+                <div style={{ ...hiddenChartPlaceholderStyle, gridColumn: "1 / -1" }}>
+                  Rij {rowIndex + 1} is leeg. Sleep een kaart hierheen of haal er een terug uit Verborgen kaarten.
+                </div>
+              ) : null}
+              {renderedRow.map((cardKey) => (
+              cardKey === "__DROP_HINT__" ? (
+                <div key={`hint-${rowIndex}`} style={dropSkeletonStyle} />
+              ) : (
+              <div
+                key={cardKey}
+                style={{
+                  ...chartShellStyle,
+                  cursor: isLayoutEditing ? "grab" : "default",
+                  gridColumn: hasExpanded && cardKey === expandedKey ? "span 2" : undefined,
+                  transform: hintActive ? "scale(0.86)" : "scale(1)",
+                  transformOrigin: "center center",
+                  transition: "transform 170ms ease, opacity 170ms ease",
+                  opacity: hintActive ? 0.94 : 1,
+                }}
+                draggable={isLayoutEditing}
+                onDragStart={() => startDrag("card", cardKey, { zone: "cardRow", rowIndex })}
+                onDragEnd={clearDrag}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setCardHintFromEvent(rowIndex, cardKey, e);
+                }}
+                onDrop={() => {
+                  const hint = cardDropHint && cardDropHint.rowIndex === rowIndex ? cardDropHint : null;
+                  moveCardToRow(rowIndex, hint?.targetKey || cardKey, hint?.position || "before");
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                  {isLayoutEditing ? (
+                    <div style={{ ...cardTitleButtonStyle, cursor: "default", marginBottom: 0 }}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        <span style={dragHandleStyle} aria-hidden>
+                          <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                            <circle cx="2" cy="2" r="1" />
+                            <circle cx="2" cy="5" r="1" />
+                            <circle cx="2" cy="8" r="1" />
+                            <circle cx="8" cy="2" r="1" />
+                            <circle cx="8" cy="5" r="1" />
+                            <circle cx="8" cy="8" r="1" />
+                          </svg>
+                        </span>
+                        <span style={chartTitleStyle}>{cardTitleByKey(cardKey)}</span>
+                      </span>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="card-expand-title"
+                      style={cardTitleButtonStyle}
+                      onClick={() => setExpandedCard(cardKey)}
+                    >
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                        <span style={chartTitleStyle}>{cardTitleByKey(cardKey)}</span>
+                      </span>
+                      <span style={cardTitleHintStyle}>Vergroot</span>
+                    </button>
+                  )}
+                  {isLayoutEditing ? (
+                    <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                      {row.length <= 4 ? (
+                        <button
+                          type="button"
+                          onClick={() => toggleRowExpandCard(rowIndex, cardKey)}
+                          style={{ ...iconButtonStyle, borderColor: "var(--accent)", color: "var(--accent)" }}
+                          title={expandedKey === cardKey ? "Normale breedte" : "Verdubbel breedte"}
+                          aria-label={expandedKey === cardKey ? "Normale breedte" : "Verdubbel breedte"}
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M4 6h7v12H4V6Zm9 0h7v12h-7V6Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                          </svg>
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => hideCardByKey(cardKey)}
+                        style={iconButtonStyle}
+                        title="Verberg kaart"
+                        aria-label="Verberg kaart"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                          <path d="M4 7h16M10 3h4M7 7l1 13h8l1-13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </button>
+                    </span>
+                  ) : null}
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    flex: 1,
+                    minHeight: 0,
+                    ...(interactionDisabledStyle || {}),
+                  }}
+                >
+                  {renderCardContent(cardKey)}
+                </div>
+              </div>
+              )
+            ))}
+            </div>
+          );
+        })}
       </div>
-
-      <div style={lowerChartsGridStyle}>
-        <div style={chartShellStyle}>
-          <button
-            type="button"
-            className="card-expand-title"
-            style={cardTitleButtonStyle}
-            onClick={() => setExpandedCard("assignee")}
-          >
-            <span style={chartTitleStyle}>{cardTitles.assignee}</span>
-            <span style={cardTitleHintStyle}>Vergroot</span>
-          </button>
-          {renderCardContent("assignee")}
-        </div>
-
-        <div style={chartShellStyle}>
-          <button
-            type="button"
-            className="card-expand-title"
-            style={cardTitleButtonStyle}
-            onClick={() => setExpandedCard("p90")}
-          >
-            <span style={chartTitleStyle}>{cardTitles.p90}</span>
-            <span style={cardTitleHintStyle}>Vergroot</span>
-          </button>
-          {renderCardContent("p90")}
-        </div>
-      </div>
+      {isLayoutEditing ? (
+        <div style={foldNoticeStyle}>{'Layout-modus actief: sleep KPI/cards binnen hun categorie en klik daarna op "Opslaan layout".'}</div>
+      ) : null}
 
       {expandedCard ? (
-        <div role="dialog" aria-modal="true" aria-label={cardTitles[expandedCard]} style={modalOverlayStyle} onClick={() => setExpandedCard("")}>
+        <div role="dialog" aria-modal="true" aria-label={cardTitleByKey(expandedCard)} style={modalOverlayStyle} onClick={() => setExpandedCard("")}>
           <div style={modalFrameStyle}>
             <div style={modalCardStyle} onClick={(e) => e.stopPropagation()}>
               <div style={modalHeaderStyle}>
-                <h2 style={{ margin: 0, fontSize: 20 }}>{cardTitles[expandedCard]}</h2>
+                <h2 style={{ margin: 0, fontSize: 20 }}>{cardTitleByKey(expandedCard)}</h2>
                 <button type="button" onClick={() => setExpandedCard("")} style={modalCloseStyle}>
                   Sluiten
                 </button>
@@ -2256,6 +3589,10 @@ export default function Home() {
                   <td style={hotkeysTdStyle}>Reset alle filters naar de standaardwaarden.</td>
                 </tr>
                 <tr>
+                  <td style={hotkeysTdStyle}><span style={hotkeysKeyStyle}>F</span></td>
+                  <td style={hotkeysTdStyle}>Open het filterscherm.</td>
+                </tr>
+                <tr>
                   <td style={hotkeysTdStyle}><span style={hotkeysKeyStyle}>S</span></td>
                   <td style={hotkeysTdStyle}>Start een synchronisatie (of toont dat sync al loopt).</td>
                 </tr>
@@ -2265,6 +3602,128 @@ export default function Home() {
                 </tr>
               </tbody>
             </table>
+          </div>
+        </div>
+      ) : null}
+
+      {isLayoutEditing ? (
+        <div
+          style={{ ...hiddenOverlayStyle, ...(hiddenDropTarget === "overlay" ? hiddenOverlayDropStyle : null) }}
+          onDragOver={(e) => {
+            e.preventDefault();
+            if (dragStateRef.current?.kind === "kpi" || dragStateRef.current?.kind === "card") {
+              setHiddenDropTarget("overlay");
+            }
+          }}
+          onDragLeave={() => setHiddenDropTarget((prev) => (prev === "overlay" ? null : prev))}
+          onDrop={hideDraggedToOverlay}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <h3 style={hiddenOverlayTitleStyle}>Verborgen kaarten</h3>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <button type="button" onClick={resetLayoutAndClose} style={filterOpenButtonStyle}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                Opnieuw beginnen
+              </button>
+              <button type="button" onClick={saveDashboardLayout} style={layoutPrimaryButtonStyle} disabled={!layoutDirty}>
+                Opslaan layout
+              </button>
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+            Sleep een kaart hierheen om te verbergen, of sleep vanuit hier terug naar een rij.
+          </div>
+          <div>
+            <div style={{ ...labelStyle, marginBottom: 4 }}>KPI kaarten</div>
+            <div
+              style={{ ...hiddenPoolStyle, ...(hiddenDropTarget === "kpi" ? hiddenPoolDropStyle : null) }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                if (dragStateRef.current?.kind === "kpi") setHiddenDropTarget("kpi");
+              }}
+              onDragLeave={() => setHiddenDropTarget((prev) => (prev === "kpi" ? null : prev))}
+              onDrop={() => {
+                hideKpi();
+                setHiddenDropTarget(null);
+              }}
+            >
+              {hiddenDropTarget === "kpi" ? (
+                <div style={hiddenDropCueStyle}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M4 7h16M10 3h4M7 7l1 13h8l1-13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  Loslaten om KPI-kaart te verbergen
+                </div>
+              ) : null}
+              {hiddenKpiKeys.length ? hiddenKpiKeys.map((key) => (
+                <span
+                  key={`hidden-kpi-${key}`}
+                  style={hiddenChipStyle}
+                  draggable
+                  onDragStart={() => startDrag("kpi", key, { zone: "hiddenKpi" })}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => moveKpiToVisible(key)}
+                >
+                  <span style={dragHandleStyle} aria-hidden>
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                      <circle cx="2" cy="2" r="1" />
+                      <circle cx="2" cy="5" r="1" />
+                      <circle cx="2" cy="8" r="1" />
+                      <circle cx="8" cy="2" r="1" />
+                      <circle cx="8" cy="5" r="1" />
+                      <circle cx="8" cy="8" r="1" />
+                    </svg>
+                  </span>
+                  {kpiTiles[key]?.label || key}
+                </span>
+              )) : <span style={{ color: "var(--text-faint)", fontSize: 12 }}>Geen verborgen KPI-kaarten</span>}
+            </div>
+          </div>
+          <div>
+            <div style={{ ...labelStyle, marginBottom: 4 }}>Overige kaarten</div>
+            <div
+              style={{ ...hiddenPoolStyle, ...(hiddenDropTarget === "card" ? hiddenPoolDropStyle : null) }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                if (dragStateRef.current?.kind === "card") setHiddenDropTarget("card");
+              }}
+              onDragLeave={() => setHiddenDropTarget((prev) => (prev === "card" ? null : prev))}
+              onDrop={() => {
+                hideCard();
+                setHiddenDropTarget(null);
+              }}
+            >
+              {hiddenDropTarget === "card" ? (
+                <div style={hiddenDropCueStyle}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M4 7h16M10 3h4M7 7l1 13h8l1-13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  Loslaten om kaart te verbergen
+                </div>
+              ) : null}
+              {hiddenCardKeys.length ? hiddenCardKeys.map((key) => (
+                <span
+                  key={`hidden-card-${key}`}
+                  style={hiddenChipStyle}
+                  draggable
+                  onDragStart={() => startDrag("card", key, { zone: "hiddenCard" })}
+                >
+                  <span style={dragHandleStyle} aria-hidden>
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                      <circle cx="2" cy="2" r="1" />
+                      <circle cx="2" cy="5" r="1" />
+                      <circle cx="2" cy="8" r="1" />
+                      <circle cx="8" cy="2" r="1" />
+                      <circle cx="8" cy="5" r="1" />
+                      <circle cx="8" cy="8" r="1" />
+                    </svg>
+                  </span>
+                  {cardTitleByKey(key)}
+                </span>
+              )) : <span style={{ color: "var(--text-faint)", fontSize: 12 }}>Geen verborgen overige kaarten</span>}
+            </div>
           </div>
         </div>
       ) : null}
@@ -2310,6 +3769,7 @@ export default function Home() {
             <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Drilldown</div>
             <div style={{ fontSize: 16 }}>
               Week vanaf <b>{fmtDate(selectedWeek)}</b>
+              {" "}— basis: <b>{selectedDrillBasisLabel}</b>
               {selectedType ? (
                 <>
                   {" "}— type: <b style={{ color: typeColor(selectedType) }}>{selectedType}</b>
@@ -2344,14 +3804,28 @@ export default function Home() {
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <button
               onClick={() =>
-                fetchDrilldown(selectedWeek, selectedType, selectedOnderwerp, Math.max(0, drillOffset - DRILL_LIMIT))
+                fetchDrilldown(
+                  selectedWeek,
+                  selectedType,
+                  selectedOnderwerp,
+                  Math.max(0, drillOffset - DRILL_LIMIT),
+                  { dateField: selectedDrillDateField, basisLabel: selectedDrillBasisLabel }
+                )
               }
               disabled={!selectedWeek || drillOffset === 0 || drillLoading}
             >
               Vorige
             </button>
             <button
-              onClick={() => fetchDrilldown(selectedWeek, selectedType, selectedOnderwerp, drillOffset + DRILL_LIMIT)}
+              onClick={() =>
+                fetchDrilldown(
+                  selectedWeek,
+                  selectedType,
+                  selectedOnderwerp,
+                  drillOffset + DRILL_LIMIT,
+                  { dateField: selectedDrillDateField, basisLabel: selectedDrillBasisLabel }
+                )
+              }
               disabled={!selectedWeek || !drillHasNext || drillLoading}
             >
               Volgende
@@ -2446,7 +3920,7 @@ export default function Home() {
               </div>
             </div>
           ) : (
-            <div style={{ color: "var(--text-muted)" }}>Klik op een punt in “Volume per week” om tickets te zien.</div>
+            <div style={{ color: "var(--text-muted)" }}>Klik op een punt in “Aantal tickets per week” om tickets te zien.</div>
           )}
         </div>
       </div>
@@ -2549,6 +4023,29 @@ export default function Home() {
           to {
             opacity: 1;
             transform: translateY(0) scale(1);
+          }
+        }
+        @keyframes alertIn {
+          from {
+            opacity: 0;
+            transform: translateY(-8px) scale(0.98);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
+        @keyframes dropPulse {
+          0% {
+            background-position: 180% 0;
+            opacity: 0.66;
+          }
+          50% {
+            opacity: 1;
+          }
+          100% {
+            background-position: -30% 0;
+            opacity: 0.66;
           }
         }
       `}</style>
