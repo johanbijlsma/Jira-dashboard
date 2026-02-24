@@ -50,7 +50,17 @@ _sync_last_result = None
 _schema_checked = False
 _issue_existence_cache = {}
 _issue_existence_cache_ttl_seconds = 60
-VACATION_TEAM_MEMBERS = {"Johan", "Ashley", "Jarno"}
+DEFAULT_SERVICEDESK_TEAM_MEMBERS = ["Johan", "Ashley", "Jarno"]
+DEFAULT_NON_SERVICEDESK_ONDERWERPEN = {
+    "Koppelingen",
+    "datadump",
+    "Rest-endpoints",
+    "migratie",
+    "SSO-koppeling",
+    "UWV-koppeling",
+    "Datadump",
+    "Migratie",
+}
 
 # Prefer POSTGRES_* (from docker/.env). Fall back to DB_* for backward compatibility.
 PG_HOST = os.environ.get("POSTGRES_HOST") or os.environ.get("DB_HOST") or "localhost"
@@ -105,6 +115,16 @@ def ensure_schema():
         )
         cur.execute(
             """
+            create table if not exists dashboard_config (
+              id integer primary key,
+              servicedesk_team_members text[] not null default '{}',
+              servicedesk_onderwerpen text[] not null default '{}',
+              updated_at timestamptz not null default now()
+            );
+            """
+        )
+        cur.execute(
+            """
             create table if not exists vacations (
               id bigserial primary key,
               member_name text not null,
@@ -134,6 +154,60 @@ def ensure_schema():
         cur.execute("alter table vacations add column if not exists updated_at timestamptz not null default now();")
         cur.execute("create index if not exists vacations_start_date_idx on vacations(start_date);")
         cur.execute("create index if not exists vacations_end_date_idx on vacations(end_date);")
+        cur.execute("alter table dashboard_config add column if not exists servicedesk_team_members text[] not null default '{}';")
+        cur.execute("alter table dashboard_config add column if not exists servicedesk_onderwerpen text[] not null default '{}';")
+        cur.execute("alter table dashboard_config add column if not exists updated_at timestamptz not null default now();")
+        cur.execute("insert into dashboard_config(id) values (1) on conflict (id) do nothing;")
+        cur.execute(
+            """
+            update dashboard_config
+            set servicedesk_team_members = coalesce(
+                  (
+                    select array_agg(x)
+                    from (
+                      select distinct assignee as x
+                      from issues
+                      where assignee is not null
+                        and assignee <> ''
+                        and lower(assignee) = any(%s::text[])
+                      order by 1
+                    ) t
+                  ),
+                  (
+                    select array_agg(x)
+                    from (
+                      select assignee as x
+                      from issues
+                      where assignee is not null
+                        and assignee <> ''
+                      group by assignee
+                      order by count(*) desc, assignee asc
+                      limit 5
+                    ) t2
+                  ),
+                  array[]::text[]
+                ),
+                servicedesk_onderwerpen = (
+                  select coalesce(array_agg(x), array[]::text[])
+                  from (
+                    select distinct onderwerp_logging as x
+                    from issues
+                    where onderwerp_logging is not null
+                      and onderwerp_logging <> ''
+                      and onderwerp_logging <> all(%s::text[])
+                    order by 1
+                  ) t
+                ),
+                updated_at = now()
+            where id = 1
+              and coalesce(array_length(servicedesk_team_members, 1), 0) = 0
+              and coalesce(array_length(servicedesk_onderwerpen, 1), 0) = 0;
+            """,
+            (
+                [name.lower() for name in DEFAULT_SERVICEDESK_TEAM_MEMBERS],
+                list(DEFAULT_NON_SERVICEDESK_ONDERWERPEN),
+            ),
+        )
         c.commit()
     _schema_checked = True
 
@@ -142,6 +216,57 @@ class VacationPayload(BaseModel):
     member_name: str
     start_date: str
     end_date: str
+
+
+class ServicedeskConfigPayload(BaseModel):
+    team_members: list[str]
+    onderwerpen: list[str]
+
+
+def _normalize_text_list(values):
+    if not isinstance(values, list):
+        return []
+    out = []
+    for v in values:
+        text = str(v or "").strip()
+        if text:
+            out.append(text)
+    return list(dict.fromkeys(out))
+
+
+def get_servicedesk_config():
+    ensure_schema()
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            select servicedesk_team_members, servicedesk_onderwerpen, updated_at
+            from dashboard_config
+            where id = 1;
+            """
+        )
+        row = cur.fetchone()
+    if not row:
+        return {"team_members": [], "onderwerpen": [], "updated_at": None}
+    return {
+        "team_members": list(row[0] or []),
+        "onderwerpen": list(row[1] or []),
+        "updated_at": row[2].isoformat() if row[2] else None,
+    }
+
+
+def servicedesk_filter_clause(alias: str = ""):
+    prefix = f"{alias}." if alias else ""
+    return f"""
+      and (
+        not %s
+        or (
+          {prefix}assignee is not null
+          and {prefix}assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          and {prefix}onderwerp_logging is not null
+          and {prefix}onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+        )
+      )
+    """
 
 
 def _parse_iso_date_or_raise(value: str, field_name: str):
@@ -153,8 +278,9 @@ def _parse_iso_date_or_raise(value: str, field_name: str):
 
 def _validate_vacation_payload(payload: VacationPayload):
     member_name = (payload.member_name or "").strip()
-    if member_name not in VACATION_TEAM_MEMBERS:
-        allowed = ", ".join(sorted(VACATION_TEAM_MEMBERS))
+    team_members = get_servicedesk_config().get("team_members") or []
+    if member_name not in team_members:
+        allowed = ", ".join(team_members) if team_members else "(geen teamleden geconfigureerd)"
         raise ValueError(f"Onbekend teamlid. Kies uit: {allowed}.")
     start_date = _parse_iso_date_or_raise(payload.start_date, "start_date")
     end_date = _parse_iso_date_or_raise(payload.end_date, "end_date")
@@ -550,6 +676,35 @@ def meta():
     }
 
 
+@app.get("/config/servicedesk")
+def servicedesk_config():
+    return get_servicedesk_config()
+
+
+@app.put("/config/servicedesk")
+def update_servicedesk_config(payload: ServicedeskConfigPayload):
+    ensure_schema()
+    team_members = _normalize_text_list(payload.team_members)
+    onderwerpen = _normalize_text_list(payload.onderwerpen)
+    if not team_members:
+        raise HTTPException(status_code=400, detail="Selecteer minimaal 1 servicedesk teamlid.")
+    if not onderwerpen:
+        raise HTTPException(status_code=400, detail="Selecteer minimaal 1 servicedesk onderwerp.")
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            update dashboard_config
+            set servicedesk_team_members = %s,
+                servicedesk_onderwerpen = %s,
+                updated_at = now()
+            where id = 1;
+            """,
+            (team_members, onderwerpen),
+        )
+        c.commit()
+    return get_servicedesk_config()
+
+
 @app.get("/metrics/volume_weekly")
 def volume_weekly(
     date_from: str = Query(..., description="ISO date/time, e.g. 2025-01-01"),
@@ -576,8 +731,12 @@ def volume_weekly(
       and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
       and (
         not %s
-        or onderwerp_logging is null
-        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
+        or (
+          assignee is not null
+          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging is not null
+          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+        )
       )
     group by 1,2
     order by 1,2;
@@ -632,10 +791,14 @@ def inflow_vs_closed_weekly(
         and (%s is null or assignee = %s)
         and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
         and (
-          not %s
-          or onderwerp_logging is null
-          or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
+        not %s
+        or (
+          assignee is not null
+          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging is not null
+          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
         )
+      )
       group by 1
     ),
     closed as (
@@ -651,10 +814,14 @@ def inflow_vs_closed_weekly(
         and (%s is null or assignee = %s)
         and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
         and (
-          not %s
-          or onderwerp_logging is null
-          or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
+        not %s
+        or (
+          assignee is not null
+          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging is not null
+          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
         )
+      )
       group by 1
     )
     select
@@ -738,8 +905,12 @@ def leadtime_p90_by_type(
       and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
       and (
         not %s
-        or onderwerp_logging is null
-        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
+        or (
+          assignee is not null
+          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging is not null
+          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+        )
       )
     group by 1
     order by p90_hours desc nulls last, 1;
@@ -821,8 +992,12 @@ def time_summary(
       and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
       and (
         not %s
-        or onderwerp_logging is null
-        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
+        or (
+          assignee is not null
+          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging is not null
+          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+        )
       );
     """
     with conn() as c, c.cursor() as cur:
@@ -887,8 +1062,12 @@ def time_to_resolution_weekly_by_type(
       and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
       and (
         not %s
-        or onderwerp_logging is null
-        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
+        or (
+          assignee is not null
+          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging is not null
+          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+        )
       )
     group by 1,2
     order by 1,2;
@@ -954,8 +1133,12 @@ def time_to_first_response_weekly(
       and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
       and (
         not %s
-        or onderwerp_logging is null
-        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
+        or (
+          assignee is not null
+          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging is not null
+          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+        )
       )
     group by 1
     order by 1;
@@ -1017,8 +1200,12 @@ def volume_by_priority(
       and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
       and (
         not %s
-        or onderwerp_logging is null
-        or onderwerp_logging not in ('Koppelingen', 'Datadump', 'Rest-endpoints', 'Migratie', 'SSO-koppeling', 'UWV-koppeling')
+        or (
+          assignee is not null
+          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging is not null
+          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+        )
       )
     group by 1
     order by 2 desc, 1;
@@ -1072,8 +1259,12 @@ def volume_by_assignee(
       and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
       and (
         not %s
-        or onderwerp_logging is null
-        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
+        or (
+          assignee is not null
+          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging is not null
+          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+        )
       )
     group by 1
     order by 2 desc, 1;
@@ -1127,8 +1318,12 @@ def volume_weekly_by_onderwerp(
       and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
       and (
         not %s
-        or onderwerp_logging is null
-        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
+        or (
+          assignee is not null
+          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging is not null
+          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+        )
       )
     group by 1,2
     order by 1,2;
@@ -1183,8 +1378,12 @@ def volume_weekly_by_organization(
       and (%s is null or org.org_name = %s)
       and (
         not %s
-        or i.onderwerp_logging is null
-        or i.onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
+        or (
+          i.assignee is not null
+          and i.assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          and i.onderwerp_logging is not null
+          and i.onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+        )
       )
     group by 1,2
     order by 1,2;
@@ -1245,8 +1444,12 @@ def issues(
       and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
       and (
         not %s
-        or onderwerp_logging is null
-        or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
+        or (
+          assignee is not null
+          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging is not null
+          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+        )
       )
     order by {date_column} desc
     limit %s offset %s;
@@ -1305,10 +1508,14 @@ def alerts_live(servicedesk_only: bool = True):
             from issues
             where created_at >= now() - interval '24 hours'
               and (
-                not %s
-                or onderwerp_logging is null
-                or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
-              )
+        not %s
+        or (
+          assignee is not null
+          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging is not null
+          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+        )
+      )
             order by created_at desc
             limit 500;
             """,
@@ -1329,10 +1536,14 @@ def alerts_live(servicedesk_only: bool = True):
               and first_response_due_at >= now()
               and first_response_due_at <= now() + interval '5 minutes'
               and (
-                not %s
-                or onderwerp_logging is null
-                or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
-              )
+        not %s
+        or (
+          assignee is not null
+          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging is not null
+          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+        )
+      )
             order by first_response_due_at asc
             limit 25;
             """,
@@ -1351,10 +1562,14 @@ def alerts_live(servicedesk_only: bool = True):
               and first_response_due_at is not null
               and first_response_due_at < now()
               and (
-                not %s
-                or onderwerp_logging is null
-                or onderwerp_logging not in ('Koppelingen', 'datadump', 'Rest-endpoints', 'migratie', 'SSO-koppeling', 'UWV-koppeling')
-              )
+        not %s
+        or (
+          assignee is not null
+          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging is not null
+          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+        )
+      )
             order by first_response_due_at asc
             limit 25;
             """,

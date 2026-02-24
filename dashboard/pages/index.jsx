@@ -510,8 +510,15 @@ if (!ChartJS.registry.plugins.get("simpleDataLabels")) {
 }
 
 function EmptyChartState({ filterLabel, style }) {
+  const boundedStyle = {
+    ...style,
+    minHeight: 0,
+    maxHeight: "100%",
+    height: style?.height || "100%",
+    overflow: "hidden",
+  };
   return (
-    <div style={style}>
+    <div style={boundedStyle}>
       <span>{`Verborgen omdat filter \`${filterLabel}\` actief is.`}</span>
     </div>
   );
@@ -547,6 +554,11 @@ export default function Home() {
   const [servicedeskOnly, setServicedeskOnly] = useState(DEFAULT_SERVICEDESK_ONLY);
 
   const [meta, setMeta] = useState({ request_types: [], onderwerpen: [], priorities: [], assignees: [], organizations: [] });
+  const [servicedeskConfig, setServicedeskConfig] = useState({ team_members: [], onderwerpen: [], updated_at: null });
+  const [teamMembersDraft, setTeamMembersDraft] = useState([]);
+  const [onderwerpenDraft, setOnderwerpenDraft] = useState([]);
+  const [teamConfigSaving, setTeamConfigSaving] = useState(false);
+  const [onderwerpConfigSaving, setOnderwerpConfigSaving] = useState(false);
   const [volume, setVolume] = useState([]);
   const [onderwerpVolume, setOnderwerpVolume] = useState([]);
   const [priorityVolume, setPriorityVolume] = useState([]);
@@ -716,6 +728,10 @@ export default function Home() {
     const err = syncStatus.last_error ? ` · fout: ${syncStatus.last_error}` : "";
     return `${base}${upserts}${err}`;
   }, [syncStatus]);
+  const servicedeskTeamMembers = useMemo(() => {
+    const values = Array.isArray(servicedeskConfig?.team_members) ? servicedeskConfig.team_members : [];
+    return values.length ? values : VACATION_TEAM_MEMBERS;
+  }, [servicedeskConfig]);
   const activeFilterItems = useMemo(() => {
     const items = [];
     if (requestType) items.push(`Type: ${requestType}`);
@@ -815,6 +831,88 @@ export default function Home() {
       return next;
     });
   }, []);
+
+  const toggleTeamMemberDraft = useCallback((name) => {
+    setTeamMembersDraft((prev) =>
+      prev.includes(name) ? prev.filter((x) => x !== name) : [...prev, name]
+    );
+  }, []);
+
+  const toggleOnderwerpDraft = useCallback((name) => {
+    setOnderwerpenDraft((prev) =>
+      prev.includes(name) ? prev.filter((x) => x !== name) : [...prev, name]
+    );
+  }, []);
+
+  const cancelTeamConfig = useCallback(() => {
+    setTeamMembersDraft(Array.isArray(servicedeskConfig?.team_members) ? servicedeskConfig.team_members : []);
+  }, [servicedeskConfig]);
+
+  const cancelOnderwerpConfig = useCallback(() => {
+    setOnderwerpenDraft(Array.isArray(servicedeskConfig?.onderwerpen) ? servicedeskConfig.onderwerpen : []);
+  }, [servicedeskConfig]);
+
+  const saveTeamConfig = useCallback(async () => {
+    if (!teamMembersDraft.length) {
+      flashToast("Selecteer minimaal 1 servicedesk teamlid.", "error");
+      return;
+    }
+    setTeamConfigSaving(true);
+    try {
+      const res = await fetch(`${API}/config/servicedesk`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          team_members: teamMembersDraft,
+          onderwerpen: onderwerpenDraft,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.detail || "Opslaan van teamleden mislukt.");
+      }
+      const updated = await res.json();
+      setServicedeskConfig(updated);
+      setTeamMembersDraft(Array.isArray(updated?.team_members) ? updated.team_members : []);
+      setOnderwerpenDraft(Array.isArray(updated?.onderwerpen) ? updated.onderwerpen : []);
+      flashToast("Servicedesk teamleden opgeslagen.");
+    } catch (err) {
+      flashToast(err?.message || "Opslaan van teamleden mislukt.", "error");
+    } finally {
+      setTeamConfigSaving(false);
+    }
+  }, [teamMembersDraft, onderwerpenDraft, flashToast]);
+
+  const saveOnderwerpConfig = useCallback(async () => {
+    if (!onderwerpenDraft.length) {
+      flashToast("Selecteer minimaal 1 servicedesk onderwerp.", "error");
+      return;
+    }
+    setOnderwerpConfigSaving(true);
+    try {
+      const res = await fetch(`${API}/config/servicedesk`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          team_members: teamMembersDraft,
+          onderwerpen: onderwerpenDraft,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.detail || "Opslaan van onderwerpen mislukt.");
+      }
+      const updated = await res.json();
+      setServicedeskConfig(updated);
+      setTeamMembersDraft(Array.isArray(updated?.team_members) ? updated.team_members : []);
+      setOnderwerpenDraft(Array.isArray(updated?.onderwerpen) ? updated.onderwerpen : []);
+      flashToast("Servicedesk onderwerpen opgeslagen.");
+    } catch (err) {
+      flashToast(err?.message || "Opslaan van onderwerpen mislukt.", "error");
+    } finally {
+      setOnderwerpConfigSaving(false);
+    }
+  }, [teamMembersDraft, onderwerpenDraft, flashToast]);
 
   const saveDashboardLayout = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -922,18 +1020,31 @@ export default function Home() {
     setTodayVacations(Array.isArray(todayData) ? todayData : []);
   }, []);
 
+  const refreshServicedeskConfig = useCallback(async () => {
+    const res = await fetch(`${API}/config/servicedesk`);
+    const data = await res.json();
+    const normalized = {
+      team_members: Array.isArray(data?.team_members) ? data.team_members : [],
+      onderwerpen: Array.isArray(data?.onderwerpen) ? data.onderwerpen : [],
+      updated_at: data?.updated_at || null,
+    };
+    setServicedeskConfig(normalized);
+    setTeamMembersDraft(normalized.team_members);
+    setOnderwerpenDraft(normalized.onderwerpen);
+  }, []);
+
   const startVacationCreate = useCallback(() => {
     const todayIso = isoDate(new Date());
     setVacationForm({
       id: null,
-      memberName: VACATION_TEAM_MEMBERS[0],
+      memberName: servicedeskTeamMembers[0] || "",
       startDate: todayIso,
       endDate: todayIso,
     });
     setVacationStartUi(fmtDate(todayIso));
     setVacationEndUi(fmtDate(todayIso));
     setVacationEditMode(true);
-  }, []);
+  }, [servicedeskTeamMembers]);
 
   const startVacationEdit = useCallback((vacation) => {
     if (!vacation) return;
@@ -955,13 +1066,13 @@ export default function Home() {
     setVacationSaving(false);
     setVacationForm({
       id: null,
-      memberName: VACATION_TEAM_MEMBERS[0],
+      memberName: servicedeskTeamMembers[0] || "",
       startDate: "",
       endDate: "",
     });
     setVacationStartUi("");
     setVacationEndUi("");
-  }, []);
+  }, [servicedeskTeamMembers]);
 
   const saveVacation = useCallback(async () => {
     const memberName = String(vacationForm.memberName || "").trim();
@@ -1197,6 +1308,10 @@ export default function Home() {
   useEffect(() => {
     refreshVacations().catch(() => {});
   }, [refreshVacations]);
+
+  useEffect(() => {
+    refreshServicedeskConfig().catch(() => {});
+  }, [refreshServicedeskConfig]);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -1660,8 +1775,10 @@ export default function Home() {
 
   const assigneeTopVolume = useMemo(() => {
     const data = Array.isArray(assigneeVolume) ? assigneeVolume : [];
-    return data.slice(0, 3);
-  }, [assigneeVolume]);
+    const allowed = Array.isArray(servicedeskConfig?.team_members) ? servicedeskConfig.team_members : [];
+    const filtered = servicedeskOnly && allowed.length ? data.filter((row) => allowed.includes(row?.assignee)) : data;
+    return filtered.slice(0, 5);
+  }, [assigneeVolume, servicedeskConfig, servicedeskOnly]);
 
   const assigneeColors = useMemo(
     () => assigneeTopVolume.map((_, i) => uniqueChartColor(i, assigneeTopVolume.length)),
@@ -2009,6 +2126,12 @@ export default function Home() {
     return `${fmtDateWithWeekday(startDate)} t/m ${fmtDateWithWeekday(endDate)}`;
   }, []);
 
+  const isVacationActiveToday = useCallback((item) => {
+    if (!item?.start_date || !item?.end_date) return false;
+    const todayIso = isoDate(new Date());
+    return item.start_date <= todayIso && item.end_date >= todayIso;
+  }, []);
+
   useEffect(() => {
     if (!vacationBanner) return;
     setVacationBannerEmoji(
@@ -2026,6 +2149,16 @@ export default function Home() {
     }, 3500);
     return () => clearInterval(t);
   }, [vacationBanner]);
+
+  useEffect(() => {
+    if (!servicedeskTeamMembers.length) return;
+    setVacationForm((prev) => {
+      if (!prev.memberName || !servicedeskTeamMembers.includes(prev.memberName)) {
+        return { ...prev, memberName: servicedeskTeamMembers[0] };
+      }
+      return prev;
+    });
+  }, [servicedeskTeamMembers]);
 
   function trendInfo(last, prev) {
     const l = Number(last) || 0;
@@ -2101,6 +2234,37 @@ export default function Home() {
     gap: 10,
     alignItems: "end",
   };
+  const configSectionStyle = {
+    marginTop: 14,
+    borderTop: "1px solid var(--border)",
+    paddingTop: 12,
+    display: "grid",
+    gap: 8,
+  };
+  const configDetailsStyle = {
+    border: "1px solid var(--border)",
+    borderRadius: 10,
+    background: "var(--surface)",
+    padding: "8px 10px",
+  };
+  const configSummaryStyle = {
+    cursor: "pointer",
+    fontWeight: 700,
+    color: "var(--text-main)",
+    outline: "none",
+  };
+  const configListStyle = {
+    marginTop: 8,
+    border: "1px solid var(--border)",
+    borderRadius: 8,
+    padding: 8,
+    maxHeight: 200,
+    overflow: "auto",
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+    gap: 6,
+    alignContent: "start",
+  };
   const fieldStyle = { display: "flex", flexDirection: "column", gap: 6, minWidth: 0 };
   const labelStyle = { fontSize: 12, fontWeight: 600, color: "var(--text-subtle)" };
   const inputBaseStyle = {
@@ -2124,9 +2288,11 @@ export default function Home() {
   };
   const hiddenChartPlaceholderStyle = {
     height: "100%",
+    minHeight: 0,
+    maxHeight: "100%",
     width: "100%",
     boxSizing: "border-box",
-    border: "1px solid var(--border)",
+    border: "none",
     borderRadius: 10,
     color: "var(--text-muted)",
     display: "flex",
@@ -2134,6 +2300,7 @@ export default function Home() {
     justifyContent: "center",
     textAlign: "center",
     padding: 10,
+    overflow: "hidden",
   };
   const rowCardHeight = isTvMode ? "clamp(170px, 20dvh, 340px)" : "clamp(150px, 18dvh, 320px)";
   const donutBodyStyle = {
@@ -2510,6 +2677,7 @@ export default function Home() {
     justifyContent: "space-between",
     gap: 8,
     alignItems: "center",
+    minHeight: 52,
   };
   const vacationRowActionsStyle = {
     display: "inline-flex",
@@ -2794,7 +2962,7 @@ export default function Home() {
                 </tbody>
               </table>
             ) : (
-              <div style={emptyStyle}>Verborgen omdat filter `Periode` actief is.</div>
+              <EmptyChartState filterLabel="Periode" style={emptyStyle} />
             )}
           </div>
         </div>
@@ -2902,7 +3070,7 @@ export default function Home() {
               <EmptyChartState filterLabel="Prioriteit" style={emptyStyle} />
             )
           ) : (
-            <div style={emptyStyle}>Verborgen omdat filter `Prioriteit` actief is.</div>
+            <EmptyChartState filterLabel="Prioriteit" style={emptyStyle} />
           )}
         </div>
       );
@@ -2936,7 +3104,7 @@ export default function Home() {
               <EmptyChartState filterLabel="Assignee" style={emptyStyle} />
             )
           ) : (
-            <div style={emptyStyle}>Verborgen omdat filter `Assignee` actief is.</div>
+            <EmptyChartState filterLabel="Assignee" style={emptyStyle} />
           )}
         </div>
       );
@@ -3161,7 +3329,7 @@ export default function Home() {
                     onChange={(e) => setVacationForm((prev) => ({ ...prev, memberName: e.target.value }))}
                     style={inputBaseStyle}
                   >
-                    {VACATION_TEAM_MEMBERS.map((member) => (
+                    {servicedeskTeamMembers.map((member) => (
                       <option key={`vac-member-${member}`} value={member}>
                         {member}
                       </option>
@@ -3296,10 +3464,20 @@ export default function Home() {
             <>
               <ul style={vacationListStyle}>
                 {upcomingVacations.slice(0, 3).map((item) => (
+                  (() => {
+                    const isActiveToday = isVacationActiveToday(item);
+                    const activeTodayStyle = isActiveToday
+                      ? {
+                          minHeight: 78, // ~1.5x base item height
+                          borderColor: "color-mix(in srgb, var(--ok) 55%, var(--border))",
+                          background: "color-mix(in srgb, var(--ok) 18%, var(--surface))",
+                        }
+                      : null;
+                    return (
                   <li
                     key={`vac-upcoming-${item.id}`}
                     className="vacation-row"
-                    style={vacationItemStyle}
+                    style={{ ...vacationItemStyle, ...(activeTodayStyle || {}) }}
                     onMouseEnter={() => setVacationHoverId(item.id)}
                     onMouseLeave={() => setVacationHoverId((prev) => (prev === item.id ? null : prev))}
                     onFocus={() => setVacationHoverId(item.id)}
@@ -3346,6 +3524,8 @@ export default function Home() {
                       </button>
                     </div>
                   </li>
+                    );
+                  })()
                 ))}
               </ul>
               {upcomingVacationTotal > 3 ? (
@@ -3394,8 +3574,19 @@ export default function Home() {
       },
       topPartner: {
         label: "Partner met meeste tickets volledige week",
-        value: `${kpiStats.topPartnerLabel} (${num(kpiStats.topPartnerTickets)})`,
-        sub: `Week ervoor: ${kpiStats.topPartnerPrevLabel} (${num(kpiStats.topPartnerPrevTickets)})`,
+        value: (
+          <span>
+            <span>{kpiStats.topPartnerLabel}</span>{" "}
+            <span style={{ fontSize: "0.7em", fontWeight: 600, color: "var(--text-muted)" }}>met</span>{" "}
+            <span>{num(kpiStats.topPartnerTickets)}</span>{" "}
+            <span style={{ fontSize: "0.7em", fontWeight: 600, color: "var(--text-muted)" }}>tickets</span>
+          </span>
+        ),
+        sub: (
+          <span>
+            Week ervoor: <strong>{kpiStats.topPartnerPrevLabel}</strong> met <strong>{num(kpiStats.topPartnerPrevTickets)}</strong> tickets
+          </span>
+        ),
       },
     }),
     [kpiStats]
@@ -3942,20 +4133,56 @@ export default function Home() {
           </label>
         </div>
 
-        <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <button onClick={triggerSync} disabled={syncBusy} style={buttonBaseStyle}>
-            {syncBusy ? (
-              <>
-                <span style={{ marginRight: 6 }} aria-hidden>
-                  ⏳
-                </span>
-                Sync bezig…
-              </>
-            ) : (
-              "Sync now"
-            )}
-          </button>
+        <div style={configSectionStyle}>
+          <strong>Dashboard configuratie</strong>
 
+          <details style={configDetailsStyle}>
+            <summary style={configSummaryStyle}>Servicedesk teamleden</summary>
+            <div style={configListStyle}>
+              {meta.assignees.map((name) => (
+                <label key={`cfg-team-${name}`} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 24 }}>
+                  <input
+                    type="checkbox"
+                    checked={teamMembersDraft.includes(name)}
+                    onChange={() => toggleTeamMemberDraft(name)}
+                  />
+                  <span>{name}</span>
+                </label>
+              ))}
+            </div>
+            <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+              <button type="button" onClick={saveTeamConfig} disabled={teamConfigSaving} style={layoutPrimaryButtonStyle}>
+                Opslaan
+              </button>
+              <button type="button" onClick={cancelTeamConfig} disabled={teamConfigSaving} style={buttonBaseStyle}>
+                Annuleren
+              </button>
+            </div>
+          </details>
+
+          <details style={configDetailsStyle}>
+            <summary style={configSummaryStyle}>Servicedesk Onderwerpen</summary>
+            <div style={configListStyle}>
+              {meta.onderwerpen.map((name) => (
+                <label key={`cfg-onderwerp-${name}`} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 24 }}>
+                  <input
+                    type="checkbox"
+                    checked={onderwerpenDraft.includes(name)}
+                    onChange={() => toggleOnderwerpDraft(name)}
+                  />
+                  <span>{name}</span>
+                </label>
+              ))}
+            </div>
+            <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+              <button type="button" onClick={saveOnderwerpConfig} disabled={onderwerpConfigSaving} style={layoutPrimaryButtonStyle}>
+                Opslaan
+              </button>
+              <button type="button" onClick={cancelOnderwerpConfig} disabled={onderwerpConfigSaving} style={buttonBaseStyle}>
+                Annuleren
+              </button>
+            </div>
+          </details>
         </div>
 
             </div>
