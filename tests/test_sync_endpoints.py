@@ -21,7 +21,7 @@ def test_sync_status_exposes_runtime_state(monkeypatch):
     assert data["running"] is True
     assert data["last_run"] == "2026-02-17T10:31:00Z"
     assert data["last_result"] == {"upserts": 12}
-    assert data["last_sync"] == "2026-02-17T10:30:00"
+    assert data["last_sync"] == "2026-02-17T10:30:00Z"
 
 
 def test_sync_endpoint_queues_background_task(monkeypatch):
