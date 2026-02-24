@@ -28,6 +28,9 @@ const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
 const JIRA_BASE = "https://planningsagenda.atlassian.net";
 const DEFAULT_SERVICEDESK_ONLY = true;
 const DASHBOARD_CONFIG_STORAGE_KEY = "jsm_dashboard_layout_v2";
+const TV_MODE_STORAGE_KEY = "jsm_dashboard_tv_mode";
+const VACATION_TEAM_MEMBERS = ["Johan", "Ashley", "Jarno"];
+const VACATION_BANNER_EMOJIS = ["🏖️", "🌴", "😎", "🍹", "🎉", "🧳", "🛟", "🌞"];
 const TYPE_COLORS = {
   rfc: "#2e7d32",
   incident: "#c62828",
@@ -47,6 +50,7 @@ const CARD_TITLES = {
   incidentResolution: "Time to Resolution",
   firstResponseAll: "Time to First Response (alle tickets)",
   organizationWeekly: "Tickets per partner per week",
+  vacationServicedesk: "Vakantie Servicedesk",
 };
 const KPI_KEYS = ["totalTickets", "latestTickets", "avgPerWeek", "topType", "topSubject", "topPartner"];
 const NON_KPI_CARD_KEYS = ["topOnderwerpen", ...Object.keys(CARD_TITLES)];
@@ -58,7 +62,7 @@ function createDefaultDashboardLayout() {
     kpiRow: [...KPI_KEYS],
     hiddenKpis: [],
     cardRows: [
-      ["topOnderwerpen", "volume", "priority", "organizationWeekly"],
+      ["topOnderwerpen", "volume", "priority", "organizationWeekly", "vacationServicedesk"],
       ["assignee", "onderwerp", "p90", "inflowVsClosed", "incidentResolution", "firstResponseAll"],
     ],
     hiddenCards: [],
@@ -82,6 +86,21 @@ function fmtDate(value) {
   }).format(dt);
 }
 
+function fmtDateWithWeekday(value) {
+  if (!value) return "";
+  const dt = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(dt.getTime())) return "";
+  const weekday = new Intl.DateTimeFormat("nl-NL", { weekday: "long" }).format(dt);
+  const datePart = new Intl.DateTimeFormat("nl-NL", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  })
+    .format(dt)
+    .replaceAll("/", "-");
+  return `${weekday.charAt(0).toUpperCase()}${weekday.slice(1)} ${datePart}`;
+}
+
 
 function fmtDateTime(value) {
   if (!value) return "";
@@ -94,6 +113,7 @@ function fmtDateTime(value) {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
+    timeZone: "Europe/Amsterdam",
   }).format(dt);
 }
 
@@ -131,6 +151,15 @@ function addDaysIso(yyyyMmDd, days) {
   const dt = new Date(Date.UTC(y, m - 1, d));
   dt.setUTCDate(dt.getUTCDate() + days);
   return dt.toISOString().slice(0, 10);
+}
+
+function isTextEntryTarget(target) {
+  const el = target instanceof HTMLElement ? target : null;
+  if (!el) return false;
+  if (el.isContentEditable) return true;
+  const tagName = String(el.tagName || "").toLowerCase();
+  if (tagName === "input" || tagName === "textarea" || tagName === "select") return true;
+  return !!el.closest?.("input, textarea, select, [contenteditable='true']");
 }
 
 function Toast({ message, kind, onClose }) {
@@ -361,13 +390,16 @@ const SimpleDataLabelsPlugin = {
   id: "simpleDataLabels",
   afterDatasetsDraw(chart, _args, pluginOptions) {
     if (pluginOptions === false) return;
+    if (typeof document !== "undefined" && document.documentElement.dataset.tvMode === "1") return;
+    // On compact card heights, datalabels create clutter/cropping; skip them.
+    if (chart.height < 260) return;
     const opts = {
       mode: "bar", // arc | bar | line
       color: null,
-      fontSize: 11,
+      fontSize: 10,
       fontWeight: "600",
-      lineOffset: 8,
-      barOffset: 8,
+      lineOffset: 6,
+      barOffset: 6,
       maxLabels: 14,
       minArcPct: 6,
       datasetIndexes: null,
@@ -406,11 +438,17 @@ const SimpleDataLabelsPlugin = {
     }
 
     function drawLabel(label, x, y, fill = textColor) {
+      const metrics = ctx.measureText(label);
+      const labelWidth = Math.ceil(metrics.width);
+      const labelHeight = Math.ceil(opts.fontSize * 1.25);
+      const pad = 4;
+      const clampedX = Math.max(pad + labelWidth / 2, Math.min(chart.width - pad - labelWidth / 2, x));
+      const clampedY = Math.max(pad + labelHeight / 2, Math.min(chart.height - pad - labelHeight / 2, y));
       ctx.lineWidth = 3;
       ctx.strokeStyle = haloColor;
-      ctx.strokeText(label, x, y);
+      ctx.strokeText(label, clampedX, clampedY);
       ctx.fillStyle = fill;
-      ctx.fillText(label, x, y);
+      ctx.fillText(label, clampedX, clampedY);
       ctx.fillStyle = textColor;
     }
 
@@ -528,6 +566,23 @@ export default function Home() {
     first_response_due_soon: [],
     first_response_overdue: [],
   });
+  const [upcomingVacations, setUpcomingVacations] = useState([]);
+  const [upcomingVacationTotal, setUpcomingVacationTotal] = useState(0);
+  const [todayVacations, setTodayVacations] = useState([]);
+  const [vacationEditMode, setVacationEditMode] = useState(false);
+  const [vacationSaving, setVacationSaving] = useState(false);
+  const [vacationHoverId, setVacationHoverId] = useState(null);
+  const [vacationBannerEmoji, setVacationBannerEmoji] = useState(VACATION_BANNER_EMOJIS[0]);
+  const [vacationForm, setVacationForm] = useState({
+    id: null,
+    memberName: VACATION_TEAM_MEMBERS[0],
+    startDate: "",
+    endDate: "",
+  });
+  const [vacationStartUi, setVacationStartUi] = useState("");
+  const [vacationEndUi, setVacationEndUi] = useState("");
+  const vacationStartNativeRef = useRef(null);
+  const vacationEndNativeRef = useRef(null);
 
   const [selectedWeek, setSelectedWeek] = useState("");
   const [selectedType, setSelectedType] = useState("");
@@ -549,6 +604,7 @@ export default function Home() {
   const [dashboardLayout, setDashboardLayout] = useState(createDefaultDashboardLayout);
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
   const [topOnderwerpSort, setTopOnderwerpSort] = useState("wow");
+  const [isTvMode, setIsTvMode] = useState(false);
   const autoSyncAttemptRef = useRef(0);
   const seenLiveAlertKeysRef = useRef(new Set());
   const dragStateRef = useRef(null);
@@ -650,6 +706,16 @@ export default function Home() {
 
   const DRILL_LIMIT = 100;
   const syncBusy = syncLoading || !!syncStatus?.running;
+  const syncStatusInlineText = useMemo(() => {
+    if (!syncStatus) return "";
+    const base = syncStatus.running
+      ? "Synchroniseren…"
+      : `Bijgewerkt: ${syncStatus.last_sync ? fmtDateTime(syncStatus.last_sync) : "—"}`;
+    const upserts =
+      syncStatus.last_result?.upserts != null ? ` · ${syncStatus.last_result.upserts} bijgewerkt` : "";
+    const err = syncStatus.last_error ? ` · fout: ${syncStatus.last_error}` : "";
+    return `${base}${upserts}${err}`;
+  }, [syncStatus]);
   const activeFilterItems = useMemo(() => {
     const items = [];
     if (requestType) items.push(`Type: ${requestType}`);
@@ -732,6 +798,24 @@ export default function Home() {
     if (showToast) flashToast("Filters gereset");
   }, [flashToast]);
 
+  const toggleTvMode = useCallback(() => {
+    setIsTvMode((prev) => {
+      const next = !prev;
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.setItem(TV_MODE_STORAGE_KEY, next ? "1" : "0");
+          const url = new URL(window.location.href);
+          if (next) url.searchParams.set("tv", "1");
+          else url.searchParams.delete("tv");
+          window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+        } catch {
+          // no-op
+        }
+      }
+      return next;
+    });
+  }, []);
+
   const saveDashboardLayout = useCallback(() => {
     if (typeof window === "undefined") return;
     const serialized = JSON.stringify(dashboardLayout);
@@ -742,6 +826,7 @@ export default function Home() {
   }, [dashboardLayout, flashToast]);
 
   const startLayoutEditing = useCallback(() => {
+    setVacationEditMode(false);
     setIsLayoutEditing(true);
   }, []);
 
@@ -820,6 +905,132 @@ export default function Home() {
       flashToast(`ALERT SLA <5m: ${newSla[0].issue_key}${newSla.length > 1 ? ` +${newSla.length - 1}` : ""}`, "error", 9000);
     }
   }, [flashToast, servicedeskOnly]);
+
+  const refreshVacations = useCallback(async () => {
+    const [allRes, upcomingRes, todayRes] = await Promise.all([
+      fetch(`${API}/vacations`),
+      fetch(`${API}/vacations/upcoming?limit=3`),
+      fetch(`${API}/vacations/today`),
+    ]);
+    const [allData, upcomingData, todayData] = await Promise.all([
+      allRes.json(),
+      upcomingRes.json(),
+      todayRes.json(),
+    ]);
+    setUpcomingVacationTotal(Array.isArray(allData) ? allData.length : 0);
+    setUpcomingVacations(Array.isArray(upcomingData) ? upcomingData : []);
+    setTodayVacations(Array.isArray(todayData) ? todayData : []);
+  }, []);
+
+  const startVacationCreate = useCallback(() => {
+    const todayIso = isoDate(new Date());
+    setVacationForm({
+      id: null,
+      memberName: VACATION_TEAM_MEMBERS[0],
+      startDate: todayIso,
+      endDate: todayIso,
+    });
+    setVacationStartUi(fmtDate(todayIso));
+    setVacationEndUi(fmtDate(todayIso));
+    setVacationEditMode(true);
+  }, []);
+
+  const startVacationEdit = useCallback((vacation) => {
+    if (!vacation) return;
+    const startDate = vacation.start_date || "";
+    const endDate = vacation.end_date || "";
+    setVacationForm({
+      id: vacation.id,
+      memberName: vacation.member_name || VACATION_TEAM_MEMBERS[0],
+      startDate,
+      endDate,
+    });
+    setVacationStartUi(fmtDate(startDate));
+    setVacationEndUi(fmtDate(endDate));
+    setVacationEditMode(true);
+  }, []);
+
+  const cancelVacationEdit = useCallback(() => {
+    setVacationEditMode(false);
+    setVacationSaving(false);
+    setVacationForm({
+      id: null,
+      memberName: VACATION_TEAM_MEMBERS[0],
+      startDate: "",
+      endDate: "",
+    });
+    setVacationStartUi("");
+    setVacationEndUi("");
+  }, []);
+
+  const saveVacation = useCallback(async () => {
+    const memberName = String(vacationForm.memberName || "").trim();
+    const startDate = String(vacationForm.startDate || "").trim();
+    const endDate = String(vacationForm.endDate || "").trim();
+    const todayIso = isoDate(new Date());
+    if (!memberName || !startDate || !endDate) {
+      flashToast("Vul teamlid, startdatum en einddatum in.", "error");
+      return;
+    }
+    if (startDate < todayIso) {
+      flashToast("Startdatum moet vandaag of later zijn.", "error");
+      return;
+    }
+    if (endDate < startDate) {
+      flashToast("Einddatum mag niet voor de startdatum liggen.", "error");
+      return;
+    }
+
+    setVacationSaving(true);
+    try {
+      const payload = {
+        member_name: memberName,
+        start_date: startDate,
+        end_date: endDate,
+      };
+      const isEdit = !!vacationForm.id;
+      const response = await fetch(
+        isEdit ? `${API}/vacations/${vacationForm.id}` : `${API}/vacations`,
+        {
+          method: isEdit ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }
+      );
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err?.detail || "Vakantie opslaan mislukt.");
+      }
+      await refreshVacations();
+      flashToast("Vakantie opgeslagen");
+      cancelVacationEdit();
+    } catch (err) {
+      flashToast(err?.message || "Vakantie opslaan mislukt.", "error");
+    } finally {
+      setVacationSaving(false);
+    }
+  }, [vacationForm, flashToast, refreshVacations, cancelVacationEdit]);
+
+  const removeVacation = useCallback(async (vacationId) => {
+    if (!vacationId) return;
+    setVacationSaving(true);
+    try {
+      const response = await fetch(`${API}/vacations/${vacationId}`, { method: "DELETE" });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err?.detail || "Vakantie verwijderen mislukt.");
+      }
+      await refreshVacations();
+      flashToast("Vakantie verwijderd");
+      if (vacationForm.id === vacationId) {
+        cancelVacationEdit();
+      }
+    } catch (err) {
+      flashToast(err?.message || "Vakantie verwijderen mislukt.", "error");
+    } finally {
+      setVacationSaving(false);
+    }
+  }, [flashToast, refreshVacations, vacationForm.id, cancelVacationEdit]);
 
   const refreshDashboard = useCallback(async () => {
     const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
@@ -929,6 +1140,31 @@ export default function Home() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    let next = false;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const queryTv = params.get("tv");
+      if (queryTv != null) {
+        next = ["1", "true", "yes", "on"].includes(queryTv.toLowerCase());
+      } else {
+        next = window.localStorage.getItem(TV_MODE_STORAGE_KEY) === "1";
+      }
+    } catch {
+      next = false;
+    }
+    setIsTvMode(next);
+  }, []);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.documentElement.dataset.tvMode = isTvMode ? "1" : "0";
+    return () => {
+      delete document.documentElement.dataset.tvMode;
+    };
+  }, [isTvMode]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
     try {
       const raw = window.localStorage.getItem(DASHBOARD_CONFIG_STORAGE_KEY);
       if (!raw) {
@@ -959,6 +1195,10 @@ export default function Home() {
   }, [refreshLiveAlerts]);
 
   useEffect(() => {
+    refreshVacations().catch(() => {});
+  }, [refreshVacations]);
+
+  useEffect(() => {
     const t = setInterval(() => {
       fetch(`${API}/sync/status`)
         .then((r) => r.json())
@@ -974,6 +1214,13 @@ export default function Home() {
     }, 20000);
     return () => clearInterval(t);
   }, [refreshLiveAlerts]);
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      refreshVacations().catch(() => {});
+    }, 60000);
+    return () => clearInterval(t);
+  }, [refreshVacations]);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -999,10 +1246,28 @@ export default function Home() {
   }, [syncStatus, syncBusy, triggerSync]);
 
   useEffect(() => {
+    if (!vacationEditMode) return;
+    function onBeforeUnload(e) {
+      e.preventDefault();
+      e.returnValue = "";
+      return "";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [vacationEditMode]);
+
+  useEffect(() => {
     function onKeyDown(e) {
       if (hotkeysOpen) return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
       const key = e.key?.toLowerCase();
+      if (vacationEditMode && key === "r" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        flashToast("Vakantiekaart staat in edit-modus. Gebruik Opslaan of Annuleren.", "error");
+        return;
+      }
+      if (isTextEntryTarget(e.target)) return;
+      if (vacationEditMode) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (!["m", "j", "r", "s", "f"].includes(key)) return;
       e.preventDefault();
       const active = document.activeElement;
@@ -1028,11 +1293,12 @@ export default function Home() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [syncBusy, hotkeysOpen, applyDateRange, flashToast, resetFilters, triggerSync]);
+  }, [syncBusy, hotkeysOpen, vacationEditMode, applyDateRange, flashToast, resetFilters, triggerSync]);
 
   useEffect(() => {
     if (!hotkeysOpen) return;
     function onKeyDown(e) {
+      if (isTextEntryTarget(e.target)) return;
       if (e.key === "Escape") setHotkeysOpen(false);
     }
     window.addEventListener("keydown", onKeyDown);
@@ -1054,6 +1320,7 @@ export default function Home() {
   useEffect(() => {
     if (!selectedWeek) return;
     function onKeyDown(e) {
+      if (isTextEntryTarget(e.target)) return;
       if (e.key === "Escape") closeDrilldown();
     }
     window.addEventListener("keydown", onKeyDown);
@@ -1063,6 +1330,7 @@ export default function Home() {
   useEffect(() => {
     if (!expandedCard) return;
     function onKeyDown(e) {
+      if (isTextEntryTarget(e.target)) return;
       if (e.key === "Escape") setExpandedCard("");
     }
     window.addEventListener("keydown", onKeyDown);
@@ -1072,6 +1340,7 @@ export default function Home() {
   useEffect(() => {
     if (!filtersOpen) return;
     function onKeyDown(e) {
+      if (isTextEntryTarget(e.target)) return;
       if (e.key === "Escape") setFiltersOpen(false);
     }
     window.addEventListener("keydown", onKeyDown);
@@ -1710,6 +1979,54 @@ export default function Home() {
       .slice(0, 10);
   }, [fullWeekInfo, weeks, onderwerpVolume, topOnderwerpSort]);
 
+  const vacationBanner = useMemo(() => {
+    const active = Array.isArray(todayVacations) ? todayVacations : [];
+    if (!active.length) return null;
+    const names = Array.from(new Set(active.map((item) => item?.member_name).filter(Boolean)));
+    if (!names.length) return null;
+    if (names.length === 1) {
+      const memberName = names[0];
+      const memberRows = active.filter((item) => item?.member_name === memberName);
+      const endDates = memberRows.map((item) => item?.end_date).filter(Boolean).sort();
+      const latestEndDate = endDates.length ? endDates[endDates.length - 1] : null;
+      const todayIso = isoDate(new Date());
+      if (latestEndDate && latestEndDate > todayIso) {
+        return { text: `Vandaag is ${memberName} vrij tot en met ${fmtDateWithWeekday(latestEndDate)}` };
+      }
+      return { text: `Vandaag is ${memberName} vrij` };
+    }
+    if (names.length === 2) {
+      return { text: `Vandaag zijn ${names[0]} en ${names[1]} vrij` };
+    }
+    const last = names[names.length - 1];
+    const start = names.slice(0, -1).join(", ");
+    return { text: `Vandaag zijn ${start} en ${last} vrij` };
+  }, [todayVacations]);
+
+  const formatVacationRangeLabel = useCallback((startDate, endDate) => {
+    if (!startDate || !endDate) return "";
+    if (startDate === endDate) return fmtDateWithWeekday(startDate);
+    return `${fmtDateWithWeekday(startDate)} t/m ${fmtDateWithWeekday(endDate)}`;
+  }, []);
+
+  useEffect(() => {
+    if (!vacationBanner) return;
+    setVacationBannerEmoji(
+      VACATION_BANNER_EMOJIS[Math.floor(Math.random() * VACATION_BANNER_EMOJIS.length)]
+    );
+    const t = setInterval(() => {
+      setVacationBannerEmoji((prev) => {
+        const currentIdx = VACATION_BANNER_EMOJIS.indexOf(prev);
+        const nextIdx =
+          currentIdx >= 0
+            ? (currentIdx + 1) % VACATION_BANNER_EMOJIS.length
+            : Math.floor(Math.random() * VACATION_BANNER_EMOJIS.length);
+        return VACATION_BANNER_EMOJIS[nextIdx];
+      });
+    }, 3500);
+    return () => clearInterval(t);
+  }, [vacationBanner]);
+
   function trendInfo(last, prev) {
     const l = Number(last) || 0;
     const p = Number(prev) || 0;
@@ -1818,7 +2135,7 @@ export default function Home() {
     textAlign: "center",
     padding: 10,
   };
-  const rowCardHeight = "clamp(220px, 24vh, 320px)";
+  const rowCardHeight = isTvMode ? "clamp(170px, 20dvh, 340px)" : "clamp(150px, 18dvh, 320px)";
   const donutBodyStyle = {
     height: "100%",
     display: "flex",
@@ -1829,9 +2146,11 @@ export default function Home() {
     border: "1px solid var(--border-strong)",
     borderRadius: 10,
     background: "var(--surface)",
-    padding: 8,
+    padding: 10,
     minWidth: 0,
-    height: rowCardHeight,
+    height: "100%",
+    minHeight: 0,
+    overflow: "hidden",
     display: "flex",
     flexDirection: "column",
   };
@@ -1843,31 +2162,42 @@ export default function Home() {
   const interactionDisabledStyle = isLayoutEditing ? { pointerEvents: "none", userSelect: "none" } : null;
   const pageStyle = {
     fontFamily: "system-ui",
-    padding: 10,
+    padding: isTvMode ? "clamp(8px, 1dvh, 12px)" : "clamp(8px, 1.2dvh, 14px)",
+    paddingBottom: isTvMode ? "clamp(20px, 3dvh, 40px)" : "clamp(20px, 3dvh, 40px)",
     maxWidth: "100%",
     margin: "0 auto",
     background: "var(--page-bg)",
     color: "var(--text-main)",
-    minHeight: "100vh",
-    height: "100vh",
+    minHeight: "100dvh",
+    height: "100dvh",
     overflow: "hidden",
+    display: "flex",
+    flexDirection: "column",
   };
   const kpiGridStyle = {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-    gap: 8,
-    marginBottom: 8,
+    gap: isTvMode ? "clamp(8px, 0.8dvh, 12px)" : "clamp(8px, 1dvh, 14px)",
+    marginBottom: isTvMode ? "clamp(8px, 0.8dvh, 12px)" : "clamp(8px, 1dvh, 14px)",
     width: "100%",
   };
   const cardRowsWrapStyle = {
     display: "grid",
-    gap: 8,
+    gap: isTvMode ? "clamp(8px, 0.8dvh, 12px)" : "clamp(8px, 1dvh, 14px)",
     width: "100%",
+    flex: "1 1 0",
+    minHeight: 0,
+    overflow: "hidden",
+    maxHeight: "calc(100% - clamp(20px, 3dvh, 44px))",
+    gridTemplateRows: "repeat(2, minmax(0, 1fr))",
+    marginBottom: isTvMode ? "clamp(16px, 2.2dvh, 28px)" : "clamp(16px, 2.2dvh, 28px)",
   };
   const cardRowStyle = {
     display: "grid",
-    gap: 8,
-    minHeight: rowCardHeight,
+    gap: isTvMode ? "clamp(8px, 0.8dvh, 12px)" : "clamp(8px, 1dvh, 14px)",
+    minHeight: 0,
+    height: "100%",
+    overflow: "hidden",
   };
   const foldNoticeStyle = {
     marginTop: 6,
@@ -1959,18 +2289,44 @@ export default function Home() {
   };
   const headerRowStyle = {
     marginBottom: 10,
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 8,
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)",
+    gap: 12,
     alignItems: "center",
-    flexWrap: "wrap",
   };
-  const titleStyle = { margin: 0, lineHeight: 1.1 };
+  const titleStyle = { margin: 0, lineHeight: 1.1, justifySelf: "start", gridColumn: 1 };
   const headerActionsStyle = {
     display: "flex",
     alignItems: "center",
     gap: 8,
     flexWrap: "wrap",
+    gridColumn: 3,
+    justifySelf: "end",
+    justifyContent: "flex-end",
+  };
+  const headerPrimaryButtonsStyle = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 8,
+    marginLeft: "auto",
+    flexShrink: 0,
+  };
+  const vacationBannerStyle = {
+    gridColumn: 2,
+    marginBottom: 0,
+    border: "1px solid color-mix(in srgb, var(--ok) 45%, var(--border))",
+    borderRadius: 10,
+    background: "color-mix(in srgb, var(--ok) 14%, var(--surface))",
+    color: "var(--text-main)",
+    padding: "8px 18px",
+    fontSize: 14,
+    fontWeight: 700,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 8,
+    justifySelf: "center",
+    marginLeft: "auto",
+    marginRight: "auto",
   };
   const activeFiltersBadgeStyle = {
     height: 36,
@@ -1980,6 +2336,24 @@ export default function Home() {
     alignItems: "center",
     fontSize: 13,
     fontWeight: 700,
+    whiteSpace: "nowrap",
+  };
+  const syncDockStyle = {
+    position: "fixed",
+    left: 12,
+    bottom: 8,
+    zIndex: 1000,
+    color: "var(--text-muted)",
+    fontSize: 12,
+    lineHeight: 1.2,
+    padding: "4px 8px",
+    borderRadius: 8,
+    border: "1px solid var(--border)",
+    background: "color-mix(in srgb, var(--surface) 94%, transparent)",
+    boxShadow: "0 4px 10px var(--shadow-medium)",
+    maxWidth: "min(680px, calc(100vw - 24px))",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   };
   const filterOpenButtonStyle = {
@@ -2104,6 +2478,52 @@ export default function Home() {
     fontWeight: 600,
     color: "var(--accent)",
     opacity: 0.9,
+  };
+  const vacationActionButtonStyle = {
+    ...buttonBaseStyle,
+    height: 28,
+    width: 28,
+    padding: 0,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    borderColor: "var(--accent)",
+    color: "var(--accent)",
+    background: "color-mix(in srgb, var(--accent) 10%, var(--surface))",
+    fontWeight: 800,
+  };
+  const vacationListStyle = {
+    listStyle: "none",
+    margin: 0,
+    padding: 0,
+    display: "grid",
+    gap: 8,
+    fontSize: 13,
+    overflow: "auto",
+  };
+  const vacationItemStyle = {
+    border: "1px solid var(--border)",
+    borderRadius: 8,
+    padding: "8px 10px",
+    background: "var(--surface-muted)",
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 8,
+    alignItems: "center",
+  };
+  const vacationRowActionsStyle = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    opacity: 0,
+    pointerEvents: "none",
+    transition: "opacity 140ms ease",
+  };
+  const vacationFormGridStyle = {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+    gap: 8,
+    marginBottom: 8,
   };
   const modalOverlayStyle = {
     position: "fixed",
@@ -2728,6 +3148,219 @@ export default function Home() {
       );
     }
 
+    if (cardKey === "vacationServicedesk") {
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, minHeight: 0, height: "100%" }}>
+          {vacationEditMode ? (
+            <>
+              <div style={vacationFormGridStyle}>
+                <label style={fieldStyle}>
+                  <span style={labelStyle}>Teamlid</span>
+                  <select
+                    value={vacationForm.memberName}
+                    onChange={(e) => setVacationForm((prev) => ({ ...prev, memberName: e.target.value }))}
+                    style={inputBaseStyle}
+                  >
+                    {VACATION_TEAM_MEMBERS.map((member) => (
+                      <option key={`vac-member-${member}`} value={member}>
+                        {member}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={fieldStyle}>
+                  <span style={labelStyle}>Startdatum</span>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="dd/mm/jjjj"
+                      value={vacationStartUi}
+                      onChange={(e) => setVacationStartUi(e.target.value)}
+                      onBlur={() => {
+                        const iso = parseNlDateToIso(vacationStartUi);
+                        if (iso) {
+                          setVacationForm((prev) => ({ ...prev, startDate: iso }));
+                          setVacationStartUi(fmtDate(iso));
+                        } else {
+                          flashToast("Ongeldige startdatum. Gebruik dd/mm/jjjj.", "error");
+                          setVacationStartUi(fmtDate(vacationForm.startDate));
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") e.currentTarget.blur();
+                      }}
+                      style={inputBaseStyle}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const el = vacationStartNativeRef.current;
+                        if (!el) return;
+                        if (typeof el.showPicker === "function") el.showPicker();
+                        else {
+                          el.focus();
+                          el.click();
+                        }
+                      }}
+                      title="Open kalender"
+                      aria-label="Open kalender"
+                      style={buttonBaseStyle}
+                    >
+                      📅
+                    </button>
+                    <input
+                      ref={vacationStartNativeRef}
+                      type="date"
+                      value={vacationForm.startDate}
+                      min={isoDate(new Date())}
+                      onChange={(e) => {
+                        const iso = e.target.value;
+                        setVacationForm((prev) => ({ ...prev, startDate: iso }));
+                        setVacationStartUi(fmtDate(iso));
+                      }}
+                      style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 0, height: 0 }}
+                      tabIndex={-1}
+                      aria-hidden="true"
+                    />
+                  </div>
+                </label>
+                <label style={fieldStyle}>
+                  <span style={labelStyle}>Einddatum</span>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="dd/mm/jjjj"
+                      value={vacationEndUi}
+                      onChange={(e) => setVacationEndUi(e.target.value)}
+                      onBlur={() => {
+                        const iso = parseNlDateToIso(vacationEndUi);
+                        if (iso) {
+                          setVacationForm((prev) => ({ ...prev, endDate: iso }));
+                          setVacationEndUi(fmtDate(iso));
+                        } else {
+                          flashToast("Ongeldige einddatum. Gebruik dd/mm/jjjj.", "error");
+                          setVacationEndUi(fmtDate(vacationForm.endDate));
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") e.currentTarget.blur();
+                      }}
+                      style={inputBaseStyle}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const el = vacationEndNativeRef.current;
+                        if (!el) return;
+                        if (typeof el.showPicker === "function") el.showPicker();
+                        else {
+                          el.focus();
+                          el.click();
+                        }
+                      }}
+                      title="Open kalender"
+                      aria-label="Open kalender"
+                      style={buttonBaseStyle}
+                    >
+                      📅
+                    </button>
+                    <input
+                      ref={vacationEndNativeRef}
+                      type="date"
+                      value={vacationForm.endDate}
+                      min={vacationForm.startDate || isoDate(new Date())}
+                      onChange={(e) => {
+                        const iso = e.target.value;
+                        setVacationForm((prev) => ({ ...prev, endDate: iso }));
+                        setVacationEndUi(fmtDate(iso));
+                      }}
+                      style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 0, height: 0 }}
+                      tabIndex={-1}
+                      aria-hidden="true"
+                    />
+                  </div>
+                </label>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                <button type="button" onClick={saveVacation} disabled={vacationSaving} style={layoutPrimaryButtonStyle}>
+                  Opslaan
+                </button>
+                <button type="button" onClick={cancelVacationEdit} disabled={vacationSaving} style={buttonBaseStyle}>
+                  Annuleren
+                </button>
+              </div>
+            </>
+          ) : upcomingVacations.length ? (
+            <>
+              <ul style={vacationListStyle}>
+                {upcomingVacations.slice(0, 3).map((item) => (
+                  <li
+                    key={`vac-upcoming-${item.id}`}
+                    className="vacation-row"
+                    style={vacationItemStyle}
+                    onMouseEnter={() => setVacationHoverId(item.id)}
+                    onMouseLeave={() => setVacationHoverId((prev) => (prev === item.id ? null : prev))}
+                    onFocus={() => setVacationHoverId(item.id)}
+                    onBlur={() => setVacationHoverId((prev) => (prev === item.id ? null : prev))}
+                  >
+                    <div style={{ display: "grid", gap: 2 }}>
+                      <strong>{item.member_name}</strong>
+                      <span style={{ color: "var(--text-muted)" }}>
+                        {formatVacationRangeLabel(item.start_date, item.end_date)}
+                      </span>
+                    </div>
+                    <div
+                      className="vacation-row-actions"
+                      style={{
+                        ...vacationRowActionsStyle,
+                        opacity: vacationHoverId === item.id ? 1 : 0,
+                        pointerEvents: vacationHoverId === item.id ? "auto" : "none",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => startVacationEdit(item)}
+                        style={{ ...vacationActionButtonStyle, borderColor: "var(--accent)", color: "var(--accent)" }}
+                        title="Aanpassen"
+                        aria-label="Aanpassen"
+                        disabled={vacationSaving}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                          <path d="M4 20h4l10-10-4-4L4 16v4Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                          <path d="m12 6 4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeVacation(item.id)}
+                        style={{ ...vacationActionButtonStyle, borderColor: "var(--danger)", color: "var(--danger)" }}
+                        title="Verwijderen"
+                        aria-label="Verwijderen"
+                        disabled={vacationSaving}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                          <path d="M4 7h16M10 3h4M7 7l1 13h8l1-13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              {upcomingVacationTotal > 3 ? (
+                <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
+                  Er staan meer vakanties gepland. Hier worden er maximaal 3 getoond.
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <div style={emptyStyle}>Er zijn geen vakanties gepland.</div>
+          )}
+        </div>
+      );
+    }
+
     return null;
   }
 
@@ -3002,6 +3635,12 @@ export default function Home() {
       </button>
       <div style={headerRowStyle}>
         <h1 style={titleStyle}>Dashboard Servicedesk Planningsagenda</h1>
+        {vacationBanner ? (
+          <div style={vacationBannerStyle}>
+            <span aria-hidden>{vacationBannerEmoji}</span>
+            <span>{vacationBanner.text}</span>
+          </div>
+        ) : null}
         <div style={headerActionsStyle}>
           {activeFilterItems.length ? (
             <>
@@ -3016,27 +3655,32 @@ export default function Home() {
               </button>
             </>
           ) : null}
-          {isLayoutEditing ? (
-            <button type="button" onClick={cancelLayoutEditing} style={filterOpenButtonStyle}>
-              Annuleren
+          <div style={headerPrimaryButtonsStyle}>
+            <button type="button" onClick={toggleTvMode} style={filterOpenButtonStyle}>
+              {isTvMode ? "TV-modus uit" : "TV-modus aan"}
             </button>
-          ) : (
-            <button type="button" onClick={startLayoutEditing} style={filterOpenButtonStyle}>
-              Layout aanpassen
+            {isLayoutEditing ? (
+              <button type="button" onClick={cancelLayoutEditing} style={filterOpenButtonStyle}>
+                Annuleren
+              </button>
+            ) : (
+              <button type="button" onClick={startLayoutEditing} style={filterOpenButtonStyle}>
+                Layout aanpassen
+              </button>
+            )}
+            <button type="button" onClick={() => setFiltersOpen(true)} style={filterOpenButtonStyle}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path
+                  d="M4 6h16l-6 7v5l-4 2v-7L4 6z"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              Filters openen
             </button>
-          )}
-          <button type="button" onClick={() => setFiltersOpen(true)} style={filterOpenButtonStyle}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path
-                d="M4 6h16l-6 7v5l-4 2v-7L4 6z"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-            Filters openen
-          </button>
+          </div>
         </div>
       </div>
 
@@ -3438,6 +4082,7 @@ export default function Home() {
               ) : (
               <div
                 key={cardKey}
+                className="dashboard-card-shell"
                 style={{
                   ...chartShellStyle,
                   cursor: isLayoutEditing ? "grab" : "default",
@@ -3516,6 +4161,18 @@ export default function Home() {
                         </svg>
                       </button>
                     </span>
+                  ) : cardKey === "vacationServicedesk" ? (
+                    <button
+                      type="button"
+                      onClick={startVacationCreate}
+                      style={vacationActionButtonStyle}
+                      title="Vakantie toevoegen"
+                      aria-label="Vakantie toevoegen"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                      </svg>
+                    </button>
                   ) : null}
                 </div>
                 <div
@@ -3926,16 +4583,8 @@ export default function Home() {
       </div>
 
       {syncStatus ? (
-        <div style={{ marginTop: 20, color: "var(--text-muted)", display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <div>
-            {syncStatus.running ? (
-              <>Bezig met synchroniseren…</>
-            ) : (
-              <>Voor het laatst bijgewerkt op {syncStatus.last_sync ? fmtDateTime(syncStatus.last_sync) : "—"}</>
-            )}
-            {syncStatus.last_result?.upserts != null ? ` · ${syncStatus.last_result.upserts} bijgewerkt` : ""}
-            {syncStatus.last_error ? ` · fout: ${syncStatus.last_error}` : ""}
-          </div>
+        <div title={syncStatusInlineText} style={syncDockStyle}>
+          {syncStatusInlineText}
         </div>
       ) : null}
 
@@ -3985,6 +4634,9 @@ export default function Home() {
         body {
           background: var(--page-bg);
           color: var(--text-main);
+          margin: 0;
+          height: 100%;
+          overflow: hidden;
         }
         input,
         select,
@@ -4006,6 +4658,15 @@ export default function Home() {
           outline: 2px solid var(--accent);
           outline-offset: 3px;
           border-radius: 6px;
+        }
+        .dashboard-card-shell canvas {
+          max-height: 80% !important;
+          height: 80% !important;
+        }
+        .vacation-row:hover .vacation-row-actions,
+        .vacation-row:focus-within .vacation-row-actions {
+          opacity: 1;
+          pointer-events: auto;
         }
         @keyframes overlayIn {
           from {
