@@ -7,3 +7,8 @@ __pycache__/
 .npm-cache/
 # testing
 /coverage
+.coverage
+dashboard/coverage/
+dashboard/playwright-report/
+dashboard/test-results/
+dashboard/e2e/

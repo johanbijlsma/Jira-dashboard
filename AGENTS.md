@@ -11,6 +11,12 @@
 - Keep changes on the active feature branch.
 - Only commit/push when the user asks.
 
+### Commit Confirmation Flow (Repo-Wide)
+- When a commit is requested (or considered), always start with `git status` and show all changed files.
+- Ask whether all changed files should be added:
+  - If yes: run `git add .` and proceed with commit.
+  - If no: ask which files should be excluded, then stage accordingly.
+
 ## PR Quality Gates
 - When preparing a PR, backend tests must pass.
 - When preparing a PR, frontend tests must pass.

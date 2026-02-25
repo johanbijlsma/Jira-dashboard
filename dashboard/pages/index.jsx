@@ -20,10 +20,6 @@ import {
   DASHBOARD_CONFIG_STORAGE_KEY,
   DEFAULT_SERVICEDESK_ONLY,
   JIRA_BASE,
-  KPI_KEYS,
-  MAX_CARDS_PER_ROW,
-  MAX_KPI_TILES,
-  NON_KPI_CARD_KEYS,
   TV_MODE_STORAGE_KEY,
   TYPE_COLORS,
   VACATION_TEAM_MEMBERS,
@@ -45,6 +41,17 @@ import {
   weekStartIsoFromDate,
 } from "../lib/dashboard-utils";
 import { legendNoopHandler, setupChartDefaults } from "../lib/chart-setup";
+import {
+  hideCardLayout,
+  hideKpiLayout,
+  moveCardToRowLayout,
+  moveKpiToVisibleLayout,
+  normalizeDashboardLayout as normalizeDashboardLayoutState,
+  renderCardRowWithHintLayout,
+  renderKpiRowWithHintLayout,
+  toggleRowExpandCardLayout,
+} from "../lib/dashboard-layout";
+import { isTotalLabel, median, trendInfo, uniqueChartColor, wowSortValue } from "../lib/dashboard-metrics";
 import EmptyChartState from "../components/EmptyChartState";
 import LiveAlertStack from "../components/LiveAlertStack";
 import Toast from "../components/Toast";
@@ -177,90 +184,7 @@ export default function Home() {
   const [kpiDropHint, setKpiDropHint] = useState(null);
   const [hiddenDropTarget, setHiddenDropTarget] = useState(null);
 
-  const normalizeDashboardLayout = useCallback((input) => {
-    const fallback = createDefaultDashboardLayout();
-    if (!input || typeof input !== "object") return fallback;
-
-    const allKpis = new Set(KPI_KEYS);
-    const allCards = new Set(NON_KPI_CARD_KEYS);
-    const normalizeList = (arr, allowedSet) =>
-      Array.from(new Set((Array.isArray(arr) ? arr : []).filter((key) => allowedSet.has(key))));
-
-    let kpiRow = normalizeList(input.kpiRow, allKpis);
-    let hiddenKpis = normalizeList(input.hiddenKpis, allKpis).filter((key) => !kpiRow.includes(key));
-    KPI_KEYS.forEach((key) => {
-      if (!kpiRow.includes(key) && !hiddenKpis.includes(key)) kpiRow.push(key);
-    });
-    if (kpiRow.length > MAX_KPI_TILES) {
-      const overflow = kpiRow.slice(MAX_KPI_TILES);
-      kpiRow = kpiRow.slice(0, MAX_KPI_TILES);
-      overflow.forEach((key) => {
-        if (!hiddenKpis.includes(key)) hiddenKpis.push(key);
-      });
-    }
-
-    const inputRows = Array.isArray(input.cardRows) ? input.cardRows : [];
-    let cardRows = [
-      normalizeList(inputRows[0], allCards),
-      normalizeList(inputRows[1], allCards),
-    ];
-    cardRows[1] = cardRows[1].filter((key) => !cardRows[0].includes(key));
-    let hiddenCards = normalizeList(input.hiddenCards, allCards).filter(
-      (key) => !cardRows[0].includes(key) && !cardRows[1].includes(key)
-    );
-    NON_KPI_CARD_KEYS.forEach((key) => {
-      if (!cardRows[0].includes(key) && !cardRows[1].includes(key) && !hiddenCards.includes(key)) {
-        cardRows[1].push(key);
-      }
-    });
-
-    // Enforce max cards per row; overflow goes to hidden cards.
-    [0, 1].forEach((idx) => {
-      if (cardRows[idx].length > MAX_CARDS_PER_ROW) {
-        const overflow = cardRows[idx].slice(MAX_CARDS_PER_ROW);
-        cardRows[idx] = cardRows[idx].slice(0, MAX_CARDS_PER_ROW);
-        overflow.forEach((key) => {
-          if (!hiddenCards.includes(key)) hiddenCards.push(key);
-        });
-      }
-    });
-
-    // Backward compatibility for previous layout versions
-    if (!input.kpiRow && Array.isArray(input.kpiOrder)) {
-      const legacyVisible = KPI_KEYS.filter((key) => input?.kpiVisibility?.[key] !== false);
-      const legacyHidden = KPI_KEYS.filter((key) => input?.kpiVisibility?.[key] === false);
-      kpiRow = [
-        ...input.kpiOrder.filter((key) => legacyVisible.includes(key)),
-        ...legacyVisible.filter((key) => !input.kpiOrder.includes(key)),
-      ];
-      hiddenKpis = [
-        ...input.kpiOrder.filter((key) => legacyHidden.includes(key)),
-        ...legacyHidden.filter((key) => !input.kpiOrder.includes(key)),
-      ];
-    }
-    if (!input.cardRows && Array.isArray(input.cardOrder)) {
-      const legacyVisible = NON_KPI_CARD_KEYS.filter((key) => input?.cardVisibility?.[key] !== false);
-      const legacyHidden = NON_KPI_CARD_KEYS.filter((key) => input?.cardVisibility?.[key] === false);
-      const visibleOrdered = [
-        ...input.cardOrder.filter((key) => legacyVisible.includes(key)),
-        ...legacyVisible.filter((key) => !input.cardOrder.includes(key)),
-      ];
-      const split = Math.ceil(visibleOrdered.length / 2);
-      cardRows = [visibleOrdered.slice(0, split), visibleOrdered.slice(split)];
-      hiddenCards = [
-        ...input.cardOrder.filter((key) => legacyHidden.includes(key)),
-        ...legacyHidden.filter((key) => !input.cardOrder.includes(key)),
-      ];
-    }
-
-    const expandedByRowInput = Array.isArray(input.expandedByRow) ? input.expandedByRow : [];
-    const expandedByRow = [0, 1].map((idx) => {
-      const key = expandedByRowInput[idx];
-      return cardRows[idx].includes(key) ? key : null;
-    });
-
-    return { kpiRow, hiddenKpis, cardRows, hiddenCards, expandedByRow };
-  }, []);
+  const normalizeDashboardLayout = useCallback((input) => normalizeDashboardLayoutState(input), []);
 
   const layoutDirty = useMemo(
     () => layoutSavedSnapshot !== JSON.stringify(dashboardLayout),
@@ -1252,27 +1176,6 @@ export default function Home() {
     return TYPE_COLORS[key] || "#6b7280";
   }, []);
 
-  function uniqueChartColor(index, total, saturation = 70, lightness = 45) {
-    const safeTotal = Math.max(1, total);
-    const hue = (index * (360 / safeTotal) + 15) % 360;
-    return `hsl(${hue.toFixed(2)} ${saturation}% ${lightness}%)`;
-  }
-
-  function isTotalLabel(label) {
-    return String(label || "").toLowerCase() === "totaal";
-  }
-
-  function median(values) {
-    const v = values.filter((x) => x != null).slice().sort((a, b) => a - b);
-    if (!v.length) return null;
-    const mid = Math.floor(v.length / 2);
-    return v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
-  }
-
-  function weekStartIso(d = new Date()) {
-    return weekStartIsoFromDate(d);
-  }
-
   const lineData = useMemo(
     () => {
       const labels = weeks.map((w) => fmtDate(w));
@@ -1287,7 +1190,7 @@ export default function Home() {
         borderDash: isTotalLabel(s.label) ? [6, 4] : undefined,
       }));
 
-      const currentWeek = weekStartIso();
+      const currentWeek = weekStartIsoFromDate();
       const totalSeries = series.find((s) => isTotalLabel(s.label));
       if (totalSeries && !requestType) {
         const valuesForMedian = totalSeries.data
@@ -1347,7 +1250,7 @@ export default function Home() {
 
       // When a specific onderwerp filter is active, add a median guide line for that onderwerp.
       if (onderwerp && onderwerpSeries[0]) {
-        const currentWeek = weekStartIso();
+        const currentWeek = weekStartIsoFromDate();
         const valuesForMedian = onderwerpSeries[0].data
           .map((v, i) => (weeksOnderwerp[i] === currentWeek ? null : v))
           .filter((v) => v != null);
@@ -1691,14 +1594,6 @@ export default function Home() {
       map.set(label, cur);
     });
 
-    function wowSortValue(row) {
-      const last = Number(row?.last) || 0;
-      const prev = Number(row?.prev) || 0;
-      if (prev <= 0 && last > 0) return Number.NEGATIVE_INFINITY; // voorkom dat "nieuw" alles domineert
-      if (prev <= 0 && last <= 0) return Number.NEGATIVE_INFINITY;
-      return ((last - prev) / prev) * 100;
-    }
-
     return Array.from(map.values())
       .filter((row) => (Number(row?.last) || 0) > 0)
       .sort((a, b) => {
@@ -1864,21 +1759,6 @@ export default function Home() {
     });
   }, [servicedeskTeamMembers]);
 
-  function trendInfo(last, prev) {
-    const l = Number(last) || 0;
-    const p = Number(prev) || 0;
-    if (p <= 0 && l <= 0) return { symbol: "→", text: "0%", color: "var(--text-muted)" };
-    if (p <= 0 && l > 0) return { symbol: "↑", text: "nieuw", color: "var(--ok)" };
-    const delta = ((l - p) / p) * 100;
-    if (delta > 0.5) return { symbol: "↑", text: `+${num(delta, 1)}%`, color: "var(--ok)" };
-    if (delta < -0.5) return { symbol: "↓", text: `${num(delta, 1)}%`, color: "var(--danger)" };
-    return { symbol: "→", text: `${num(delta, 1)}%`, color: "var(--text-muted)" };
-  }
-
-  function addDays(yyyyMmDd, days) {
-    return addDaysIso(yyyyMmDd, days);
-  }
-
   async function fetchDrilldown(
     weekStart,
     typeLabel,
@@ -1898,7 +1778,7 @@ export default function Home() {
     setDrillLoading(true);
 
     try {
-      const weekEnd = addDays(weekStart, 7);
+      const weekEnd = addDaysIso(weekStart, 7);
 
       const params = new URLSearchParams({
         date_from: weekStart,
@@ -3337,121 +3217,41 @@ export default function Home() {
     const state = dragStateRef.current;
     clearDrag();
     if (!state || state.kind !== "kpi") return;
-    setDashboardLayout((prev) => {
-      const key = state.key;
-      let row = prev.kpiRow.filter((k) => k !== key);
-      const hidden = prev.hiddenKpis.filter((k) => k !== key);
-      if (targetKey && row.includes(targetKey)) {
-        const baseIndex = row.indexOf(targetKey);
-        const insertIndex = position === "after" ? baseIndex + 1 : baseIndex;
-        row.splice(insertIndex, 0, key);
-      } else {
-        row.push(key);
-      }
-      if (row.length > MAX_KPI_TILES) {
-        const overflow = row.slice(MAX_KPI_TILES);
-        row = row.slice(0, MAX_KPI_TILES);
-        overflow.forEach((k) => {
-          if (!hidden.includes(k)) hidden.push(k);
-        });
-      }
-      return { ...prev, kpiRow: row, hiddenKpis: hidden };
-    });
+    setDashboardLayout((prev) => moveKpiToVisibleLayout(prev, state.key, targetKey, position));
   }
 
   function hideKpi() {
     const state = dragStateRef.current;
     clearDrag();
     if (!state || state.kind !== "kpi") return;
-    setDashboardLayout((prev) => {
-      const key = state.key;
-      const row = prev.kpiRow.filter((k) => k !== key);
-      const hidden = prev.hiddenKpis.includes(key) ? prev.hiddenKpis : [...prev.hiddenKpis, key];
-      return { ...prev, kpiRow: row, hiddenKpis: hidden };
-    });
+    setDashboardLayout((prev) => hideKpiLayout(prev, state.key));
   }
 
   function hideKpiByKey(key) {
-    setDashboardLayout((prev) => ({
-      ...prev,
-      kpiRow: prev.kpiRow.filter((k) => k !== key),
-      hiddenKpis: prev.hiddenKpis.includes(key) ? prev.hiddenKpis : [...prev.hiddenKpis, key],
-    }));
+    setDashboardLayout((prev) => hideKpiLayout(prev, key));
   }
 
   function moveCardToRow(rowIndex, targetKey = null, position = "before") {
     const state = dragStateRef.current;
     clearDrag();
     if (!state || state.kind !== "card" || rowIndex < 0 || rowIndex > 1) return;
-    setDashboardLayout((prev) => {
-      const key = state.key;
-      const nextRows = prev.cardRows.map((row) => row.filter((k) => k !== key));
-      const hidden = prev.hiddenCards.filter((k) => k !== key);
-      const expandedByRow = [...(prev.expandedByRow || [null, null])].map((v) => (v === key ? null : v));
-      if (targetKey && nextRows[rowIndex].includes(targetKey)) {
-        const baseIndex = nextRows[rowIndex].indexOf(targetKey);
-        const insertIndex = position === "after" ? baseIndex + 1 : baseIndex;
-        nextRows[rowIndex].splice(insertIndex, 0, key);
-      } else {
-        nextRows[rowIndex].push(key);
-      }
-
-      // Keep rows readable: max 5 cards per row, overflow to hidden cards.
-      [0, 1].forEach((idx) => {
-        if (nextRows[idx].length > MAX_CARDS_PER_ROW) {
-          const overflow = nextRows[idx].slice(MAX_CARDS_PER_ROW);
-          nextRows[idx] = nextRows[idx].slice(0, MAX_CARDS_PER_ROW);
-          overflow.forEach((k) => {
-            if (!hidden.includes(k)) hidden.push(k);
-          });
-        }
-      });
-      [0, 1].forEach((idx) => {
-        if (expandedByRow[idx] && !nextRows[idx].includes(expandedByRow[idx])) expandedByRow[idx] = null;
-      });
-
-      return { ...prev, cardRows: nextRows, hiddenCards: hidden, expandedByRow };
-    });
+    setDashboardLayout((prev) => moveCardToRowLayout(prev, state.key, rowIndex, targetKey, position));
   }
 
   function hideCard() {
     const state = dragStateRef.current;
     clearDrag();
     if (!state || state.kind !== "card") return;
-    setDashboardLayout((prev) => {
-      const key = state.key;
-      const nextRows = prev.cardRows.map((row) => row.filter((k) => k !== key));
-      const hidden = prev.hiddenCards.includes(key) ? prev.hiddenCards : [...prev.hiddenCards, key];
-      const expandedByRow = [...(prev.expandedByRow || [null, null])].map((v) => (v === key ? null : v));
-      return { ...prev, cardRows: nextRows, hiddenCards: hidden, expandedByRow };
-    });
+    setDashboardLayout((prev) => hideCardLayout(prev, state.key));
   }
 
   function hideCardByKey(key) {
-    setDashboardLayout((prev) => ({
-      ...prev,
-      cardRows: prev.cardRows.map((row) => row.filter((k) => k !== key)),
-      hiddenCards: prev.hiddenCards.includes(key) ? prev.hiddenCards : [...prev.hiddenCards, key],
-      expandedByRow: [...(prev.expandedByRow || [null, null])].map((v) => (v === key ? null : v)),
-    }));
+    setDashboardLayout((prev) => hideCardLayout(prev, key));
   }
 
   function toggleRowExpandCard(rowIndex, key) {
     if (!isLayoutEditing || rowIndex < 0 || rowIndex > 1) return;
-    setDashboardLayout((prev) => {
-      const row = prev.cardRows[rowIndex] || [];
-      if (!row.includes(key)) return prev;
-      const current = (prev.expandedByRow || [null, null])[rowIndex];
-      if (current === key) {
-        const next = [...(prev.expandedByRow || [null, null])];
-        next[rowIndex] = null;
-        return { ...prev, expandedByRow: next };
-      }
-      if (row.length > 4) return prev;
-      const next = [...(prev.expandedByRow || [null, null])];
-      next[rowIndex] = key;
-      return { ...prev, expandedByRow: next };
-    });
+    setDashboardLayout((prev) => toggleRowExpandCardLayout(prev, rowIndex, key));
   }
 
   function hideDraggedToOverlay() {
@@ -3483,36 +3283,13 @@ export default function Home() {
   }
 
   function renderKpiRowWithHint(row) {
-    if (!isLayoutEditing) return row;
     const draggingKey = dragStateRef.current?.kind === "kpi" ? dragStateRef.current.key : null;
-    const cleanRow = row.filter((key) => key !== draggingKey);
-    if (!kpiDropHint) return cleanRow;
-    const withHint = [...cleanRow];
-    if (!kpiDropHint.targetKey || !withHint.includes(kpiDropHint.targetKey)) {
-      withHint.push("__KPI_DROP_HINT__");
-      return withHint;
-    }
-    const targetIndex = withHint.indexOf(kpiDropHint.targetKey);
-    const insertIndex = kpiDropHint.position === "after" ? targetIndex + 1 : targetIndex;
-    withHint.splice(insertIndex, 0, "__KPI_DROP_HINT__");
-    return withHint;
+    return renderKpiRowWithHintLayout(row, isLayoutEditing, draggingKey, kpiDropHint);
   }
 
   function renderCardRowWithHint(row, rowIndex) {
-    if (!isLayoutEditing) return row;
     const draggingKey = dragStateRef.current?.kind === "card" ? dragStateRef.current.key : null;
-    const cleanRow = row.filter((key) => key !== draggingKey);
-    const hint = cardDropHint && cardDropHint.rowIndex === rowIndex ? cardDropHint : null;
-    if (!hint) return cleanRow;
-    const withHint = [...cleanRow];
-    if (!hint.targetKey || !withHint.includes(hint.targetKey)) {
-      withHint.push("__DROP_HINT__");
-      return withHint;
-    }
-    const targetIndex = withHint.indexOf(hint.targetKey);
-    const insertIndex = hint.position === "after" ? targetIndex + 1 : targetIndex;
-    withHint.splice(insertIndex, 0, "__DROP_HINT__");
-    return withHint;
+    return renderCardRowWithHintLayout(row, rowIndex, isLayoutEditing, draggingKey, cardDropHint);
   }
 
   useEffect(() => {

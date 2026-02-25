@@ -1,0 +1,81 @@
+import { describe, expect, it } from "vitest";
+import {
+  hideCardLayout,
+  hideKpiLayout,
+  moveCardToRowLayout,
+  moveKpiToVisibleLayout,
+  normalizeDashboardLayout,
+  renderCardRowWithHintLayout,
+  renderKpiRowWithHintLayout,
+  toggleRowExpandCardLayout,
+} from "./dashboard-layout";
+import { createDefaultDashboardLayout } from "./dashboard-constants";
+
+describe("dashboard-layout", () => {
+  it("returns fallback for invalid input", () => {
+    expect(normalizeDashboardLayout(null)).toEqual(createDefaultDashboardLayout());
+  });
+
+  it("normalizes legacy/invalid layout input", () => {
+    const normalized = normalizeDashboardLayout({
+      kpiRow: ["totalTickets", "totalTickets", "invalid"],
+      hiddenKpis: ["avgPerWeek", "avgPerWeek"],
+      cardRows: [["volume", "invalid"], ["priority", "volume"]],
+      hiddenCards: ["assignee"],
+      expandedByRow: ["volume", "missing"],
+    });
+    expect(normalized.kpiRow).toContain("totalTickets");
+    expect(normalized.hiddenKpis).toContain("avgPerWeek");
+    expect(normalized.cardRows[0]).toContain("volume");
+    expect(normalized.cardRows[1]).not.toContain("volume");
+    expect(normalized.expandedByRow[0]).toBe("volume");
+    expect(normalized.expandedByRow[1]).toBeNull();
+  });
+
+  it("normalizes legacy shape and split card order", () => {
+    const normalized = normalizeDashboardLayout({
+      kpiOrder: ["topType", "totalTickets"],
+      kpiVisibility: { topType: true, totalTickets: false },
+      cardOrder: ["volume", "assignee", "priority"],
+      cardVisibility: { assignee: false },
+    });
+    expect(normalized.kpiRow[0]).toBe("topType");
+    expect(normalized.hiddenKpis).toContain("totalTickets");
+    expect(normalized.hiddenCards).toContain("assignee");
+  });
+
+  it("moves and hides kpis", () => {
+    const base = createDefaultDashboardLayout();
+    const hiddenBase = { ...base, hiddenKpis: ["topPartner"], kpiRow: base.kpiRow.filter((k) => k !== "topPartner") };
+    const moved = moveKpiToVisibleLayout(hiddenBase, "topPartner", "topType", "before");
+    expect(moved.kpiRow.indexOf("topPartner")).toBeLessThan(moved.kpiRow.indexOf("topType"));
+    const hidden = hideKpiLayout(moved, "topPartner");
+    expect(hidden.hiddenKpis).toContain("topPartner");
+    const movedAppend = moveKpiToVisibleLayout(hiddenBase, "topPartner");
+    expect(movedAppend.kpiRow.at(-1)).toBe("topPartner");
+  });
+
+  it("moves cards, expands and hides", () => {
+    const base = createDefaultDashboardLayout();
+    const moved = moveCardToRowLayout(base, "firstResponseAll", 0, "priority", "after");
+    expect(moved.cardRows[0]).toContain("firstResponseAll");
+    const compact = { ...moved, cardRows: [moved.cardRows[0].slice(0, 4), moved.cardRows[1]], expandedByRow: [null, null] };
+    const toggled = toggleRowExpandCardLayout(compact, 0, "volume");
+    expect(toggled.expandedByRow[0]).toBe("volume");
+    const hidden = hideCardLayout(toggled, "volume");
+    expect(hidden.hiddenCards).toContain("volume");
+    expect(moveCardToRowLayout(base, "volume", -1)).toBe(base);
+  });
+
+  it("renders row hints", () => {
+    const kpiRow = renderKpiRowWithHintLayout(["a", "b"], true, "a", { targetKey: "b", position: "before" });
+    expect(kpiRow).toEqual(["__KPI_DROP_HINT__", "b"]);
+    const cardRow = renderCardRowWithHintLayout(["x", "y"], 1, true, "x", { rowIndex: 1, targetKey: "y", position: "after" });
+    expect(cardRow).toEqual(["y", "__DROP_HINT__"]);
+    expect(renderKpiRowWithHintLayout(["a"], false, null, null)).toEqual(["a"]);
+    expect(renderCardRowWithHintLayout(["x"], 0, true, null, { rowIndex: 0, targetKey: null, position: "before" })).toEqual([
+      "x",
+      "__DROP_HINT__",
+    ]);
+  });
+});
