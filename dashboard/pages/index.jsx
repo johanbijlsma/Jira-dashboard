@@ -12,6 +12,7 @@ import {
 } from "chart.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { parseNlDateToIso } from "../lib/date";
+import Link from "next/link";
 
 ChartJS.register(
   CategoryScale,
@@ -26,11 +27,11 @@ ChartJS.register(
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
 const JIRA_BASE = "https://planningsagenda.atlassian.net";
+const RELEASE_ANCHOR_ISO = process.env.NEXT_PUBLIC_RELEASE_ANCHOR_ISO || "2026-01-21T00:00:00Z";
 const DEFAULT_SERVICEDESK_ONLY = true;
 const DASHBOARD_CONFIG_STORAGE_KEY = "jsm_dashboard_layout_v2";
 const TV_MODE_STORAGE_KEY = "jsm_dashboard_tv_mode";
 const VACATION_TEAM_MEMBERS = ["Johan", "Ashley", "Jarno"];
-const VACATION_BANNER_EMOJIS = ["🏖️", "🌴", "😎", "🍹", "🎉", "🧳", "🛟", "🌞"];
 const TYPE_COLORS = {
   rfc: "#2e7d32",
   incident: "#c62828",
@@ -101,6 +102,13 @@ function fmtDateWithWeekday(value) {
   return `${weekday.charAt(0).toUpperCase()}${weekday.slice(1)} ${datePart}`;
 }
 
+function weekdayNameNl(value) {
+  if (!value) return "";
+  const dt = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(dt.getTime())) return "";
+  return new Intl.DateTimeFormat("nl-NL", { weekday: "long" }).format(dt);
+}
+
 
 function fmtDateTime(value) {
   if (!value) return "";
@@ -146,11 +154,36 @@ function buildWeekStartsFromRange(fromIso, toIso) {
   return weeks;
 }
 
+function trimLeadingPartialWeek(weeks, fromIso) {
+  if (!Array.isArray(weeks) || !weeks.length || !fromIso) return weeks;
+  // If the selected start date falls mid-week, hide that partial first week in charts.
+  return fromIso > weeks[0] ? weeks.slice(1) : weeks;
+}
+
 function addDaysIso(yyyyMmDd, days) {
   const [y, m, d] = yyyyMmDd.split("-").map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d));
   dt.setUTCDate(dt.getUTCDate() + days);
   return dt.toISOString().slice(0, 10);
+}
+
+function isWeekdayIso(yyyyMmDd) {
+  if (!yyyyMmDd) return false;
+  const [y, m, d] = yyyyMmDd.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const day = dt.getUTCDay();
+  return day >= 1 && day <= 5;
+}
+
+function businessDaysUntil(fromIso, toIso) {
+  if (!fromIso || !toIso || toIso <= fromIso) return 0;
+  let cursor = addDaysIso(fromIso, 1);
+  let total = 0;
+  while (cursor <= toIso) {
+    if (isWeekdayIso(cursor)) total += 1;
+    cursor = addDaysIso(cursor, 1);
+  }
+  return total;
 }
 
 function isTextEntryTarget(target) {
@@ -386,6 +419,14 @@ function pct(value) {
   return `${num(value, 1)}%`;
 }
 
+function sameStringSet(a, b) {
+  const left = Array.isArray(a) ? Array.from(new Set(a.map((x) => String(x)))) : [];
+  const right = Array.isArray(b) ? Array.from(new Set(b.map((x) => String(x)))) : [];
+  if (left.length !== right.length) return false;
+  const rightSet = new Set(right);
+  return left.every((item) => rightSet.has(item));
+}
+
 const SimpleDataLabelsPlugin = {
   id: "simpleDataLabels",
   afterDatasetsDraw(chart, _args, pluginOptions) {
@@ -509,6 +550,114 @@ if (!ChartJS.registry.plugins.get("simpleDataLabels")) {
   ChartJS.register(SimpleDataLabelsPlugin);
 }
 
+const disableLegendClick = () => {};
+
+// Keep legends informational only; disable toggling datasets by clicking legend items.
+ChartJS.defaults.plugins.legend.onClick = disableLegendClick;
+if (ChartJS.overrides?.doughnut?.plugins?.legend) {
+  ChartJS.overrides.doughnut.plugins.legend.onClick = disableLegendClick;
+}
+if (ChartJS.overrides?.pie?.plugins?.legend) {
+  ChartJS.overrides.pie.plugins.legend.onClick = disableLegendClick;
+}
+if (ChartJS.overrides?.polarArea?.plugins?.legend) {
+  ChartJS.overrides.polarArea.plugins.legend.onClick = disableLegendClick;
+}
+ChartJS.defaults.plugins.legend.onHover = (evt) => {
+  if (evt?.native?.target?.style) evt.native.target.style.cursor = "default";
+};
+ChartJS.defaults.plugins.legend.onLeave = (evt) => {
+  if (evt?.native?.target?.style) evt.native.target.style.cursor = "default";
+};
+
+const ReleaseCadencePlugin = {
+  id: "releaseCadence",
+  beforeDatasetsDraw(chart, _args, pluginOptions) {
+    if (pluginOptions === false) return;
+    const opts = {
+      weeks: [],
+      anchorIso: RELEASE_ANCHOR_ISO,
+      intervalDays: 14,
+      lineColor: null,
+      lineWidth: 1,
+      dash: [6, 4],
+      ...pluginOptions,
+    };
+
+    const weeks = Array.isArray(opts.weeks) ? opts.weeks.filter(Boolean) : [];
+    if (!weeks.length) return;
+
+    const anchor = new Date(opts.anchorIso);
+    if (Number.isNaN(anchor.getTime())) return;
+
+    const start = new Date(`${weeks[0]}T00:00:00Z`);
+    const lastWeek = new Date(`${weeks[weeks.length - 1]}T00:00:00Z`);
+    const end = new Date(lastWeek.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const intervalMs = Math.max(1, Number(opts.intervalDays) || 14) * 24 * 60 * 60 * 1000;
+
+    let releaseTs = anchor.getTime();
+    if (releaseTs < start.getTime()) {
+      const steps = Math.ceil((start.getTime() - releaseTs) / intervalMs);
+      releaseTs += steps * intervalMs;
+    } else {
+      const steps = Math.floor((releaseTs - start.getTime()) / intervalMs);
+      releaseTs -= steps * intervalMs;
+      while (releaseTs < start.getTime()) releaseTs += intervalMs;
+    }
+
+    const xScale = chart.scales?.x;
+    const yScale = chart.scales?.y;
+    if (!xScale || !yScale) return;
+
+    const computed = typeof window !== "undefined" ? getComputedStyle(document.documentElement) : null;
+    const stroke = opts.lineColor || computed?.getPropertyValue("--accent")?.trim() || "#2563eb";
+
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = Number(opts.lineWidth) || 1;
+    ctx.setLineDash(Array.isArray(opts.dash) ? opts.dash : [6, 4]);
+
+    const yTop = yScale.top;
+    const yBottom = yScale.bottom;
+
+    while (releaseTs <= end.getTime()) {
+      const releaseDate = new Date(releaseTs);
+      const monday = new Date(releaseDate);
+      const day = monday.getUTCDay();
+      const diff = (day + 6) % 7;
+      monday.setUTCDate(monday.getUTCDate() - diff);
+      const weekIso = monday.toISOString().slice(0, 10);
+      const weekIdx = weeks.indexOf(weekIso);
+
+      if (weekIdx >= 0) {
+        const xBase = xScale.getPixelForValue(weekIdx);
+        const xNeighbor =
+          weekIdx < weeks.length - 1
+            ? xScale.getPixelForValue(weekIdx + 1)
+            : weekIdx > 0
+              ? xBase + (xBase - xScale.getPixelForValue(weekIdx - 1))
+              : xBase;
+        const daysSinceMonday = ((releaseDate.getUTCDay() + 6) % 7);
+        const x = xBase + (daysSinceMonday / 7) * (xNeighbor - xBase);
+
+        ctx.beginPath();
+        ctx.moveTo(x, yTop);
+        ctx.lineTo(x, yBottom);
+        ctx.stroke();
+      }
+
+      releaseTs += intervalMs;
+    }
+
+    ctx.restore();
+  },
+};
+
+if (!ChartJS.registry.plugins.get("releaseCadence")) {
+  ChartJS.register(ReleaseCadencePlugin);
+}
+
 function EmptyChartState({ filterLabel, style }) {
   const boundedStyle = {
     ...style,
@@ -521,6 +670,56 @@ function EmptyChartState({ filterLabel, style }) {
     <div style={boundedStyle}>
       <span>{`Verborgen omdat filter \`${filterLabel}\` actief is.`}</span>
     </div>
+  );
+}
+
+function initialsFromName(name) {
+  const words = String(name || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!words.length) return "?";
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return `${words[0][0] || ""}${words[words.length - 1][0] || ""}`.toUpperCase();
+}
+
+function VacationAvatar({ name, avatarUrl, style }) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const showImage = !!avatarUrl && !imgFailed;
+  return (
+    <span
+      style={{
+        width: 34,
+        height: 34,
+        borderRadius: "999px",
+        border: "2px solid #fff",
+        boxShadow: "0 0 0 1px var(--border), 0 2px 6px var(--shadow-medium)",
+        overflow: "hidden",
+        background: "var(--surface-muted)",
+        color: "var(--text-main)",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: 12,
+        fontWeight: 700,
+        lineHeight: 1,
+        flex: "0 0 auto",
+        ...style,
+      }}
+      title={name || "Onbekend"}
+      aria-label={name || "Onbekend"}
+    >
+      {showImage ? (
+        <img
+          src={avatarUrl}
+          alt={name || "Assignee avatar"}
+          onError={() => setImgFailed(true)}
+          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+        />
+      ) : (
+        <span>{initialsFromName(name)}</span>
+      )}
+    </span>
   );
 }
 
@@ -554,7 +753,13 @@ export default function Home() {
   const [servicedeskOnly, setServicedeskOnly] = useState(DEFAULT_SERVICEDESK_ONLY);
 
   const [meta, setMeta] = useState({ request_types: [], onderwerpen: [], priorities: [], assignees: [], organizations: [] });
-  const [servicedeskConfig, setServicedeskConfig] = useState({ team_members: [], onderwerpen: [], updated_at: null });
+  const [servicedeskConfig, setServicedeskConfig] = useState({
+    team_members: [],
+    onderwerpen: [],
+    updated_at: null,
+    team_member_avatars: {},
+  });
+  const [servicedeskOnderwerpenBaseline, setServicedeskOnderwerpenBaseline] = useState([]);
   const [teamMembersDraft, setTeamMembersDraft] = useState([]);
   const [onderwerpenDraft, setOnderwerpenDraft] = useState([]);
   const [teamConfigSaving, setTeamConfigSaving] = useState(false);
@@ -580,12 +785,19 @@ export default function Home() {
   });
   const [upcomingVacations, setUpcomingVacations] = useState([]);
   const [upcomingVacationTotal, setUpcomingVacationTotal] = useState(0);
+  const [allVacations, setAllVacations] = useState([]);
   const [todayVacations, setTodayVacations] = useState([]);
   const [vacationEditMode, setVacationEditMode] = useState(false);
   const [vacationSaving, setVacationSaving] = useState(false);
   const [vacationHoverId, setVacationHoverId] = useState(null);
-  const [vacationBannerEmoji, setVacationBannerEmoji] = useState(VACATION_BANNER_EMOJIS[0]);
+  const [vacationBannerIndex, setVacationBannerIndex] = useState(0);
   const [vacationForm, setVacationForm] = useState({
+    id: null,
+    memberName: VACATION_TEAM_MEMBERS[0],
+    startDate: "",
+    endDate: "",
+  });
+  const [vacationInitialForm, setVacationInitialForm] = useState({
     id: null,
     memberName: VACATION_TEAM_MEMBERS[0],
     startDate: "",
@@ -852,6 +1064,23 @@ export default function Home() {
     setOnderwerpenDraft(Array.isArray(servicedeskConfig?.onderwerpen) ? servicedeskConfig.onderwerpen : []);
   }, [servicedeskConfig]);
 
+  const teamConfigDirty = useMemo(() => {
+    const base = Array.isArray(servicedeskConfig?.team_members) ? servicedeskConfig.team_members : [];
+    return !sameStringSet(teamMembersDraft, base);
+  }, [teamMembersDraft, servicedeskConfig]);
+
+  const onderwerpConfigDirty = useMemo(() => {
+    const base = Array.isArray(servicedeskConfig?.onderwerpen) ? servicedeskConfig.onderwerpen : [];
+    return !sameStringSet(onderwerpenDraft, base);
+  }, [onderwerpenDraft, servicedeskConfig]);
+
+  const onderwerpResetAvailable = useMemo(() => {
+    const baseline = Array.isArray(servicedeskOnderwerpenBaseline) ? servicedeskOnderwerpenBaseline : [];
+    const saved = Array.isArray(servicedeskConfig?.onderwerpen) ? servicedeskConfig.onderwerpen : [];
+    if (!baseline.length) return false;
+    return !sameStringSet(saved, baseline);
+  }, [servicedeskOnderwerpenBaseline, servicedeskConfig]);
+
   const saveTeamConfig = useCallback(async () => {
     if (!teamMembersDraft.length) {
       flashToast("Selecteer minimaal 1 servicedesk teamlid.", "error");
@@ -1015,6 +1244,7 @@ export default function Home() {
       upcomingRes.json(),
       todayRes.json(),
     ]);
+    setAllVacations(Array.isArray(allData) ? allData : []);
     setUpcomingVacationTotal(Array.isArray(allData) ? allData.length : 0);
     setUpcomingVacations(Array.isArray(upcomingData) ? upcomingData : []);
     setTodayVacations(Array.isArray(todayData) ? todayData : []);
@@ -1027,20 +1257,27 @@ export default function Home() {
       team_members: Array.isArray(data?.team_members) ? data.team_members : [],
       onderwerpen: Array.isArray(data?.onderwerpen) ? data.onderwerpen : [],
       updated_at: data?.updated_at || null,
+      team_member_avatars:
+        data?.team_member_avatars && typeof data.team_member_avatars === "object"
+          ? data.team_member_avatars
+          : {},
     };
     setServicedeskConfig(normalized);
+    setServicedeskOnderwerpenBaseline((prev) => (Array.isArray(prev) && prev.length ? prev : normalized.onderwerpen));
     setTeamMembersDraft(normalized.team_members);
     setOnderwerpenDraft(normalized.onderwerpen);
   }, []);
 
   const startVacationCreate = useCallback(() => {
     const todayIso = isoDate(new Date());
-    setVacationForm({
+    const nextForm = {
       id: null,
       memberName: servicedeskTeamMembers[0] || "",
       startDate: todayIso,
       endDate: todayIso,
-    });
+    };
+    setVacationForm(nextForm);
+    setVacationInitialForm(nextForm);
     setVacationStartUi(fmtDate(todayIso));
     setVacationEndUi(fmtDate(todayIso));
     setVacationEditMode(true);
@@ -1050,12 +1287,14 @@ export default function Home() {
     if (!vacation) return;
     const startDate = vacation.start_date || "";
     const endDate = vacation.end_date || "";
-    setVacationForm({
+    const nextForm = {
       id: vacation.id,
       memberName: vacation.member_name || VACATION_TEAM_MEMBERS[0],
       startDate,
       endDate,
-    });
+    };
+    setVacationForm(nextForm);
+    setVacationInitialForm(nextForm);
     setVacationStartUi(fmtDate(startDate));
     setVacationEndUi(fmtDate(endDate));
     setVacationEditMode(true);
@@ -1064,15 +1303,53 @@ export default function Home() {
   const cancelVacationEdit = useCallback(() => {
     setVacationEditMode(false);
     setVacationSaving(false);
-    setVacationForm({
+    const resetForm = {
       id: null,
       memberName: servicedeskTeamMembers[0] || "",
       startDate: "",
       endDate: "",
-    });
+    };
+    setVacationForm(resetForm);
+    setVacationInitialForm(resetForm);
     setVacationStartUi("");
     setVacationEndUi("");
   }, [servicedeskTeamMembers]);
+
+  const applyVacationStartDate = useCallback((nextStartDate) => {
+    const iso = String(nextStartDate || "").trim();
+    if (!iso) return;
+    const prevStart = String(vacationForm.startDate || "").trim();
+    const prevEnd = String(vacationForm.endDate || "").trim();
+    const shouldSyncEnd = !prevEnd || prevEnd === prevStart || prevEnd < iso;
+    setVacationForm((prev) => ({
+      ...prev,
+      startDate: iso,
+      endDate: shouldSyncEnd ? iso : prev.endDate,
+    }));
+    setVacationStartUi(fmtDate(iso));
+    if (shouldSyncEnd) setVacationEndUi(fmtDate(iso));
+  }, [vacationForm.startDate, vacationForm.endDate]);
+
+  const vacationFormDirty = useMemo(() => {
+    const current = {
+      id: vacationForm?.id ?? null,
+      memberName: String(vacationForm?.memberName || "").trim(),
+      startDate: String(vacationForm?.startDate || "").trim(),
+      endDate: String(vacationForm?.endDate || "").trim(),
+    };
+    const initial = {
+      id: vacationInitialForm?.id ?? null,
+      memberName: String(vacationInitialForm?.memberName || "").trim(),
+      startDate: String(vacationInitialForm?.startDate || "").trim(),
+      endDate: String(vacationInitialForm?.endDate || "").trim(),
+    };
+    return (
+      current.id !== initial.id ||
+      current.memberName !== initial.memberName ||
+      current.startDate !== initial.startDate ||
+      current.endDate !== initial.endDate
+    );
+  }, [vacationForm, vacationInitialForm]);
 
   const saveVacation = useCallback(async () => {
     const memberName = String(vacationForm.memberName || "").trim();
@@ -1564,9 +1841,14 @@ export default function Home() {
     }
   }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee, organization, servicedeskOnly, p90Period]);
 
-  // volume -> weeks x series (use full range so empty weeks show as 0)
-  const weeks = useMemo(() => buildWeekStartsFromRange(dateFrom, dateTo), [dateFrom, dateTo]);
-  const weeksOnderwerp = useMemo(() => buildWeekStartsFromRange(dateFrom, dateTo), [dateFrom, dateTo]);
+  // Hide a partial first week (when dateFrom is not Monday) to avoid misleading empty first points.
+  const weeks = useMemo(() => {
+    const fullWeeks = buildWeekStartsFromRange(dateFrom, dateTo);
+    return trimLeadingPartialWeek(fullWeeks, dateFrom);
+  }, [dateFrom, dateTo]);
+  const weeksOnderwerp = weeks;
+  const releaseCadencePlugin = useMemo(() => ({ weeks }), [weeks]);
+  const releaseCadenceOnderwerpPlugin = useMemo(() => ({ weeks: weeksOnderwerp }), [weeksOnderwerp]);
   const fullWeekInfo = useMemo(() => {
     const currentWeek = weekStartIsoFromDate();
     const indices = weeks
@@ -1871,24 +2153,25 @@ export default function Home() {
       new Set(rows.map((x) => String(x?.request_type || "").trim()).filter(Boolean))
     );
     const types = allTypes.length ? allTypes : typeSetFromRows;
+    const datasets = types.map((typeLabel) => ({
+      label: typeLabel,
+      data: weeks.map((w) => {
+        const row = rows.find(
+          (x) =>
+            String(x?.week || "").slice(0, 10) === w &&
+            String(x?.request_type || "") === String(typeLabel)
+        );
+        return row?.avg_hours != null ? Number(row.avg_hours) : null;
+      }),
+      tension: 0.2,
+      borderColor: typeColor(typeLabel),
+      backgroundColor: typeColor(typeLabel),
+      pointBackgroundColor: typeColor(typeLabel),
+      pointBorderColor: typeColor(typeLabel),
+    }));
     return {
       labels,
-      datasets: types.map((typeLabel) => ({
-        label: typeLabel,
-        data: weeks.map((w) => {
-          const row = rows.find(
-            (x) =>
-              String(x?.week || "").slice(0, 10) === w &&
-              String(x?.request_type || "") === String(typeLabel)
-          );
-          return row?.avg_hours != null ? Number(row.avg_hours) : null;
-        }),
-        tension: 0.2,
-        borderColor: typeColor(typeLabel),
-        backgroundColor: typeColor(typeLabel),
-        pointBackgroundColor: typeColor(typeLabel),
-        pointBorderColor: typeColor(typeLabel),
-      })),
+      datasets,
     };
   }, [incidentResolutionWeekly, weeks, meta.request_types, typeColor]);
 
@@ -2096,29 +2379,74 @@ export default function Home() {
       .slice(0, 10);
   }, [fullWeekInfo, weeks, onderwerpVolume, topOnderwerpSort]);
 
-  const vacationBanner = useMemo(() => {
+  const vacationBannerItems = useMemo(() => {
+    const items = [];
+    const avatarMap =
+      servicedeskConfig?.team_member_avatars && typeof servicedeskConfig.team_member_avatars === "object"
+        ? servicedeskConfig.team_member_avatars
+        : {};
+    const todayIso = isoDate(new Date());
     const active = Array.isArray(todayVacations) ? todayVacations : [];
-    if (!active.length) return null;
-    const names = Array.from(new Set(active.map((item) => item?.member_name).filter(Boolean)));
-    if (!names.length) return null;
-    if (names.length === 1) {
-      const memberName = names[0];
+    const activeNames = Array.from(new Set(active.map((item) => item?.member_name).filter(Boolean)));
+    activeNames.forEach((memberName) => {
       const memberRows = active.filter((item) => item?.member_name === memberName);
       const endDates = memberRows.map((item) => item?.end_date).filter(Boolean).sort();
       const latestEndDate = endDates.length ? endDates[endDates.length - 1] : null;
-      const todayIso = isoDate(new Date());
-      if (latestEndDate && latestEndDate > todayIso) {
-        return { text: `Vandaag is ${memberName} vrij tot en met ${fmtDateWithWeekday(latestEndDate)}` };
+      const text =
+        latestEndDate && latestEndDate > todayIso
+          ? `Vandaag is ${memberName} vrij tot en met ${fmtDateWithWeekday(latestEndDate)}`
+          : `Vandaag is ${memberName} vrij`;
+      items.push({
+        kind: "active",
+        key: `active:${memberName}`,
+        memberName,
+        avatarUrl: avatarMap[memberName] || "",
+        text,
+        emoji: "🏖️",
+      });
+    });
+
+    const vacations = Array.isArray(allVacations) ? allVacations : [];
+    const warningByMember = new Map();
+    vacations.forEach((item) => {
+      const memberName = String(item?.member_name || "").trim();
+      const startDate = String(item?.start_date || "").trim();
+      const endDate = String(item?.end_date || "").trim();
+      if (!memberName || !startDate) return;
+      if (startDate <= todayIso) return;
+      const workdays = businessDaysUntil(todayIso, startDate);
+      if (workdays < 1 || workdays > 2) return;
+      const current = warningByMember.get(memberName);
+      if (!current || startDate < current.startDate) {
+        warningByMember.set(memberName, { memberName, startDate, endDate, workdays });
       }
-      return { text: `Vandaag is ${memberName} vrij` };
-    }
-    if (names.length === 2) {
-      return { text: `Vandaag zijn ${names[0]} en ${names[1]} vrij` };
-    }
-    const last = names[names.length - 1];
-    const start = names.slice(0, -1).join(", ");
-    return { text: `Vandaag zijn ${start} en ${last} vrij` };
-  }, [todayVacations]);
+    });
+    Array.from(warningByMember.values())
+      .sort((a, b) => a.startDate.localeCompare(b.startDate))
+      .forEach(({ memberName, startDate, endDate }) => {
+        if (activeNames.includes(memberName)) return;
+        const startWeekday = weekdayNameNl(startDate);
+        const isSingleDay = !!startDate && !!endDate && startDate === endDate;
+        items.push({
+          kind: "warning",
+          key: `warning:${memberName}:${startDate}`,
+          memberName,
+          avatarUrl: avatarMap[memberName] || "",
+          text: isSingleDay
+            ? `${memberName} is ${startWeekday} vrij`
+            : `${memberName} is vanaf ${startWeekday} vrij`,
+          emoji: "🚨",
+        });
+      });
+
+    return items;
+  }, [todayVacations, allVacations, servicedeskConfig]);
+
+  const vacationBanner = useMemo(() => {
+    if (!vacationBannerItems.length) return null;
+    const idx = vacationBannerIndex % vacationBannerItems.length;
+    return vacationBannerItems[idx];
+  }, [vacationBannerItems, vacationBannerIndex]);
 
   const formatVacationRangeLabel = useCallback((startDate, endDate) => {
     if (!startDate || !endDate) return "";
@@ -2133,21 +2461,62 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!vacationBanner) return;
-    setVacationBannerEmoji(
-      VACATION_BANNER_EMOJIS[Math.floor(Math.random() * VACATION_BANNER_EMOJIS.length)]
-    );
+    setVacationBannerIndex(0);
+  }, [vacationBannerItems.length]);
+
+  useEffect(() => {
+    if (vacationBannerItems.length <= 1) return;
     const t = setInterval(() => {
-      setVacationBannerEmoji((prev) => {
-        const currentIdx = VACATION_BANNER_EMOJIS.indexOf(prev);
-        const nextIdx =
-          currentIdx >= 0
-            ? (currentIdx + 1) % VACATION_BANNER_EMOJIS.length
-            : Math.floor(Math.random() * VACATION_BANNER_EMOJIS.length);
-        return VACATION_BANNER_EMOJIS[nextIdx];
-      });
-    }, 3500);
+      setVacationBannerIndex((prev) => (prev + 1) % vacationBannerItems.length);
+    }, 5000);
     return () => clearInterval(t);
+  }, [vacationBannerItems.length]);
+
+  useEffect(() => {
+    if (!vacationBanner) return;
+    const t = setTimeout(() => {
+      setVacationBannerIndex((prev) => prev % Math.max(1, vacationBannerItems.length));
+    }, 0);
+    return () => clearTimeout(t);
+  }, [vacationBanner, vacationBannerItems.length]);
+
+  const vacationBannerStyle = useMemo(() => {
+    if (vacationBanner?.kind === "warning") {
+      return {
+        gridColumn: 2,
+        marginBottom: 0,
+        border: "1px solid color-mix(in srgb, #f59e0b 50%, var(--border))",
+        borderRadius: 10,
+        background: "color-mix(in srgb, #f59e0b 12%, var(--surface))",
+        color: "var(--text-main)",
+        padding: "8px 14px",
+        fontSize: 14,
+        fontWeight: 700,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 10,
+        justifySelf: "center",
+        marginLeft: "auto",
+        marginRight: "auto",
+      };
+    }
+    return {
+      gridColumn: 2,
+      marginBottom: 0,
+      border: "1px solid color-mix(in srgb, var(--ok) 45%, var(--border))",
+      borderRadius: 10,
+      background: "color-mix(in srgb, var(--ok) 14%, var(--surface))",
+      color: "var(--text-main)",
+      padding: "8px 14px",
+      fontSize: 14,
+      fontWeight: 700,
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 10,
+      justifySelf: "center",
+      marginLeft: "auto",
+      marginRight: "auto",
+    };
   }, [vacationBanner]);
 
   useEffect(() => {
@@ -2477,23 +2846,6 @@ export default function Home() {
     gap: 8,
     marginLeft: "auto",
     flexShrink: 0,
-  };
-  const vacationBannerStyle = {
-    gridColumn: 2,
-    marginBottom: 0,
-    border: "1px solid color-mix(in srgb, var(--ok) 45%, var(--border))",
-    borderRadius: 10,
-    background: "color-mix(in srgb, var(--ok) 14%, var(--surface))",
-    color: "var(--text-main)",
-    padding: "8px 18px",
-    fontSize: 14,
-    fontWeight: 700,
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 8,
-    justifySelf: "center",
-    marginLeft: "auto",
-    marginRight: "auto",
   };
   const activeFiltersBadgeStyle = {
     height: 36,
@@ -2991,6 +3343,7 @@ export default function Home() {
                 plugins: {
                   legend: { display: false },
                   tooltip: { mode: "nearest", intersect: false },
+                  releaseCadence: releaseCadencePlugin,
                   simpleDataLabels: { mode: "line", maxLabels: expanded ? 24 : 12 },
                 },
                 interaction: { mode: "nearest", intersect: false },
@@ -3029,6 +3382,7 @@ export default function Home() {
                   plugins: {
                     legend: { display: false },
                     tooltip: { mode: "nearest", intersect: false },
+                    releaseCadence: releaseCadenceOnderwerpPlugin,
                     simpleDataLabels: { mode: "line", maxLabels: expanded ? 24 : 12 },
                   },
                   interaction: { mode: "nearest", intersect: false },
@@ -3057,6 +3411,7 @@ export default function Home() {
                       legend: {
                         display: true,
                         position: "right",
+                        onClick: disableLegendClick,
                         labels: {
                           color: (ctx) => priorityColors?.[ctx.index] || "#6b7280",
                         },
@@ -3091,6 +3446,7 @@ export default function Home() {
                       legend: {
                         display: true,
                         position: "right",
+                        onClick: disableLegendClick,
                         labels: {
                           color: (ctx) => assigneeColors?.[ctx.index] || "#6b7280",
                         },
@@ -3193,6 +3549,7 @@ export default function Home() {
                       label: (ctx) => `${ctx.dataset.label}: ${num(ctx.parsed.y)} tickets`,
                     },
                   },
+                  releaseCadence: releaseCadencePlugin,
                   simpleDataLabels: false,
                 },
                 interaction: { mode: "nearest", intersect: false },
@@ -3229,6 +3586,7 @@ export default function Home() {
                 plugins: {
                   legend: { display: true, position: "top" },
                   tooltip: { mode: "nearest", intersect: false },
+                  releaseCadence: releaseCadencePlugin,
                   simpleDataLabels: false,
                 },
                 interaction: { mode: "nearest", intersect: false },
@@ -3262,6 +3620,7 @@ export default function Home() {
                 plugins: {
                   legend: { display: true, position: "top" },
                   tooltip: { mode: "nearest", intersect: false },
+                  releaseCadence: releaseCadencePlugin,
                   simpleDataLabels: false,
                 },
                 interaction: { mode: "nearest", intersect: false },
@@ -3348,8 +3707,7 @@ export default function Home() {
                       onBlur={() => {
                         const iso = parseNlDateToIso(vacationStartUi);
                         if (iso) {
-                          setVacationForm((prev) => ({ ...prev, startDate: iso }));
-                          setVacationStartUi(fmtDate(iso));
+                          applyVacationStartDate(iso);
                         } else {
                           flashToast("Ongeldige startdatum. Gebruik dd/mm/jjjj.", "error");
                           setVacationStartUi(fmtDate(vacationForm.startDate));
@@ -3384,8 +3742,7 @@ export default function Home() {
                       min={isoDate(new Date())}
                       onChange={(e) => {
                         const iso = e.target.value;
-                        setVacationForm((prev) => ({ ...prev, startDate: iso }));
-                        setVacationStartUi(fmtDate(iso));
+                        applyVacationStartDate(iso);
                       }}
                       style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 0, height: 0 }}
                       tabIndex={-1}
@@ -3452,10 +3809,20 @@ export default function Home() {
                 </label>
               </div>
               <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                <button type="button" onClick={saveVacation} disabled={vacationSaving} style={layoutPrimaryButtonStyle}>
+                <button
+                  type="button"
+                  onClick={saveVacation}
+                  disabled={vacationSaving || !vacationFormDirty}
+                  style={layoutPrimaryButtonStyle}
+                >
                   Opslaan
                 </button>
-                <button type="button" onClick={cancelVacationEdit} disabled={vacationSaving} style={buttonBaseStyle}>
+                <button
+                  type="button"
+                  onClick={cancelVacationEdit}
+                  disabled={vacationSaving}
+                  style={buttonBaseStyle}
+                >
                   Annuleren
                 </button>
               </div>
@@ -3466,6 +3833,10 @@ export default function Home() {
                 {upcomingVacations.slice(0, 3).map((item) => (
                   (() => {
                     const isActiveToday = isVacationActiveToday(item);
+                    const todayIso = isoDate(new Date());
+                    const startDate = String(item?.start_date || "");
+                    const workdaysUntilStart = startDate ? businessDaysUntil(todayIso, startDate) : 0;
+                    const isSoonWarning = !isActiveToday && workdaysUntilStart >= 1 && workdaysUntilStart <= 2;
                     const activeTodayStyle = isActiveToday
                       ? {
                           minHeight: 78, // ~1.5x base item height
@@ -3473,21 +3844,33 @@ export default function Home() {
                           background: "color-mix(in srgb, var(--ok) 18%, var(--surface))",
                         }
                       : null;
+                    const soonWarningStyle = isSoonWarning
+                      ? {
+                          borderColor: "color-mix(in srgb, #f59e0b 55%, var(--border))",
+                          background: "color-mix(in srgb, #f59e0b 14%, var(--surface))",
+                        }
+                      : null;
                     return (
                   <li
                     key={`vac-upcoming-${item.id}`}
                     className="vacation-row"
-                    style={{ ...vacationItemStyle, ...(activeTodayStyle || {}) }}
+                    style={{ ...vacationItemStyle, ...(soonWarningStyle || {}), ...(activeTodayStyle || {}) }}
                     onMouseEnter={() => setVacationHoverId(item.id)}
                     onMouseLeave={() => setVacationHoverId((prev) => (prev === item.id ? null : prev))}
                     onFocus={() => setVacationHoverId(item.id)}
                     onBlur={() => setVacationHoverId((prev) => (prev === item.id ? null : prev))}
                   >
-                    <div style={{ display: "grid", gap: 2 }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
+                      <VacationAvatar
+                        name={item.member_name}
+                        avatarUrl={servicedeskConfig?.team_member_avatars?.[item.member_name] || ""}
+                      />
+                      <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
                       <strong>{item.member_name}</strong>
                       <span style={{ color: "var(--text-muted)" }}>
                         {formatVacationRangeLabel(item.start_date, item.end_date)}
                       </span>
+                      </div>
                     </div>
                     <div
                       className="vacation-row-actions"
@@ -3828,8 +4211,31 @@ export default function Home() {
         <h1 style={titleStyle}>Dashboard Servicedesk Planningsagenda</h1>
         {vacationBanner ? (
           <div style={vacationBannerStyle}>
-            <span aria-hidden>{vacationBannerEmoji}</span>
+            <VacationAvatar
+              name={vacationBanner.memberName}
+              avatarUrl={vacationBanner.avatarUrl}
+              style={{ width: 30, height: 30, fontSize: 11 }}
+            />
             <span>{vacationBanner.text}</span>
+            <span aria-hidden>{vacationBanner.emoji}</span>
+            {vacationBannerItems.length > 1 ? (
+              <span style={{ display: "inline-flex", gap: 4, marginLeft: 4, alignItems: "center" }}>
+                {vacationBannerItems.map((item, idx) => (
+                  <span
+                    key={`banner-dot-${item.key}`}
+                    aria-hidden
+                    style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: 999,
+                      background: idx === (vacationBannerIndex % vacationBannerItems.length)
+                        ? "var(--text-main)"
+                        : "color-mix(in srgb, var(--text-muted) 48%, transparent)",
+                    }}
+                  />
+                ))}
+              </span>
+            ) : null}
           </div>
         ) : null}
         <div style={headerActionsStyle}>
@@ -4151,10 +4557,20 @@ export default function Home() {
               ))}
             </div>
             <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-              <button type="button" onClick={saveTeamConfig} disabled={teamConfigSaving} style={layoutPrimaryButtonStyle}>
+              <button
+                type="button"
+                onClick={saveTeamConfig}
+                disabled={teamConfigSaving || !teamConfigDirty}
+                style={layoutPrimaryButtonStyle}
+              >
                 Opslaan
               </button>
-              <button type="button" onClick={cancelTeamConfig} disabled={teamConfigSaving} style={buttonBaseStyle}>
+              <button
+                type="button"
+                onClick={cancelTeamConfig}
+                disabled={teamConfigSaving || !teamConfigDirty}
+                style={buttonBaseStyle}
+              >
                 Annuleren
               </button>
             </div>
@@ -4175,12 +4591,35 @@ export default function Home() {
               ))}
             </div>
             <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-              <button type="button" onClick={saveOnderwerpConfig} disabled={onderwerpConfigSaving} style={layoutPrimaryButtonStyle}>
+              <button
+                type="button"
+                onClick={saveOnderwerpConfig}
+                disabled={onderwerpConfigSaving || !onderwerpConfigDirty}
+                style={layoutPrimaryButtonStyle}
+              >
                 Opslaan
               </button>
-              <button type="button" onClick={cancelOnderwerpConfig} disabled={onderwerpConfigSaving} style={buttonBaseStyle}>
+              <button
+                type="button"
+                onClick={cancelOnderwerpConfig}
+                disabled={onderwerpConfigSaving || !onderwerpConfigDirty}
+                style={buttonBaseStyle}
+              >
                 Annuleren
               </button>
+              {onderwerpResetAvailable ? (
+                <button
+                  type="button"
+                  onClick={() => setOnderwerpenDraft(Array.isArray(servicedeskOnderwerpenBaseline) ? servicedeskOnderwerpenBaseline : [])}
+                  disabled={onderwerpConfigSaving}
+                  style={filterOpenButtonStyle}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  Opnieuw beginnen
+                </button>
+              ) : null}
             </div>
           </details>
         </div>
@@ -4810,9 +5249,11 @@ export default function Home() {
       </div>
 
       {syncStatus ? (
-        <div title={syncStatusInlineText} style={syncDockStyle}>
-          {syncStatusInlineText}
-        </div>
+        <Link href="/status" title="Open statuspagina" style={{ textDecoration: "none" }}>
+          <div title={syncStatusInlineText} style={{ ...syncDockStyle, cursor: "pointer" }}>
+            {syncStatusInlineText}
+          </div>
+        </Link>
       ) : null}
 
       <style jsx global>{`
@@ -4870,6 +5311,12 @@ export default function Home() {
         textarea,
         button {
           color: var(--text-main);
+        }
+        button:disabled {
+          opacity: 0.5;
+          cursor: not-allowed !important;
+          filter: grayscale(0.2);
+          box-shadow: none !important;
         }
         a {
           color: var(--accent);
