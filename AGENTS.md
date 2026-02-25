@@ -10,3 +10,13 @@
 ## Commits
 - Keep changes on the active feature branch.
 - Only commit/push when the user asks.
+
+## PR Quality Gates
+- When preparing a PR, backend tests must pass.
+- When preparing a PR, frontend tests must pass.
+- Backend code coverage must be at least 80%.
+- Frontend code coverage must be at least 80%.
+- If tests fail or coverage is below threshold, update code/tests until all gates pass before marking PR ready.
+
+## Scope Clarification
+- If it is unclear whether a requested rule/change applies only to the current branch or to the whole repository, ask the user first before applying it.

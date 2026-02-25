@@ -12,7 +12,43 @@ import {
 } from "chart.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { parseNlDateToIso } from "../lib/date";
+import { buildUpcomingWarningText, businessDaysUntil } from "../lib/vacation-banner";
 import Link from "next/link";
+import {
+  API,
+  CARD_TITLES,
+  DASHBOARD_CONFIG_STORAGE_KEY,
+  DEFAULT_SERVICEDESK_ONLY,
+  JIRA_BASE,
+  KPI_KEYS,
+  MAX_CARDS_PER_ROW,
+  MAX_KPI_TILES,
+  NON_KPI_CARD_KEYS,
+  TV_MODE_STORAGE_KEY,
+  TYPE_COLORS,
+  VACATION_TEAM_MEMBERS,
+  createDefaultDashboardLayout,
+} from "../lib/dashboard-constants";
+import {
+  addDaysIso,
+  buildWeekStartsFromRange,
+  fmtDate,
+  fmtDateTime,
+  fmtDateWithWeekday,
+  hasDataPoints,
+  isTextEntryTarget,
+  isoDate,
+  num,
+  pct,
+  sameStringSet,
+  trimLeadingPartialWeek,
+  weekStartIsoFromDate,
+} from "../lib/dashboard-utils";
+import { legendNoopHandler, setupChartDefaults } from "../lib/chart-setup";
+import EmptyChartState from "../components/EmptyChartState";
+import LiveAlertStack from "../components/LiveAlertStack";
+import Toast from "../components/Toast";
+import VacationAvatar from "../components/VacationAvatar";
 
 ChartJS.register(
   CategoryScale,
@@ -24,704 +60,7 @@ ChartJS.register(
   Tooltip,
   Legend
 );
-
-const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
-const JIRA_BASE = "https://planningsagenda.atlassian.net";
-const RELEASE_ANCHOR_ISO = process.env.NEXT_PUBLIC_RELEASE_ANCHOR_ISO || "2026-01-21T00:00:00Z";
-const DEFAULT_SERVICEDESK_ONLY = true;
-const DASHBOARD_CONFIG_STORAGE_KEY = "jsm_dashboard_layout_v2";
-const TV_MODE_STORAGE_KEY = "jsm_dashboard_tv_mode";
-const VACATION_TEAM_MEMBERS = ["Johan", "Ashley", "Jarno"];
-const TYPE_COLORS = {
-  rfc: "#2e7d32",
-  incident: "#c62828",
-  incidenten: "#c62828",
-  "service request": "#1565c0",
-  vraag: "#e65100",
-  vragen: "#e65100",
-  totaal: "#374151",
-};
-const CARD_TITLES = {
-  volume: "Aantal tickets per week",
-  onderwerp: "Onderwerp logging",
-  priority: "Tickets per priority",
-  assignee: "Tickets per assignee",
-  p90: "Doorlooptijd p50/p75/p90",
-  inflowVsClosed: "Binnengekomen vs afgesloten",
-  incidentResolution: "Time to Resolution",
-  firstResponseAll: "Time to First Response (alle tickets)",
-  organizationWeekly: "Tickets per partner per week",
-  vacationServicedesk: "Vakantie Servicedesk",
-};
-const KPI_KEYS = ["totalTickets", "latestTickets", "avgPerWeek", "topType", "topSubject", "topPartner"];
-const NON_KPI_CARD_KEYS = ["topOnderwerpen", ...Object.keys(CARD_TITLES)];
-const MAX_CARDS_PER_ROW = 5;
-const MAX_KPI_TILES = 6;
-
-function createDefaultDashboardLayout() {
-  return {
-    kpiRow: [...KPI_KEYS],
-    hiddenKpis: [],
-    cardRows: [
-      ["topOnderwerpen", "volume", "priority", "organizationWeekly", "vacationServicedesk"],
-      ["assignee", "onderwerp", "p90", "inflowVsClosed", "incidentResolution", "firstResponseAll"],
-    ],
-    hiddenCards: [],
-    expandedByRow: [null, null],
-  };
-}
-
-function isoDate(d) {
-  // yyyy-mm-dd
-  return d.toISOString().slice(0, 10);
-}
-
-function fmtDate(value) {
-  if (!value) return "";
-  const dt = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(dt.getTime())) return "";
-  return new Intl.DateTimeFormat("nl-NL", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  }).format(dt);
-}
-
-function fmtDateWithWeekday(value) {
-  if (!value) return "";
-  const dt = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(dt.getTime())) return "";
-  const weekday = new Intl.DateTimeFormat("nl-NL", { weekday: "long" }).format(dt);
-  const datePart = new Intl.DateTimeFormat("nl-NL", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  })
-    .format(dt)
-    .replaceAll("/", "-");
-  return `${weekday.charAt(0).toUpperCase()}${weekday.slice(1)} ${datePart}`;
-}
-
-function weekdayNameNl(value) {
-  if (!value) return "";
-  const dt = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(dt.getTime())) return "";
-  return new Intl.DateTimeFormat("nl-NL", { weekday: "long" }).format(dt);
-}
-
-
-function fmtDateTime(value) {
-  if (!value) return "";
-  const dt = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(dt.getTime())) return "";
-  return new Intl.DateTimeFormat("nl-NL", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-    timeZone: "Europe/Amsterdam",
-  }).format(dt);
-}
-
-function weekStartIsoFromDate(d = new Date()) {
-  const dt = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-  const day = dt.getUTCDay();
-  const diff = (day + 6) % 7; // days since Monday
-  dt.setUTCDate(dt.getUTCDate() - diff);
-  return dt.toISOString().slice(0, 10);
-}
-
-function buildWeekStartsFromRange(fromIso, toIso) {
-  if (!fromIso || !toIso) return [];
-  const [fy, fm, fd] = fromIso.split("-").map(Number);
-  const [ty, tm, td] = toIso.split("-").map(Number);
-  const from = new Date(Date.UTC(fy, fm - 1, fd));
-  const to = new Date(Date.UTC(ty, tm - 1, td));
-  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return [];
-
-  const day = from.getUTCDay();
-  const diff = (day + 6) % 7;
-  from.setUTCDate(from.getUTCDate() - diff);
-
-  const weeks = [];
-  const cursor = new Date(from);
-  while (cursor <= to) {
-    weeks.push(cursor.toISOString().slice(0, 10));
-    cursor.setUTCDate(cursor.getUTCDate() + 7);
-  }
-  return weeks;
-}
-
-function trimLeadingPartialWeek(weeks, fromIso) {
-  if (!Array.isArray(weeks) || !weeks.length || !fromIso) return weeks;
-  // If the selected start date falls mid-week, hide that partial first week in charts.
-  return fromIso > weeks[0] ? weeks.slice(1) : weeks;
-}
-
-function addDaysIso(yyyyMmDd, days) {
-  const [y, m, d] = yyyyMmDd.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCDate(dt.getUTCDate() + days);
-  return dt.toISOString().slice(0, 10);
-}
-
-function isWeekdayIso(yyyyMmDd) {
-  if (!yyyyMmDd) return false;
-  const [y, m, d] = yyyyMmDd.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  const day = dt.getUTCDay();
-  return day >= 1 && day <= 5;
-}
-
-function businessDaysUntil(fromIso, toIso) {
-  if (!fromIso || !toIso || toIso <= fromIso) return 0;
-  let cursor = addDaysIso(fromIso, 1);
-  let total = 0;
-  while (cursor <= toIso) {
-    if (isWeekdayIso(cursor)) total += 1;
-    cursor = addDaysIso(cursor, 1);
-  }
-  return total;
-}
-
-function isTextEntryTarget(target) {
-  const el = target instanceof HTMLElement ? target : null;
-  if (!el) return false;
-  if (el.isContentEditable) return true;
-  const tagName = String(el.tagName || "").toLowerCase();
-  if (tagName === "input" || tagName === "textarea" || tagName === "select") return true;
-  return !!el.closest?.("input, textarea, select, [contenteditable='true']");
-}
-
-function Toast({ message, kind, onClose }) {
-  if (!message) return null;
-
-  const bg = kind === "error" ? "#b00020" : "#1b5e20";
-
-  return (
-    <div
-      style={{
-        position: "fixed",
-        right: 16,
-        bottom: 16,
-        zIndex: 9999,
-        background: bg,
-        color: "#fff",
-        padding: "10px 12px",
-        borderRadius: 8,
-        boxShadow: "0 6px 18px rgba(0,0,0,0.18)",
-        maxWidth: 420,
-        display: "flex",
-        gap: 10,
-        alignItems: "center",
-      }}
-      role="status"
-      aria-live="polite"
-    >
-      <div style={{ flex: 1 }}>{message}</div>
-      <button
-        onClick={onClose}
-        style={{
-          background: "transparent",
-          border: "none",
-          color: "#fff",
-          cursor: "pointer",
-          fontSize: 16,
-          lineHeight: 1,
-        }}
-        aria-label="Sluiten"
-        title="Sluiten"
-      >
-        ×
-      </button>
-    </div>
-  );
-}
-
-function LiveAlertStack({ alerts }) {
-  const p1Items = Array.isArray(alerts?.priority1) ? alerts.priority1 : [];
-  const slaItems = Array.isArray(alerts?.first_response_due_soon) ? alerts.first_response_due_soon : [];
-  const overdueItems = Array.isArray(alerts?.first_response_overdue) ? alerts.first_response_overdue : [];
-  if (!p1Items.length && !slaItems.length && !overdueItems.length) return null;
-
-  const shellStyle = {
-    position: "fixed",
-    top: 16,
-    right: 16,
-    zIndex: 1004,
-    width: "min(420px, calc(100vw - 32px))",
-    display: "grid",
-    gap: 10,
-  };
-
-  const cardStyle = {
-    borderRadius: 12,
-    border: "1px solid",
-    boxShadow: "0 10px 22px var(--shadow-medium)",
-    overflow: "hidden",
-    backdropFilter: "blur(2px)",
-    animation: "alertIn 220ms ease",
-  };
-
-  const titleRowStyle = {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    padding: "10px 12px",
-    borderBottom: "1px solid rgba(255,255,255,0.18)",
-    fontWeight: 800,
-    letterSpacing: 0.2,
-  };
-
-  const listStyle = {
-    margin: 0,
-    padding: "8px 12px 12px",
-    listStyle: "none",
-    display: "grid",
-    gap: 6,
-  };
-
-  const itemStyle = {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 12,
-    alignItems: "baseline",
-    fontSize: 13,
-    lineHeight: 1.3,
-  };
-
-  return (
-    <div style={shellStyle} aria-live="assertive" aria-atomic="false">
-      {p1Items.length ? (
-        <section
-          style={{
-            ...cardStyle,
-            borderColor: "rgba(127, 29, 29, 0.45)",
-            background: "linear-gradient(135deg, #7f1d1d, #991b1b)",
-            color: "#fee2e2",
-          }}
-        >
-          <div style={titleRowStyle}>
-            <span style={{ fontSize: 11, border: "1px solid rgba(254,226,226,0.45)", borderRadius: 999, padding: "2px 8px" }}>
-              P1
-            </span>
-            <span>Priority 1 binnengekomen</span>
-            <strong style={{ marginLeft: "auto", fontSize: 12 }}>{p1Items.length}</strong>
-          </div>
-          <ul style={listStyle}>
-            {p1Items.slice(0, 5).map((item) => (
-              <li key={`p1-${item.issue_key}`} style={itemStyle}>
-                <a
-                  href={`${JIRA_BASE}/browse/${item.issue_key}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ color: "#fff", fontWeight: 700 }}
-                >
-                  {item.issue_key}
-                </a>
-                <span>{item.status || "Open"}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      {slaItems.length ? (
-        <section
-          style={{
-            ...cardStyle,
-            borderColor: "rgba(120, 53, 15, 0.45)",
-            background: "linear-gradient(135deg, #78350f, #b45309)",
-            color: "#ffedd5",
-          }}
-        >
-          <div style={titleRowStyle}>
-            <span style={{ fontSize: 11, border: "1px solid rgba(255,237,213,0.45)", borderRadius: 999, padding: "2px 8px" }}>
-              SLA
-            </span>
-            <span>First response bijna verlopen</span>
-            <strong style={{ marginLeft: "auto", fontSize: 12 }}>{slaItems.length}</strong>
-          </div>
-          <ul style={listStyle}>
-            {slaItems.slice(0, 5).map((item) => (
-              <li key={`sla-${item.issue_key}`} style={itemStyle}>
-                <a
-                  href={`${JIRA_BASE}/browse/${item.issue_key}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ color: "#fff", fontWeight: 700 }}
-                >
-                  {item.issue_key}
-                </a>
-                <span>{Math.max(0, Number(item.minutes_left) || 0)} min</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      {overdueItems.length ? (
-        <section
-          style={{
-            ...cardStyle,
-            borderColor: "rgba(120, 16, 16, 0.55)",
-            background: "linear-gradient(135deg, #581c87, #7f1d1d)",
-            color: "#f5d0fe",
-          }}
-        >
-          <div style={titleRowStyle}>
-            <span style={{ fontSize: 11, border: "1px solid rgba(245,208,254,0.45)", borderRadius: 999, padding: "2px 8px" }}>
-              SLA X
-            </span>
-            <span>First response verlopen</span>
-            <strong style={{ marginLeft: "auto", fontSize: 12 }}>{overdueItems.length}</strong>
-          </div>
-          <ul style={listStyle}>
-            {overdueItems.slice(0, 5).map((item) => (
-              <li key={`sla-overdue-${item.issue_key}`} style={itemStyle}>
-                <a
-                  href={`${JIRA_BASE}/browse/${item.issue_key}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ color: "#fff", fontWeight: 700 }}
-                >
-                  {item.issue_key}
-                </a>
-                <span>{Math.max(0, Number(item.minutes_overdue) || 0)} min te laat</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-    </div>
-  );
-}
-
-function hasDataPoints(chartData) {
-  if (!chartData || !Array.isArray(chartData.datasets)) return false;
-  return chartData.datasets.some((ds) =>
-    Array.isArray(ds.data) && ds.data.some((v) => typeof v === "number" && v > 0)
-  );
-}
-
-function num(value, digits = 0) {
-  if (value == null || Number.isNaN(Number(value))) return "—";
-  return new Intl.NumberFormat("nl-NL", {
-    maximumFractionDigits: digits,
-    minimumFractionDigits: digits,
-  }).format(Number(value));
-}
-
-function pct(value) {
-  if (value == null || Number.isNaN(Number(value))) return "—";
-  return `${num(value, 1)}%`;
-}
-
-function sameStringSet(a, b) {
-  const left = Array.isArray(a) ? Array.from(new Set(a.map((x) => String(x)))) : [];
-  const right = Array.isArray(b) ? Array.from(new Set(b.map((x) => String(x)))) : [];
-  if (left.length !== right.length) return false;
-  const rightSet = new Set(right);
-  return left.every((item) => rightSet.has(item));
-}
-
-const SimpleDataLabelsPlugin = {
-  id: "simpleDataLabels",
-  afterDatasetsDraw(chart, _args, pluginOptions) {
-    if (pluginOptions === false) return;
-    if (typeof document !== "undefined" && document.documentElement.dataset.tvMode === "1") return;
-    // On compact card heights, datalabels create clutter/cropping; skip them.
-    if (chart.height < 260) return;
-    const opts = {
-      mode: "bar", // arc | bar | line
-      color: null,
-      fontSize: 10,
-      fontWeight: "600",
-      lineOffset: 6,
-      barOffset: 6,
-      maxLabels: 14,
-      minArcPct: 6,
-      datasetIndexes: null,
-      ...pluginOptions,
-    };
-
-    const computed = typeof window !== "undefined" ? getComputedStyle(document.documentElement) : null;
-    const textColor = opts.color || computed?.getPropertyValue("--text-main")?.trim() || "#111827";
-    const haloColor = computed?.getPropertyValue("--surface")?.trim() || "#ffffff";
-    const ctx = chart.ctx;
-    const visibleMetas = chart.getSortedVisibleDatasetMetas();
-    if (!visibleMetas.length) return;
-    const colorCache = new Map();
-
-    function resolveCssColor(input) {
-      const key = String(input || "");
-      if (!key) return null;
-      if (colorCache.has(key)) return colorCache.get(key);
-      const probe = document.createElement("canvas").getContext("2d");
-      if (!probe) return null;
-      probe.fillStyle = "#000000";
-      probe.fillStyle = key;
-      const normalized = probe.fillStyle;
-      const m = String(normalized).match(/rgba?\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
-      const value = m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
-      colorCache.set(key, value);
-      return value;
-    }
-
-    function contrastTextFor(background) {
-      const rgb = resolveCssColor(background);
-      if (!rgb) return textColor;
-      const [r, g, b] = rgb.map((v) => v / 255);
-      const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-      return luminance > 0.6 ? "#0b1220" : "#f8fafc";
-    }
-
-    function drawLabel(label, x, y, fill = textColor) {
-      const metrics = ctx.measureText(label);
-      const labelWidth = Math.ceil(metrics.width);
-      const labelHeight = Math.ceil(opts.fontSize * 1.25);
-      const pad = 4;
-      const clampedX = Math.max(pad + labelWidth / 2, Math.min(chart.width - pad - labelWidth / 2, x));
-      const clampedY = Math.max(pad + labelHeight / 2, Math.min(chart.height - pad - labelHeight / 2, y));
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = haloColor;
-      ctx.strokeText(label, clampedX, clampedY);
-      ctx.fillStyle = fill;
-      ctx.fillText(label, clampedX, clampedY);
-      ctx.fillStyle = textColor;
-    }
-
-    ctx.save();
-    ctx.font = `${opts.fontWeight} ${opts.fontSize}px system-ui`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-
-    if (opts.mode === "arc") {
-      const meta = visibleMetas[0];
-      const values = (chart.data.datasets?.[meta.index]?.data || []).map((v) => Number(v) || 0);
-      const total = values.reduce((sum, v) => sum + v, 0);
-      if (total <= 0) {
-        ctx.restore();
-        return;
-      }
-
-      meta.data.forEach((element, idx) => {
-        const value = values[idx] || 0;
-        if (value <= 0) return;
-        const percentage = (value / total) * 100;
-        if (percentage < opts.minArcPct) return;
-        const pos = element.tooltipPosition();
-        const label = `${num(value)} (${Math.round(percentage)}%)`;
-        const rawColors = chart.data.datasets?.[meta.index]?.backgroundColor;
-        const bgColor = Array.isArray(rawColors) ? rawColors[idx] : rawColors;
-        drawLabel(label, pos.x, pos.y, contrastTextFor(bgColor));
-      });
-      ctx.restore();
-      return;
-    }
-
-    visibleMetas.forEach((meta) => {
-      if (Array.isArray(opts.datasetIndexes) && !opts.datasetIndexes.includes(meta.index)) return;
-      const dataset = chart.data.datasets?.[meta.index];
-      if (!dataset || dataset.hidden) return;
-      if (String(dataset.label || "").startsWith("Mediaan ")) return;
-      const values = (dataset.data || []).map((v) => Number(v));
-      const valid = values.filter((v) => Number.isFinite(v));
-      const step = valid.length > opts.maxLabels ? Math.ceil(valid.length / opts.maxLabels) : 1;
-
-      meta.data.forEach((element, idx) => {
-        const value = values[idx];
-        if (!Number.isFinite(value) || value <= 0) return;
-        if (idx % step !== 0 && idx !== values.length - 1) return;
-
-        const pos = element.tooltipPosition();
-        const y = opts.mode === "line" ? pos.y - opts.lineOffset : pos.y - opts.barOffset;
-        drawLabel(num(value, value % 1 === 0 ? 0 : 1), pos.x, y, textColor);
-      });
-    });
-
-    ctx.restore();
-  },
-};
-
-if (!ChartJS.registry.plugins.get("simpleDataLabels")) {
-  ChartJS.register(SimpleDataLabelsPlugin);
-}
-
-const disableLegendClick = () => {};
-
-// Keep legends informational only; disable toggling datasets by clicking legend items.
-ChartJS.defaults.plugins.legend.onClick = disableLegendClick;
-if (ChartJS.overrides?.doughnut?.plugins?.legend) {
-  ChartJS.overrides.doughnut.plugins.legend.onClick = disableLegendClick;
-}
-if (ChartJS.overrides?.pie?.plugins?.legend) {
-  ChartJS.overrides.pie.plugins.legend.onClick = disableLegendClick;
-}
-if (ChartJS.overrides?.polarArea?.plugins?.legend) {
-  ChartJS.overrides.polarArea.plugins.legend.onClick = disableLegendClick;
-}
-ChartJS.defaults.plugins.legend.onHover = (evt) => {
-  if (evt?.native?.target?.style) evt.native.target.style.cursor = "default";
-};
-ChartJS.defaults.plugins.legend.onLeave = (evt) => {
-  if (evt?.native?.target?.style) evt.native.target.style.cursor = "default";
-};
-
-const ReleaseCadencePlugin = {
-  id: "releaseCadence",
-  beforeDatasetsDraw(chart, _args, pluginOptions) {
-    if (pluginOptions === false) return;
-    const opts = {
-      weeks: [],
-      anchorIso: RELEASE_ANCHOR_ISO,
-      intervalDays: 14,
-      lineColor: null,
-      lineWidth: 1,
-      dash: [6, 4],
-      ...pluginOptions,
-    };
-
-    const weeks = Array.isArray(opts.weeks) ? opts.weeks.filter(Boolean) : [];
-    if (!weeks.length) return;
-
-    const anchor = new Date(opts.anchorIso);
-    if (Number.isNaN(anchor.getTime())) return;
-
-    const start = new Date(`${weeks[0]}T00:00:00Z`);
-    const lastWeek = new Date(`${weeks[weeks.length - 1]}T00:00:00Z`);
-    const end = new Date(lastWeek.getTime() + 7 * 24 * 60 * 60 * 1000);
-    const intervalMs = Math.max(1, Number(opts.intervalDays) || 14) * 24 * 60 * 60 * 1000;
-
-    let releaseTs = anchor.getTime();
-    if (releaseTs < start.getTime()) {
-      const steps = Math.ceil((start.getTime() - releaseTs) / intervalMs);
-      releaseTs += steps * intervalMs;
-    } else {
-      const steps = Math.floor((releaseTs - start.getTime()) / intervalMs);
-      releaseTs -= steps * intervalMs;
-      while (releaseTs < start.getTime()) releaseTs += intervalMs;
-    }
-
-    const xScale = chart.scales?.x;
-    const yScale = chart.scales?.y;
-    if (!xScale || !yScale) return;
-
-    const computed = typeof window !== "undefined" ? getComputedStyle(document.documentElement) : null;
-    const stroke = opts.lineColor || computed?.getPropertyValue("--accent")?.trim() || "#2563eb";
-
-    const ctx = chart.ctx;
-    ctx.save();
-    ctx.strokeStyle = stroke;
-    ctx.lineWidth = Number(opts.lineWidth) || 1;
-    ctx.setLineDash(Array.isArray(opts.dash) ? opts.dash : [6, 4]);
-
-    const yTop = yScale.top;
-    const yBottom = yScale.bottom;
-
-    while (releaseTs <= end.getTime()) {
-      const releaseDate = new Date(releaseTs);
-      const monday = new Date(releaseDate);
-      const day = monday.getUTCDay();
-      const diff = (day + 6) % 7;
-      monday.setUTCDate(monday.getUTCDate() - diff);
-      const weekIso = monday.toISOString().slice(0, 10);
-      const weekIdx = weeks.indexOf(weekIso);
-
-      if (weekIdx >= 0) {
-        const xBase = xScale.getPixelForValue(weekIdx);
-        const xNeighbor =
-          weekIdx < weeks.length - 1
-            ? xScale.getPixelForValue(weekIdx + 1)
-            : weekIdx > 0
-              ? xBase + (xBase - xScale.getPixelForValue(weekIdx - 1))
-              : xBase;
-        const daysSinceMonday = ((releaseDate.getUTCDay() + 6) % 7);
-        const x = xBase + (daysSinceMonday / 7) * (xNeighbor - xBase);
-
-        ctx.beginPath();
-        ctx.moveTo(x, yTop);
-        ctx.lineTo(x, yBottom);
-        ctx.stroke();
-      }
-
-      releaseTs += intervalMs;
-    }
-
-    ctx.restore();
-  },
-};
-
-if (!ChartJS.registry.plugins.get("releaseCadence")) {
-  ChartJS.register(ReleaseCadencePlugin);
-}
-
-function EmptyChartState({ filterLabel, style }) {
-  const boundedStyle = {
-    ...style,
-    minHeight: 0,
-    maxHeight: "100%",
-    height: style?.height || "100%",
-    overflow: "hidden",
-  };
-  return (
-    <div style={boundedStyle}>
-      <span>{`Verborgen omdat filter \`${filterLabel}\` actief is.`}</span>
-    </div>
-  );
-}
-
-function initialsFromName(name) {
-  const words = String(name || "")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-  if (!words.length) return "?";
-  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
-  return `${words[0][0] || ""}${words[words.length - 1][0] || ""}`.toUpperCase();
-}
-
-function VacationAvatar({ name, avatarUrl, style }) {
-  const [imgFailed, setImgFailed] = useState(false);
-  const showImage = !!avatarUrl && !imgFailed;
-  return (
-    <span
-      style={{
-        width: 34,
-        height: 34,
-        borderRadius: "999px",
-        border: "2px solid #fff",
-        boxShadow: "0 0 0 1px var(--border), 0 2px 6px var(--shadow-medium)",
-        overflow: "hidden",
-        background: "var(--surface-muted)",
-        color: "var(--text-main)",
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontSize: 12,
-        fontWeight: 700,
-        lineHeight: 1,
-        flex: "0 0 auto",
-        ...style,
-      }}
-      title={name || "Onbekend"}
-      aria-label={name || "Onbekend"}
-    >
-      {showImage ? (
-        <img
-          src={avatarUrl}
-          alt={name || "Assignee avatar"}
-          onError={() => setImgFailed(true)}
-          style={{ width: "100%", height: "100%", objectFit: "cover" }}
-        />
-      ) : (
-        <span>{initialsFromName(name)}</span>
-      )}
-    </span>
-  );
-}
+setupChartDefaults(ChartJS);
 
 export default function Home() {
   const today = useMemo(() => new Date(), []);
@@ -2425,16 +1764,12 @@ export default function Home() {
       .sort((a, b) => a.startDate.localeCompare(b.startDate))
       .forEach(({ memberName, startDate, endDate }) => {
         if (activeNames.includes(memberName)) return;
-        const startWeekday = weekdayNameNl(startDate);
-        const isSingleDay = !!startDate && !!endDate && startDate === endDate;
         items.push({
           kind: "warning",
           key: `warning:${memberName}:${startDate}`,
           memberName,
           avatarUrl: avatarMap[memberName] || "",
-          text: isSingleDay
-            ? `${memberName} is ${startWeekday} vrij`
-            : `${memberName} is vanaf ${startWeekday} vrij`,
+          text: buildUpcomingWarningText(memberName, startDate, endDate),
           emoji: "🚨",
         });
       });
@@ -3411,7 +2746,7 @@ export default function Home() {
                       legend: {
                         display: true,
                         position: "right",
-                        onClick: disableLegendClick,
+                        onClick: legendNoopHandler,
                         labels: {
                           color: (ctx) => priorityColors?.[ctx.index] || "#6b7280",
                         },
@@ -3446,7 +2781,7 @@ export default function Home() {
                       legend: {
                         display: true,
                         position: "right",
-                        onClick: disableLegendClick,
+                        onClick: legendNoopHandler,
                         labels: {
                           color: (ctx) => assigneeColors?.[ctx.index] || "#6b7280",
                         },

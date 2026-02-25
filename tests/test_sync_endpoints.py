@@ -1,5 +1,3 @@
-from datetime import datetime
-
 from fastapi.testclient import TestClient
 
 import api
@@ -9,11 +7,20 @@ client = TestClient(api.app)
 
 
 def test_sync_status_exposes_runtime_state(monkeypatch):
-    monkeypatch.setattr(api, "get_last_sync", lambda: datetime(2026, 2, 17, 10, 30, 0))
-    monkeypatch.setattr(api, "_sync_running", True)
-    monkeypatch.setattr(api, "_sync_last_run", "2026-02-17T10:31:00Z")
-    monkeypatch.setattr(api, "_sync_last_error", None)
-    monkeypatch.setattr(api, "_sync_last_result", {"upserts": 12})
+    monkeypatch.setattr(
+        api,
+        "get_sync_status_payload",
+        lambda: {
+            "running": True,
+            "last_run": "2026-02-17T10:31:00Z",
+            "last_error": None,
+            "last_result": {"upserts": 12},
+            "last_sync": "2026-02-17T10:30:00Z",
+            "successful_runs": [],
+            "last_failed_run": None,
+            "last_full_sync": None,
+        },
+    )
 
     response = client.get("/sync/status")
     assert response.status_code == 200
