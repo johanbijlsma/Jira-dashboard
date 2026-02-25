@@ -100,6 +100,7 @@ def ensure_schema():
               updated_at timestamptz,
               priority text,
               assignee text,
+              assignee_avatar_url text,
               current_status text,
               first_response_due_at timestamptz
             );
@@ -110,6 +111,20 @@ def ensure_schema():
             create table if not exists sync_state (
               id integer primary key,
               last_sync timestamp
+            );
+            """
+        )
+        cur.execute(
+            """
+            create table if not exists sync_runs (
+              id bigserial primary key,
+              started_at timestamptz not null default now(),
+              finished_at timestamptz,
+              mode text not null default 'incremental',
+              success boolean not null default false,
+              upserts integer not null default 0,
+              set_last_sync timestamptz,
+              error text
             );
             """
         )
@@ -145,8 +160,19 @@ def ensure_schema():
         cur.execute("alter table issues add column if not exists updated_at timestamptz;")
         cur.execute("alter table issues add column if not exists priority text;")
         cur.execute("alter table issues add column if not exists assignee text;")
+        cur.execute("alter table issues add column if not exists assignee_avatar_url text;")
         cur.execute("alter table issues add column if not exists current_status text;")
         cur.execute("alter table issues add column if not exists first_response_due_at timestamptz;")
+        cur.execute("alter table sync_runs add column if not exists started_at timestamptz not null default now();")
+        cur.execute("alter table sync_runs add column if not exists finished_at timestamptz;")
+        cur.execute("alter table sync_runs add column if not exists mode text not null default 'incremental';")
+        cur.execute("alter table sync_runs add column if not exists success boolean not null default false;")
+        cur.execute("alter table sync_runs add column if not exists upserts integer not null default 0;")
+        cur.execute("alter table sync_runs add column if not exists set_last_sync timestamptz;")
+        cur.execute("alter table sync_runs add column if not exists error text;")
+        cur.execute("create index if not exists sync_runs_started_at_idx on sync_runs(started_at desc);")
+        cur.execute("create index if not exists sync_runs_success_started_idx on sync_runs(success, started_at desc);")
+        cur.execute("create index if not exists sync_runs_mode_success_started_idx on sync_runs(mode, success, started_at desc);")
         cur.execute("alter table vacations add column if not exists member_name text;")
         cur.execute("alter table vacations add column if not exists start_date date;")
         cur.execute("alter table vacations add column if not exists end_date date;")
@@ -245,12 +271,36 @@ def get_servicedesk_config():
             """
         )
         row = cur.fetchone()
+        cur.execute(
+            """
+            select assignee, assignee_avatar_url
+            from (
+              select
+                assignee,
+                assignee_avatar_url,
+                row_number() over (
+                  partition by assignee
+                  order by updated_at desc nulls last, created_at desc nulls last
+                ) as rn
+              from issues
+              where assignee is not null
+                and assignee <> ''
+                and assignee_avatar_url is not null
+                and assignee_avatar_url <> ''
+            ) t
+            where rn = 1;
+            """
+        )
+        avatar_rows = cur.fetchall()
     if not row:
-        return {"team_members": [], "onderwerpen": [], "updated_at": None}
+        return {"team_members": [], "onderwerpen": [], "updated_at": None, "team_member_avatars": {}}
+    team_members = list(row[0] or [])
+    avatar_map = {str(name): str(url) for name, url in avatar_rows if name and url}
     return {
-        "team_members": list(row[0] or []),
+        "team_members": team_members,
         "onderwerpen": list(row[1] or []),
         "updated_at": row[2].isoformat() if row[2] else None,
+        "team_member_avatars": {name: avatar_map.get(name) for name in team_members if avatar_map.get(name)},
     }
 
 
@@ -327,6 +377,131 @@ def set_last_sync(ts: datetime):
 
 
 
+def create_sync_run(mode: str) -> int:
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            insert into sync_runs(started_at, mode, success, upserts)
+            values (now(), %s, false, 0)
+            returning id;
+            """,
+            (mode,),
+        )
+        row = cur.fetchone()
+        c.commit()
+        return int(row[0])
+
+
+def complete_sync_run_success(run_id: int, upserts: int, set_last_sync_at: Optional[datetime]):
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            update sync_runs
+            set finished_at = now(),
+                success = true,
+                upserts = %s,
+                set_last_sync = %s,
+                error = null
+            where id = %s;
+            """,
+            (int(upserts or 0), set_last_sync_at, run_id),
+        )
+        c.commit()
+
+
+def complete_sync_run_error(run_id: int, error_text: str):
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            update sync_runs
+            set finished_at = now(),
+                success = false,
+                error = %s
+            where id = %s;
+            """,
+            (error_text, run_id),
+        )
+        c.commit()
+
+
+def get_sync_status_payload():
+    ensure_schema()
+    last = get_last_sync()
+
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            select started_at, finished_at, mode, upserts, set_last_sync
+            from sync_runs
+            where success = true
+            order by started_at desc
+            limit 10;
+            """
+        )
+        successful_rows = cur.fetchall()
+        successful_runs = [
+            {
+                "started_at": _to_utc_z(r[0]),
+                "finished_at": _to_utc_z(r[1]),
+                "mode": r[2],
+                "upserts": int(r[3] or 0),
+                "set_last_sync": _to_utc_z(r[4]),
+            }
+            for r in successful_rows
+        ]
+
+        cur.execute(
+            """
+            select started_at, finished_at, mode, error
+            from sync_runs
+            where success = false
+              and error is not null
+            order by started_at desc
+            limit 1;
+            """
+        )
+        failed_row = cur.fetchone()
+        last_failed_run = None
+        if failed_row:
+            last_failed_run = {
+                "started_at": _to_utc_z(failed_row[0]),
+                "finished_at": _to_utc_z(failed_row[1]),
+                "mode": failed_row[2],
+                "message": failed_row[3],
+            }
+
+        cur.execute(
+            """
+            select started_at, finished_at, upserts, set_last_sync
+            from sync_runs
+            where success = true
+              and mode = 'full'
+            order by started_at desc
+            limit 1;
+            """
+        )
+        full_row = cur.fetchone()
+        last_full_sync = None
+        if full_row:
+            last_full_sync = {
+                "started_at": _to_utc_z(full_row[0]),
+                "finished_at": _to_utc_z(full_row[1]),
+                "upserts": int(full_row[2] or 0),
+                "set_last_sync": _to_utc_z(full_row[3]),
+            }
+
+    return {
+        "running": _sync_running,
+        "last_run": _sync_last_run,
+        "last_error": _sync_last_error,
+        "last_result": _sync_last_result,
+        "last_sync": _to_utc_z(last),
+        "successful_runs": successful_runs,
+        "last_failed_run": last_failed_run,
+        "last_full_sync": last_full_sync,
+    }
+
+
 def jira_search(jql: str, max_results: int = 100, next_page_token: Optional[str] = None):
     payload = {
         "jql": jql,
@@ -398,6 +573,20 @@ def norm_assignee(v):
     if isinstance(v, dict):
         return v.get("displayName") or v.get("emailAddress") or v.get("accountId")
     return None if v is None else str(v)
+
+
+def norm_assignee_avatar_url(v):
+    if not isinstance(v, dict):
+        return None
+    avatar_urls = v.get("avatarUrls") or {}
+    if not isinstance(avatar_urls, dict):
+        return None
+    return (
+        avatar_urls.get("48x48")
+        or avatar_urls.get("32x32")
+        or avatar_urls.get("24x24")
+        or avatar_urls.get("16x16")
+    )
 
 
 def norm_organizations(v):
@@ -517,13 +706,14 @@ def upsert_issues(issues):
             status = (f.get("status") or {}).get("name")
             priority = (f.get("priority") or {}).get("name")
             assignee = norm_assignee(f.get("assignee"))
+            assignee_avatar_url = norm_assignee_avatar_url(f.get("assignee"))
             organizations = norm_organizations(f.get(ORGANIZATION_FIELD))
             first_response_due_at = norm_first_response_due_at(f.get(FIRST_RESPONSE_SLA_FIELD))
 
             cur.execute(
                 """
-                insert into issues(issue_key, request_type, onderwerp_logging, organizations, created_at, resolved_at, updated_at, priority, assignee, current_status, first_response_due_at)
-                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                insert into issues(issue_key, request_type, onderwerp_logging, organizations, created_at, resolved_at, updated_at, priority, assignee, assignee_avatar_url, current_status, first_response_due_at)
+                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 on conflict (issue_key) do update set
                   request_type=excluded.request_type,
                   onderwerp_logging=excluded.onderwerp_logging,
@@ -533,6 +723,7 @@ def upsert_issues(issues):
                   updated_at=excluded.updated_at,
                   priority=excluded.priority,
                   assignee=excluded.assignee,
+                  assignee_avatar_url=excluded.assignee_avatar_url,
                   current_status=excluded.current_status,
                   first_response_due_at=excluded.first_response_due_at
                 """,
@@ -546,6 +737,7 @@ def upsert_issues(issues):
                     updated_at,
                     priority,
                     assignee,
+                    assignee_avatar_url,
                     status,
                     first_response_due_at,
                 ),
@@ -563,6 +755,7 @@ def run_sync_once(full: bool = False):
 
     if not (JIRA_EMAIL and JIRA_TOKEN):
         raise RuntimeError("JIRA_EMAIL/JIRA_TOKEN ontbreken in .env")
+    ensure_schema()
 
     with _sync_lock:
         if _sync_running:
@@ -573,8 +766,9 @@ def run_sync_once(full: bool = False):
         _sync_last_result = None
 
     try:
+        run_id = create_sync_run("full" if full else "incremental")
         last = None if full else get_last_sync()
-        now_utc = datetime.utcnow()
+        now_utc = datetime.now(timezone.utc)
 
         if last is None:
             jql = f'project = {JIRA_PROJECT} AND "cf[10010]" is not EMPTY ORDER BY updated ASC'
@@ -610,20 +804,32 @@ def run_sync_once(full: bool = False):
 
         # Zet last_sync op max(updated) om clock/indexing skew te voorkomen
         if max_updated is not None:
-            set_last_sync(max_updated.astimezone(timezone.utc).replace(tzinfo=None))
-            set_ts = max_updated.astimezone(timezone.utc).isoformat() + "Z"
+            set_ts_dt = max_updated.astimezone(timezone.utc)
+            set_last_sync(set_ts_dt.replace(tzinfo=None))
+            set_ts = set_ts_dt.isoformat().replace("+00:00", "Z")
         elif last is None:
-            set_last_sync(now_utc)
-            set_ts = now_utc.isoformat() + "Z"
+            set_ts_dt = now_utc
+            set_last_sync(set_ts_dt.replace(tzinfo=None))
+            set_ts = set_ts_dt.isoformat().replace("+00:00", "Z")
         else:
             # Geen resultaten: houd last_sync gelijk om geen updates te missen
-            set_ts = last.isoformat() + "Z"
+            set_ts_dt = last if last.tzinfo else last.replace(tzinfo=timezone.utc)
+            set_ts = set_ts_dt.isoformat().replace("+00:00", "Z")
 
         _sync_last_result = {"upserts": total, "set_last_sync": set_ts}
+        try:
+            complete_sync_run_success(run_id, total, set_ts_dt)
+        except Exception:
+            pass
         return {"started": True, "upserts": total}
 
     except Exception as e:
         _sync_last_error = str(e)
+        try:
+            if "run_id" in locals():
+                complete_sync_run_error(run_id, str(e))
+        except Exception:
+            pass
         raise
     finally:
         with _sync_lock:
@@ -1728,14 +1934,12 @@ def delete_vacation(vacation_id: int):
 
 @app.get("/sync/status")
 def sync_status():
-    last = get_last_sync()
-    return {
-        "running": _sync_running,
-        "last_run": _sync_last_run,
-        "last_error": _sync_last_error,
-        "last_result": _sync_last_result,
-        "last_sync": _to_utc_z(last),
-    }
+    return get_sync_status_payload()
+
+
+@app.get("/status")
+def status():
+    return get_sync_status_payload()
 
 
 @app.post("/sync")

@@ -12,6 +12,50 @@ import {
 } from "chart.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { parseNlDateToIso } from "../lib/date";
+import { buildUpcomingWarningText, businessDaysUntil } from "../lib/vacation-banner";
+import Link from "next/link";
+import {
+  API,
+  CARD_TITLES,
+  DASHBOARD_CONFIG_STORAGE_KEY,
+  DEFAULT_SERVICEDESK_ONLY,
+  JIRA_BASE,
+  TV_MODE_STORAGE_KEY,
+  TYPE_COLORS,
+  VACATION_TEAM_MEMBERS,
+  createDefaultDashboardLayout,
+} from "../lib/dashboard-constants";
+import {
+  addDaysIso,
+  buildWeekStartsFromRange,
+  fmtDate,
+  fmtDateTime,
+  fmtDateWithWeekday,
+  hasDataPoints,
+  isTextEntryTarget,
+  isoDate,
+  num,
+  pct,
+  sameStringSet,
+  trimLeadingPartialWeek,
+  weekStartIsoFromDate,
+} from "../lib/dashboard-utils";
+import { legendNoopHandler, setupChartDefaults } from "../lib/chart-setup";
+import {
+  hideCardLayout,
+  hideKpiLayout,
+  moveCardToRowLayout,
+  moveKpiToVisibleLayout,
+  normalizeDashboardLayout as normalizeDashboardLayoutState,
+  renderCardRowWithHintLayout,
+  renderKpiRowWithHintLayout,
+  toggleRowExpandCardLayout,
+} from "../lib/dashboard-layout";
+import { isTotalLabel, median, trendInfo, uniqueChartColor, wowSortValue } from "../lib/dashboard-metrics";
+import EmptyChartState from "../components/EmptyChartState";
+import LiveAlertStack from "../components/LiveAlertStack";
+import Toast from "../components/Toast";
+import VacationAvatar from "../components/VacationAvatar";
 
 ChartJS.register(
   CategoryScale,
@@ -23,506 +67,7 @@ ChartJS.register(
   Tooltip,
   Legend
 );
-
-const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
-const JIRA_BASE = "https://planningsagenda.atlassian.net";
-const DEFAULT_SERVICEDESK_ONLY = true;
-const DASHBOARD_CONFIG_STORAGE_KEY = "jsm_dashboard_layout_v2";
-const TV_MODE_STORAGE_KEY = "jsm_dashboard_tv_mode";
-const VACATION_TEAM_MEMBERS = ["Johan", "Ashley", "Jarno"];
-const VACATION_BANNER_EMOJIS = ["🏖️", "🌴", "😎", "🍹", "🎉", "🧳", "🛟", "🌞"];
-const TYPE_COLORS = {
-  rfc: "#2e7d32",
-  incident: "#c62828",
-  incidenten: "#c62828",
-  "service request": "#1565c0",
-  vraag: "#e65100",
-  vragen: "#e65100",
-  totaal: "#374151",
-};
-const CARD_TITLES = {
-  volume: "Aantal tickets per week",
-  onderwerp: "Onderwerp logging",
-  priority: "Tickets per priority",
-  assignee: "Tickets per assignee",
-  p90: "Doorlooptijd p50/p75/p90",
-  inflowVsClosed: "Binnengekomen vs afgesloten",
-  incidentResolution: "Time to Resolution",
-  firstResponseAll: "Time to First Response (alle tickets)",
-  organizationWeekly: "Tickets per partner per week",
-  vacationServicedesk: "Vakantie Servicedesk",
-};
-const KPI_KEYS = ["totalTickets", "latestTickets", "avgPerWeek", "topType", "topSubject", "topPartner"];
-const NON_KPI_CARD_KEYS = ["topOnderwerpen", ...Object.keys(CARD_TITLES)];
-const MAX_CARDS_PER_ROW = 5;
-const MAX_KPI_TILES = 6;
-
-function createDefaultDashboardLayout() {
-  return {
-    kpiRow: [...KPI_KEYS],
-    hiddenKpis: [],
-    cardRows: [
-      ["topOnderwerpen", "volume", "priority", "organizationWeekly", "vacationServicedesk"],
-      ["assignee", "onderwerp", "p90", "inflowVsClosed", "incidentResolution", "firstResponseAll"],
-    ],
-    hiddenCards: [],
-    expandedByRow: [null, null],
-  };
-}
-
-function isoDate(d) {
-  // yyyy-mm-dd
-  return d.toISOString().slice(0, 10);
-}
-
-function fmtDate(value) {
-  if (!value) return "";
-  const dt = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(dt.getTime())) return "";
-  return new Intl.DateTimeFormat("nl-NL", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  }).format(dt);
-}
-
-function fmtDateWithWeekday(value) {
-  if (!value) return "";
-  const dt = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(dt.getTime())) return "";
-  const weekday = new Intl.DateTimeFormat("nl-NL", { weekday: "long" }).format(dt);
-  const datePart = new Intl.DateTimeFormat("nl-NL", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  })
-    .format(dt)
-    .replaceAll("/", "-");
-  return `${weekday.charAt(0).toUpperCase()}${weekday.slice(1)} ${datePart}`;
-}
-
-
-function fmtDateTime(value) {
-  if (!value) return "";
-  const dt = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(dt.getTime())) return "";
-  return new Intl.DateTimeFormat("nl-NL", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-    timeZone: "Europe/Amsterdam",
-  }).format(dt);
-}
-
-function weekStartIsoFromDate(d = new Date()) {
-  const dt = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-  const day = dt.getUTCDay();
-  const diff = (day + 6) % 7; // days since Monday
-  dt.setUTCDate(dt.getUTCDate() - diff);
-  return dt.toISOString().slice(0, 10);
-}
-
-function buildWeekStartsFromRange(fromIso, toIso) {
-  if (!fromIso || !toIso) return [];
-  const [fy, fm, fd] = fromIso.split("-").map(Number);
-  const [ty, tm, td] = toIso.split("-").map(Number);
-  const from = new Date(Date.UTC(fy, fm - 1, fd));
-  const to = new Date(Date.UTC(ty, tm - 1, td));
-  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return [];
-
-  const day = from.getUTCDay();
-  const diff = (day + 6) % 7;
-  from.setUTCDate(from.getUTCDate() - diff);
-
-  const weeks = [];
-  const cursor = new Date(from);
-  while (cursor <= to) {
-    weeks.push(cursor.toISOString().slice(0, 10));
-    cursor.setUTCDate(cursor.getUTCDate() + 7);
-  }
-  return weeks;
-}
-
-function addDaysIso(yyyyMmDd, days) {
-  const [y, m, d] = yyyyMmDd.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCDate(dt.getUTCDate() + days);
-  return dt.toISOString().slice(0, 10);
-}
-
-function isTextEntryTarget(target) {
-  const el = target instanceof HTMLElement ? target : null;
-  if (!el) return false;
-  if (el.isContentEditable) return true;
-  const tagName = String(el.tagName || "").toLowerCase();
-  if (tagName === "input" || tagName === "textarea" || tagName === "select") return true;
-  return !!el.closest?.("input, textarea, select, [contenteditable='true']");
-}
-
-function Toast({ message, kind, onClose }) {
-  if (!message) return null;
-
-  const bg = kind === "error" ? "#b00020" : "#1b5e20";
-
-  return (
-    <div
-      style={{
-        position: "fixed",
-        right: 16,
-        bottom: 16,
-        zIndex: 9999,
-        background: bg,
-        color: "#fff",
-        padding: "10px 12px",
-        borderRadius: 8,
-        boxShadow: "0 6px 18px rgba(0,0,0,0.18)",
-        maxWidth: 420,
-        display: "flex",
-        gap: 10,
-        alignItems: "center",
-      }}
-      role="status"
-      aria-live="polite"
-    >
-      <div style={{ flex: 1 }}>{message}</div>
-      <button
-        onClick={onClose}
-        style={{
-          background: "transparent",
-          border: "none",
-          color: "#fff",
-          cursor: "pointer",
-          fontSize: 16,
-          lineHeight: 1,
-        }}
-        aria-label="Sluiten"
-        title="Sluiten"
-      >
-        ×
-      </button>
-    </div>
-  );
-}
-
-function LiveAlertStack({ alerts }) {
-  const p1Items = Array.isArray(alerts?.priority1) ? alerts.priority1 : [];
-  const slaItems = Array.isArray(alerts?.first_response_due_soon) ? alerts.first_response_due_soon : [];
-  const overdueItems = Array.isArray(alerts?.first_response_overdue) ? alerts.first_response_overdue : [];
-  if (!p1Items.length && !slaItems.length && !overdueItems.length) return null;
-
-  const shellStyle = {
-    position: "fixed",
-    top: 16,
-    right: 16,
-    zIndex: 1004,
-    width: "min(420px, calc(100vw - 32px))",
-    display: "grid",
-    gap: 10,
-  };
-
-  const cardStyle = {
-    borderRadius: 12,
-    border: "1px solid",
-    boxShadow: "0 10px 22px var(--shadow-medium)",
-    overflow: "hidden",
-    backdropFilter: "blur(2px)",
-    animation: "alertIn 220ms ease",
-  };
-
-  const titleRowStyle = {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    padding: "10px 12px",
-    borderBottom: "1px solid rgba(255,255,255,0.18)",
-    fontWeight: 800,
-    letterSpacing: 0.2,
-  };
-
-  const listStyle = {
-    margin: 0,
-    padding: "8px 12px 12px",
-    listStyle: "none",
-    display: "grid",
-    gap: 6,
-  };
-
-  const itemStyle = {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 12,
-    alignItems: "baseline",
-    fontSize: 13,
-    lineHeight: 1.3,
-  };
-
-  return (
-    <div style={shellStyle} aria-live="assertive" aria-atomic="false">
-      {p1Items.length ? (
-        <section
-          style={{
-            ...cardStyle,
-            borderColor: "rgba(127, 29, 29, 0.45)",
-            background: "linear-gradient(135deg, #7f1d1d, #991b1b)",
-            color: "#fee2e2",
-          }}
-        >
-          <div style={titleRowStyle}>
-            <span style={{ fontSize: 11, border: "1px solid rgba(254,226,226,0.45)", borderRadius: 999, padding: "2px 8px" }}>
-              P1
-            </span>
-            <span>Priority 1 binnengekomen</span>
-            <strong style={{ marginLeft: "auto", fontSize: 12 }}>{p1Items.length}</strong>
-          </div>
-          <ul style={listStyle}>
-            {p1Items.slice(0, 5).map((item) => (
-              <li key={`p1-${item.issue_key}`} style={itemStyle}>
-                <a
-                  href={`${JIRA_BASE}/browse/${item.issue_key}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ color: "#fff", fontWeight: 700 }}
-                >
-                  {item.issue_key}
-                </a>
-                <span>{item.status || "Open"}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      {slaItems.length ? (
-        <section
-          style={{
-            ...cardStyle,
-            borderColor: "rgba(120, 53, 15, 0.45)",
-            background: "linear-gradient(135deg, #78350f, #b45309)",
-            color: "#ffedd5",
-          }}
-        >
-          <div style={titleRowStyle}>
-            <span style={{ fontSize: 11, border: "1px solid rgba(255,237,213,0.45)", borderRadius: 999, padding: "2px 8px" }}>
-              SLA
-            </span>
-            <span>First response bijna verlopen</span>
-            <strong style={{ marginLeft: "auto", fontSize: 12 }}>{slaItems.length}</strong>
-          </div>
-          <ul style={listStyle}>
-            {slaItems.slice(0, 5).map((item) => (
-              <li key={`sla-${item.issue_key}`} style={itemStyle}>
-                <a
-                  href={`${JIRA_BASE}/browse/${item.issue_key}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ color: "#fff", fontWeight: 700 }}
-                >
-                  {item.issue_key}
-                </a>
-                <span>{Math.max(0, Number(item.minutes_left) || 0)} min</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-
-      {overdueItems.length ? (
-        <section
-          style={{
-            ...cardStyle,
-            borderColor: "rgba(120, 16, 16, 0.55)",
-            background: "linear-gradient(135deg, #581c87, #7f1d1d)",
-            color: "#f5d0fe",
-          }}
-        >
-          <div style={titleRowStyle}>
-            <span style={{ fontSize: 11, border: "1px solid rgba(245,208,254,0.45)", borderRadius: 999, padding: "2px 8px" }}>
-              SLA X
-            </span>
-            <span>First response verlopen</span>
-            <strong style={{ marginLeft: "auto", fontSize: 12 }}>{overdueItems.length}</strong>
-          </div>
-          <ul style={listStyle}>
-            {overdueItems.slice(0, 5).map((item) => (
-              <li key={`sla-overdue-${item.issue_key}`} style={itemStyle}>
-                <a
-                  href={`${JIRA_BASE}/browse/${item.issue_key}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ color: "#fff", fontWeight: 700 }}
-                >
-                  {item.issue_key}
-                </a>
-                <span>{Math.max(0, Number(item.minutes_overdue) || 0)} min te laat</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-    </div>
-  );
-}
-
-function hasDataPoints(chartData) {
-  if (!chartData || !Array.isArray(chartData.datasets)) return false;
-  return chartData.datasets.some((ds) =>
-    Array.isArray(ds.data) && ds.data.some((v) => typeof v === "number" && v > 0)
-  );
-}
-
-function num(value, digits = 0) {
-  if (value == null || Number.isNaN(Number(value))) return "—";
-  return new Intl.NumberFormat("nl-NL", {
-    maximumFractionDigits: digits,
-    minimumFractionDigits: digits,
-  }).format(Number(value));
-}
-
-function pct(value) {
-  if (value == null || Number.isNaN(Number(value))) return "—";
-  return `${num(value, 1)}%`;
-}
-
-const SimpleDataLabelsPlugin = {
-  id: "simpleDataLabels",
-  afterDatasetsDraw(chart, _args, pluginOptions) {
-    if (pluginOptions === false) return;
-    if (typeof document !== "undefined" && document.documentElement.dataset.tvMode === "1") return;
-    // On compact card heights, datalabels create clutter/cropping; skip them.
-    if (chart.height < 260) return;
-    const opts = {
-      mode: "bar", // arc | bar | line
-      color: null,
-      fontSize: 10,
-      fontWeight: "600",
-      lineOffset: 6,
-      barOffset: 6,
-      maxLabels: 14,
-      minArcPct: 6,
-      datasetIndexes: null,
-      ...pluginOptions,
-    };
-
-    const computed = typeof window !== "undefined" ? getComputedStyle(document.documentElement) : null;
-    const textColor = opts.color || computed?.getPropertyValue("--text-main")?.trim() || "#111827";
-    const haloColor = computed?.getPropertyValue("--surface")?.trim() || "#ffffff";
-    const ctx = chart.ctx;
-    const visibleMetas = chart.getSortedVisibleDatasetMetas();
-    if (!visibleMetas.length) return;
-    const colorCache = new Map();
-
-    function resolveCssColor(input) {
-      const key = String(input || "");
-      if (!key) return null;
-      if (colorCache.has(key)) return colorCache.get(key);
-      const probe = document.createElement("canvas").getContext("2d");
-      if (!probe) return null;
-      probe.fillStyle = "#000000";
-      probe.fillStyle = key;
-      const normalized = probe.fillStyle;
-      const m = String(normalized).match(/rgba?\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
-      const value = m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
-      colorCache.set(key, value);
-      return value;
-    }
-
-    function contrastTextFor(background) {
-      const rgb = resolveCssColor(background);
-      if (!rgb) return textColor;
-      const [r, g, b] = rgb.map((v) => v / 255);
-      const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-      return luminance > 0.6 ? "#0b1220" : "#f8fafc";
-    }
-
-    function drawLabel(label, x, y, fill = textColor) {
-      const metrics = ctx.measureText(label);
-      const labelWidth = Math.ceil(metrics.width);
-      const labelHeight = Math.ceil(opts.fontSize * 1.25);
-      const pad = 4;
-      const clampedX = Math.max(pad + labelWidth / 2, Math.min(chart.width - pad - labelWidth / 2, x));
-      const clampedY = Math.max(pad + labelHeight / 2, Math.min(chart.height - pad - labelHeight / 2, y));
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = haloColor;
-      ctx.strokeText(label, clampedX, clampedY);
-      ctx.fillStyle = fill;
-      ctx.fillText(label, clampedX, clampedY);
-      ctx.fillStyle = textColor;
-    }
-
-    ctx.save();
-    ctx.font = `${opts.fontWeight} ${opts.fontSize}px system-ui`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-
-    if (opts.mode === "arc") {
-      const meta = visibleMetas[0];
-      const values = (chart.data.datasets?.[meta.index]?.data || []).map((v) => Number(v) || 0);
-      const total = values.reduce((sum, v) => sum + v, 0);
-      if (total <= 0) {
-        ctx.restore();
-        return;
-      }
-
-      meta.data.forEach((element, idx) => {
-        const value = values[idx] || 0;
-        if (value <= 0) return;
-        const percentage = (value / total) * 100;
-        if (percentage < opts.minArcPct) return;
-        const pos = element.tooltipPosition();
-        const label = `${num(value)} (${Math.round(percentage)}%)`;
-        const rawColors = chart.data.datasets?.[meta.index]?.backgroundColor;
-        const bgColor = Array.isArray(rawColors) ? rawColors[idx] : rawColors;
-        drawLabel(label, pos.x, pos.y, contrastTextFor(bgColor));
-      });
-      ctx.restore();
-      return;
-    }
-
-    visibleMetas.forEach((meta) => {
-      if (Array.isArray(opts.datasetIndexes) && !opts.datasetIndexes.includes(meta.index)) return;
-      const dataset = chart.data.datasets?.[meta.index];
-      if (!dataset || dataset.hidden) return;
-      if (String(dataset.label || "").startsWith("Mediaan ")) return;
-      const values = (dataset.data || []).map((v) => Number(v));
-      const valid = values.filter((v) => Number.isFinite(v));
-      const step = valid.length > opts.maxLabels ? Math.ceil(valid.length / opts.maxLabels) : 1;
-
-      meta.data.forEach((element, idx) => {
-        const value = values[idx];
-        if (!Number.isFinite(value) || value <= 0) return;
-        if (idx % step !== 0 && idx !== values.length - 1) return;
-
-        const pos = element.tooltipPosition();
-        const y = opts.mode === "line" ? pos.y - opts.lineOffset : pos.y - opts.barOffset;
-        drawLabel(num(value, value % 1 === 0 ? 0 : 1), pos.x, y, textColor);
-      });
-    });
-
-    ctx.restore();
-  },
-};
-
-if (!ChartJS.registry.plugins.get("simpleDataLabels")) {
-  ChartJS.register(SimpleDataLabelsPlugin);
-}
-
-function EmptyChartState({ filterLabel, style }) {
-  const boundedStyle = {
-    ...style,
-    minHeight: 0,
-    maxHeight: "100%",
-    height: style?.height || "100%",
-    overflow: "hidden",
-  };
-  return (
-    <div style={boundedStyle}>
-      <span>{`Verborgen omdat filter \`${filterLabel}\` actief is.`}</span>
-    </div>
-  );
-}
+setupChartDefaults(ChartJS);
 
 export default function Home() {
   const today = useMemo(() => new Date(), []);
@@ -554,7 +99,13 @@ export default function Home() {
   const [servicedeskOnly, setServicedeskOnly] = useState(DEFAULT_SERVICEDESK_ONLY);
 
   const [meta, setMeta] = useState({ request_types: [], onderwerpen: [], priorities: [], assignees: [], organizations: [] });
-  const [servicedeskConfig, setServicedeskConfig] = useState({ team_members: [], onderwerpen: [], updated_at: null });
+  const [servicedeskConfig, setServicedeskConfig] = useState({
+    team_members: [],
+    onderwerpen: [],
+    updated_at: null,
+    team_member_avatars: {},
+  });
+  const [servicedeskOnderwerpenBaseline, setServicedeskOnderwerpenBaseline] = useState([]);
   const [teamMembersDraft, setTeamMembersDraft] = useState([]);
   const [onderwerpenDraft, setOnderwerpenDraft] = useState([]);
   const [teamConfigSaving, setTeamConfigSaving] = useState(false);
@@ -580,12 +131,19 @@ export default function Home() {
   });
   const [upcomingVacations, setUpcomingVacations] = useState([]);
   const [upcomingVacationTotal, setUpcomingVacationTotal] = useState(0);
+  const [allVacations, setAllVacations] = useState([]);
   const [todayVacations, setTodayVacations] = useState([]);
   const [vacationEditMode, setVacationEditMode] = useState(false);
   const [vacationSaving, setVacationSaving] = useState(false);
   const [vacationHoverId, setVacationHoverId] = useState(null);
-  const [vacationBannerEmoji, setVacationBannerEmoji] = useState(VACATION_BANNER_EMOJIS[0]);
+  const [vacationBannerIndex, setVacationBannerIndex] = useState(0);
   const [vacationForm, setVacationForm] = useState({
+    id: null,
+    memberName: VACATION_TEAM_MEMBERS[0],
+    startDate: "",
+    endDate: "",
+  });
+  const [vacationInitialForm, setVacationInitialForm] = useState({
     id: null,
     memberName: VACATION_TEAM_MEMBERS[0],
     startDate: "",
@@ -626,90 +184,7 @@ export default function Home() {
   const [kpiDropHint, setKpiDropHint] = useState(null);
   const [hiddenDropTarget, setHiddenDropTarget] = useState(null);
 
-  const normalizeDashboardLayout = useCallback((input) => {
-    const fallback = createDefaultDashboardLayout();
-    if (!input || typeof input !== "object") return fallback;
-
-    const allKpis = new Set(KPI_KEYS);
-    const allCards = new Set(NON_KPI_CARD_KEYS);
-    const normalizeList = (arr, allowedSet) =>
-      Array.from(new Set((Array.isArray(arr) ? arr : []).filter((key) => allowedSet.has(key))));
-
-    let kpiRow = normalizeList(input.kpiRow, allKpis);
-    let hiddenKpis = normalizeList(input.hiddenKpis, allKpis).filter((key) => !kpiRow.includes(key));
-    KPI_KEYS.forEach((key) => {
-      if (!kpiRow.includes(key) && !hiddenKpis.includes(key)) kpiRow.push(key);
-    });
-    if (kpiRow.length > MAX_KPI_TILES) {
-      const overflow = kpiRow.slice(MAX_KPI_TILES);
-      kpiRow = kpiRow.slice(0, MAX_KPI_TILES);
-      overflow.forEach((key) => {
-        if (!hiddenKpis.includes(key)) hiddenKpis.push(key);
-      });
-    }
-
-    const inputRows = Array.isArray(input.cardRows) ? input.cardRows : [];
-    let cardRows = [
-      normalizeList(inputRows[0], allCards),
-      normalizeList(inputRows[1], allCards),
-    ];
-    cardRows[1] = cardRows[1].filter((key) => !cardRows[0].includes(key));
-    let hiddenCards = normalizeList(input.hiddenCards, allCards).filter(
-      (key) => !cardRows[0].includes(key) && !cardRows[1].includes(key)
-    );
-    NON_KPI_CARD_KEYS.forEach((key) => {
-      if (!cardRows[0].includes(key) && !cardRows[1].includes(key) && !hiddenCards.includes(key)) {
-        cardRows[1].push(key);
-      }
-    });
-
-    // Enforce max cards per row; overflow goes to hidden cards.
-    [0, 1].forEach((idx) => {
-      if (cardRows[idx].length > MAX_CARDS_PER_ROW) {
-        const overflow = cardRows[idx].slice(MAX_CARDS_PER_ROW);
-        cardRows[idx] = cardRows[idx].slice(0, MAX_CARDS_PER_ROW);
-        overflow.forEach((key) => {
-          if (!hiddenCards.includes(key)) hiddenCards.push(key);
-        });
-      }
-    });
-
-    // Backward compatibility for previous layout versions
-    if (!input.kpiRow && Array.isArray(input.kpiOrder)) {
-      const legacyVisible = KPI_KEYS.filter((key) => input?.kpiVisibility?.[key] !== false);
-      const legacyHidden = KPI_KEYS.filter((key) => input?.kpiVisibility?.[key] === false);
-      kpiRow = [
-        ...input.kpiOrder.filter((key) => legacyVisible.includes(key)),
-        ...legacyVisible.filter((key) => !input.kpiOrder.includes(key)),
-      ];
-      hiddenKpis = [
-        ...input.kpiOrder.filter((key) => legacyHidden.includes(key)),
-        ...legacyHidden.filter((key) => !input.kpiOrder.includes(key)),
-      ];
-    }
-    if (!input.cardRows && Array.isArray(input.cardOrder)) {
-      const legacyVisible = NON_KPI_CARD_KEYS.filter((key) => input?.cardVisibility?.[key] !== false);
-      const legacyHidden = NON_KPI_CARD_KEYS.filter((key) => input?.cardVisibility?.[key] === false);
-      const visibleOrdered = [
-        ...input.cardOrder.filter((key) => legacyVisible.includes(key)),
-        ...legacyVisible.filter((key) => !input.cardOrder.includes(key)),
-      ];
-      const split = Math.ceil(visibleOrdered.length / 2);
-      cardRows = [visibleOrdered.slice(0, split), visibleOrdered.slice(split)];
-      hiddenCards = [
-        ...input.cardOrder.filter((key) => legacyHidden.includes(key)),
-        ...legacyHidden.filter((key) => !input.cardOrder.includes(key)),
-      ];
-    }
-
-    const expandedByRowInput = Array.isArray(input.expandedByRow) ? input.expandedByRow : [];
-    const expandedByRow = [0, 1].map((idx) => {
-      const key = expandedByRowInput[idx];
-      return cardRows[idx].includes(key) ? key : null;
-    });
-
-    return { kpiRow, hiddenKpis, cardRows, hiddenCards, expandedByRow };
-  }, []);
+  const normalizeDashboardLayout = useCallback((input) => normalizeDashboardLayoutState(input), []);
 
   const layoutDirty = useMemo(
     () => layoutSavedSnapshot !== JSON.stringify(dashboardLayout),
@@ -851,6 +326,23 @@ export default function Home() {
   const cancelOnderwerpConfig = useCallback(() => {
     setOnderwerpenDraft(Array.isArray(servicedeskConfig?.onderwerpen) ? servicedeskConfig.onderwerpen : []);
   }, [servicedeskConfig]);
+
+  const teamConfigDirty = useMemo(() => {
+    const base = Array.isArray(servicedeskConfig?.team_members) ? servicedeskConfig.team_members : [];
+    return !sameStringSet(teamMembersDraft, base);
+  }, [teamMembersDraft, servicedeskConfig]);
+
+  const onderwerpConfigDirty = useMemo(() => {
+    const base = Array.isArray(servicedeskConfig?.onderwerpen) ? servicedeskConfig.onderwerpen : [];
+    return !sameStringSet(onderwerpenDraft, base);
+  }, [onderwerpenDraft, servicedeskConfig]);
+
+  const onderwerpResetAvailable = useMemo(() => {
+    const baseline = Array.isArray(servicedeskOnderwerpenBaseline) ? servicedeskOnderwerpenBaseline : [];
+    const saved = Array.isArray(servicedeskConfig?.onderwerpen) ? servicedeskConfig.onderwerpen : [];
+    if (!baseline.length) return false;
+    return !sameStringSet(saved, baseline);
+  }, [servicedeskOnderwerpenBaseline, servicedeskConfig]);
 
   const saveTeamConfig = useCallback(async () => {
     if (!teamMembersDraft.length) {
@@ -1015,6 +507,7 @@ export default function Home() {
       upcomingRes.json(),
       todayRes.json(),
     ]);
+    setAllVacations(Array.isArray(allData) ? allData : []);
     setUpcomingVacationTotal(Array.isArray(allData) ? allData.length : 0);
     setUpcomingVacations(Array.isArray(upcomingData) ? upcomingData : []);
     setTodayVacations(Array.isArray(todayData) ? todayData : []);
@@ -1027,20 +520,27 @@ export default function Home() {
       team_members: Array.isArray(data?.team_members) ? data.team_members : [],
       onderwerpen: Array.isArray(data?.onderwerpen) ? data.onderwerpen : [],
       updated_at: data?.updated_at || null,
+      team_member_avatars:
+        data?.team_member_avatars && typeof data.team_member_avatars === "object"
+          ? data.team_member_avatars
+          : {},
     };
     setServicedeskConfig(normalized);
+    setServicedeskOnderwerpenBaseline((prev) => (Array.isArray(prev) && prev.length ? prev : normalized.onderwerpen));
     setTeamMembersDraft(normalized.team_members);
     setOnderwerpenDraft(normalized.onderwerpen);
   }, []);
 
   const startVacationCreate = useCallback(() => {
     const todayIso = isoDate(new Date());
-    setVacationForm({
+    const nextForm = {
       id: null,
       memberName: servicedeskTeamMembers[0] || "",
       startDate: todayIso,
       endDate: todayIso,
-    });
+    };
+    setVacationForm(nextForm);
+    setVacationInitialForm(nextForm);
     setVacationStartUi(fmtDate(todayIso));
     setVacationEndUi(fmtDate(todayIso));
     setVacationEditMode(true);
@@ -1050,12 +550,14 @@ export default function Home() {
     if (!vacation) return;
     const startDate = vacation.start_date || "";
     const endDate = vacation.end_date || "";
-    setVacationForm({
+    const nextForm = {
       id: vacation.id,
       memberName: vacation.member_name || VACATION_TEAM_MEMBERS[0],
       startDate,
       endDate,
-    });
+    };
+    setVacationForm(nextForm);
+    setVacationInitialForm(nextForm);
     setVacationStartUi(fmtDate(startDate));
     setVacationEndUi(fmtDate(endDate));
     setVacationEditMode(true);
@@ -1064,15 +566,53 @@ export default function Home() {
   const cancelVacationEdit = useCallback(() => {
     setVacationEditMode(false);
     setVacationSaving(false);
-    setVacationForm({
+    const resetForm = {
       id: null,
       memberName: servicedeskTeamMembers[0] || "",
       startDate: "",
       endDate: "",
-    });
+    };
+    setVacationForm(resetForm);
+    setVacationInitialForm(resetForm);
     setVacationStartUi("");
     setVacationEndUi("");
   }, [servicedeskTeamMembers]);
+
+  const applyVacationStartDate = useCallback((nextStartDate) => {
+    const iso = String(nextStartDate || "").trim();
+    if (!iso) return;
+    const prevStart = String(vacationForm.startDate || "").trim();
+    const prevEnd = String(vacationForm.endDate || "").trim();
+    const shouldSyncEnd = !prevEnd || prevEnd === prevStart || prevEnd < iso;
+    setVacationForm((prev) => ({
+      ...prev,
+      startDate: iso,
+      endDate: shouldSyncEnd ? iso : prev.endDate,
+    }));
+    setVacationStartUi(fmtDate(iso));
+    if (shouldSyncEnd) setVacationEndUi(fmtDate(iso));
+  }, [vacationForm.startDate, vacationForm.endDate]);
+
+  const vacationFormDirty = useMemo(() => {
+    const current = {
+      id: vacationForm?.id ?? null,
+      memberName: String(vacationForm?.memberName || "").trim(),
+      startDate: String(vacationForm?.startDate || "").trim(),
+      endDate: String(vacationForm?.endDate || "").trim(),
+    };
+    const initial = {
+      id: vacationInitialForm?.id ?? null,
+      memberName: String(vacationInitialForm?.memberName || "").trim(),
+      startDate: String(vacationInitialForm?.startDate || "").trim(),
+      endDate: String(vacationInitialForm?.endDate || "").trim(),
+    };
+    return (
+      current.id !== initial.id ||
+      current.memberName !== initial.memberName ||
+      current.startDate !== initial.startDate ||
+      current.endDate !== initial.endDate
+    );
+  }, [vacationForm, vacationInitialForm]);
 
   const saveVacation = useCallback(async () => {
     const memberName = String(vacationForm.memberName || "").trim();
@@ -1564,9 +1104,14 @@ export default function Home() {
     }
   }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee, organization, servicedeskOnly, p90Period]);
 
-  // volume -> weeks x series (use full range so empty weeks show as 0)
-  const weeks = useMemo(() => buildWeekStartsFromRange(dateFrom, dateTo), [dateFrom, dateTo]);
-  const weeksOnderwerp = useMemo(() => buildWeekStartsFromRange(dateFrom, dateTo), [dateFrom, dateTo]);
+  // Hide a partial first week (when dateFrom is not Monday) to avoid misleading empty first points.
+  const weeks = useMemo(() => {
+    const fullWeeks = buildWeekStartsFromRange(dateFrom, dateTo);
+    return trimLeadingPartialWeek(fullWeeks, dateFrom);
+  }, [dateFrom, dateTo]);
+  const weeksOnderwerp = weeks;
+  const releaseCadencePlugin = useMemo(() => ({ weeks }), [weeks]);
+  const releaseCadenceOnderwerpPlugin = useMemo(() => ({ weeks: weeksOnderwerp }), [weeksOnderwerp]);
   const fullWeekInfo = useMemo(() => {
     const currentWeek = weekStartIsoFromDate();
     const indices = weeks
@@ -1631,27 +1176,6 @@ export default function Home() {
     return TYPE_COLORS[key] || "#6b7280";
   }, []);
 
-  function uniqueChartColor(index, total, saturation = 70, lightness = 45) {
-    const safeTotal = Math.max(1, total);
-    const hue = (index * (360 / safeTotal) + 15) % 360;
-    return `hsl(${hue.toFixed(2)} ${saturation}% ${lightness}%)`;
-  }
-
-  function isTotalLabel(label) {
-    return String(label || "").toLowerCase() === "totaal";
-  }
-
-  function median(values) {
-    const v = values.filter((x) => x != null).slice().sort((a, b) => a - b);
-    if (!v.length) return null;
-    const mid = Math.floor(v.length / 2);
-    return v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
-  }
-
-  function weekStartIso(d = new Date()) {
-    return weekStartIsoFromDate(d);
-  }
-
   const lineData = useMemo(
     () => {
       const labels = weeks.map((w) => fmtDate(w));
@@ -1666,7 +1190,7 @@ export default function Home() {
         borderDash: isTotalLabel(s.label) ? [6, 4] : undefined,
       }));
 
-      const currentWeek = weekStartIso();
+      const currentWeek = weekStartIsoFromDate();
       const totalSeries = series.find((s) => isTotalLabel(s.label));
       if (totalSeries && !requestType) {
         const valuesForMedian = totalSeries.data
@@ -1726,7 +1250,7 @@ export default function Home() {
 
       // When a specific onderwerp filter is active, add a median guide line for that onderwerp.
       if (onderwerp && onderwerpSeries[0]) {
-        const currentWeek = weekStartIso();
+        const currentWeek = weekStartIsoFromDate();
         const valuesForMedian = onderwerpSeries[0].data
           .map((v, i) => (weeksOnderwerp[i] === currentWeek ? null : v))
           .filter((v) => v != null);
@@ -1871,24 +1395,25 @@ export default function Home() {
       new Set(rows.map((x) => String(x?.request_type || "").trim()).filter(Boolean))
     );
     const types = allTypes.length ? allTypes : typeSetFromRows;
+    const datasets = types.map((typeLabel) => ({
+      label: typeLabel,
+      data: weeks.map((w) => {
+        const row = rows.find(
+          (x) =>
+            String(x?.week || "").slice(0, 10) === w &&
+            String(x?.request_type || "") === String(typeLabel)
+        );
+        return row?.avg_hours != null ? Number(row.avg_hours) : null;
+      }),
+      tension: 0.2,
+      borderColor: typeColor(typeLabel),
+      backgroundColor: typeColor(typeLabel),
+      pointBackgroundColor: typeColor(typeLabel),
+      pointBorderColor: typeColor(typeLabel),
+    }));
     return {
       labels,
-      datasets: types.map((typeLabel) => ({
-        label: typeLabel,
-        data: weeks.map((w) => {
-          const row = rows.find(
-            (x) =>
-              String(x?.week || "").slice(0, 10) === w &&
-              String(x?.request_type || "") === String(typeLabel)
-          );
-          return row?.avg_hours != null ? Number(row.avg_hours) : null;
-        }),
-        tension: 0.2,
-        borderColor: typeColor(typeLabel),
-        backgroundColor: typeColor(typeLabel),
-        pointBackgroundColor: typeColor(typeLabel),
-        pointBorderColor: typeColor(typeLabel),
-      })),
+      datasets,
     };
   }, [incidentResolutionWeekly, weeks, meta.request_types, typeColor]);
 
@@ -2069,14 +1594,6 @@ export default function Home() {
       map.set(label, cur);
     });
 
-    function wowSortValue(row) {
-      const last = Number(row?.last) || 0;
-      const prev = Number(row?.prev) || 0;
-      if (prev <= 0 && last > 0) return Number.NEGATIVE_INFINITY; // voorkom dat "nieuw" alles domineert
-      if (prev <= 0 && last <= 0) return Number.NEGATIVE_INFINITY;
-      return ((last - prev) / prev) * 100;
-    }
-
     return Array.from(map.values())
       .filter((row) => (Number(row?.last) || 0) > 0)
       .sort((a, b) => {
@@ -2096,29 +1613,70 @@ export default function Home() {
       .slice(0, 10);
   }, [fullWeekInfo, weeks, onderwerpVolume, topOnderwerpSort]);
 
-  const vacationBanner = useMemo(() => {
+  const vacationBannerItems = useMemo(() => {
+    const items = [];
+    const avatarMap =
+      servicedeskConfig?.team_member_avatars && typeof servicedeskConfig.team_member_avatars === "object"
+        ? servicedeskConfig.team_member_avatars
+        : {};
+    const todayIso = isoDate(new Date());
     const active = Array.isArray(todayVacations) ? todayVacations : [];
-    if (!active.length) return null;
-    const names = Array.from(new Set(active.map((item) => item?.member_name).filter(Boolean)));
-    if (!names.length) return null;
-    if (names.length === 1) {
-      const memberName = names[0];
+    const activeNames = Array.from(new Set(active.map((item) => item?.member_name).filter(Boolean)));
+    activeNames.forEach((memberName) => {
       const memberRows = active.filter((item) => item?.member_name === memberName);
       const endDates = memberRows.map((item) => item?.end_date).filter(Boolean).sort();
       const latestEndDate = endDates.length ? endDates[endDates.length - 1] : null;
-      const todayIso = isoDate(new Date());
-      if (latestEndDate && latestEndDate > todayIso) {
-        return { text: `Vandaag is ${memberName} vrij tot en met ${fmtDateWithWeekday(latestEndDate)}` };
+      const text =
+        latestEndDate && latestEndDate > todayIso
+          ? `Vandaag is ${memberName} vrij tot en met ${fmtDateWithWeekday(latestEndDate)}`
+          : `Vandaag is ${memberName} vrij`;
+      items.push({
+        kind: "active",
+        key: `active:${memberName}`,
+        memberName,
+        avatarUrl: avatarMap[memberName] || "",
+        text,
+        emoji: "🏖️",
+      });
+    });
+
+    const vacations = Array.isArray(allVacations) ? allVacations : [];
+    const warningByMember = new Map();
+    vacations.forEach((item) => {
+      const memberName = String(item?.member_name || "").trim();
+      const startDate = String(item?.start_date || "").trim();
+      const endDate = String(item?.end_date || "").trim();
+      if (!memberName || !startDate) return;
+      if (startDate <= todayIso) return;
+      const workdays = businessDaysUntil(todayIso, startDate);
+      if (workdays < 1 || workdays > 2) return;
+      const current = warningByMember.get(memberName);
+      if (!current || startDate < current.startDate) {
+        warningByMember.set(memberName, { memberName, startDate, endDate, workdays });
       }
-      return { text: `Vandaag is ${memberName} vrij` };
-    }
-    if (names.length === 2) {
-      return { text: `Vandaag zijn ${names[0]} en ${names[1]} vrij` };
-    }
-    const last = names[names.length - 1];
-    const start = names.slice(0, -1).join(", ");
-    return { text: `Vandaag zijn ${start} en ${last} vrij` };
-  }, [todayVacations]);
+    });
+    Array.from(warningByMember.values())
+      .sort((a, b) => a.startDate.localeCompare(b.startDate))
+      .forEach(({ memberName, startDate, endDate }) => {
+        if (activeNames.includes(memberName)) return;
+        items.push({
+          kind: "warning",
+          key: `warning:${memberName}:${startDate}`,
+          memberName,
+          avatarUrl: avatarMap[memberName] || "",
+          text: buildUpcomingWarningText(memberName, startDate, endDate),
+          emoji: "🚨",
+        });
+      });
+
+    return items;
+  }, [todayVacations, allVacations, servicedeskConfig]);
+
+  const vacationBanner = useMemo(() => {
+    if (!vacationBannerItems.length) return null;
+    const idx = vacationBannerIndex % vacationBannerItems.length;
+    return vacationBannerItems[idx];
+  }, [vacationBannerItems, vacationBannerIndex]);
 
   const formatVacationRangeLabel = useCallback((startDate, endDate) => {
     if (!startDate || !endDate) return "";
@@ -2133,21 +1691,62 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!vacationBanner) return;
-    setVacationBannerEmoji(
-      VACATION_BANNER_EMOJIS[Math.floor(Math.random() * VACATION_BANNER_EMOJIS.length)]
-    );
+    setVacationBannerIndex(0);
+  }, [vacationBannerItems.length]);
+
+  useEffect(() => {
+    if (vacationBannerItems.length <= 1) return;
     const t = setInterval(() => {
-      setVacationBannerEmoji((prev) => {
-        const currentIdx = VACATION_BANNER_EMOJIS.indexOf(prev);
-        const nextIdx =
-          currentIdx >= 0
-            ? (currentIdx + 1) % VACATION_BANNER_EMOJIS.length
-            : Math.floor(Math.random() * VACATION_BANNER_EMOJIS.length);
-        return VACATION_BANNER_EMOJIS[nextIdx];
-      });
-    }, 3500);
+      setVacationBannerIndex((prev) => (prev + 1) % vacationBannerItems.length);
+    }, 5000);
     return () => clearInterval(t);
+  }, [vacationBannerItems.length]);
+
+  useEffect(() => {
+    if (!vacationBanner) return;
+    const t = setTimeout(() => {
+      setVacationBannerIndex((prev) => prev % Math.max(1, vacationBannerItems.length));
+    }, 0);
+    return () => clearTimeout(t);
+  }, [vacationBanner, vacationBannerItems.length]);
+
+  const vacationBannerStyle = useMemo(() => {
+    if (vacationBanner?.kind === "warning") {
+      return {
+        gridColumn: 2,
+        marginBottom: 0,
+        border: "1px solid color-mix(in srgb, #f59e0b 50%, var(--border))",
+        borderRadius: 10,
+        background: "color-mix(in srgb, #f59e0b 12%, var(--surface))",
+        color: "var(--text-main)",
+        padding: "8px 14px",
+        fontSize: 14,
+        fontWeight: 700,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 10,
+        justifySelf: "center",
+        marginLeft: "auto",
+        marginRight: "auto",
+      };
+    }
+    return {
+      gridColumn: 2,
+      marginBottom: 0,
+      border: "1px solid color-mix(in srgb, var(--ok) 45%, var(--border))",
+      borderRadius: 10,
+      background: "color-mix(in srgb, var(--ok) 14%, var(--surface))",
+      color: "var(--text-main)",
+      padding: "8px 14px",
+      fontSize: 14,
+      fontWeight: 700,
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 10,
+      justifySelf: "center",
+      marginLeft: "auto",
+      marginRight: "auto",
+    };
   }, [vacationBanner]);
 
   useEffect(() => {
@@ -2159,21 +1758,6 @@ export default function Home() {
       return prev;
     });
   }, [servicedeskTeamMembers]);
-
-  function trendInfo(last, prev) {
-    const l = Number(last) || 0;
-    const p = Number(prev) || 0;
-    if (p <= 0 && l <= 0) return { symbol: "→", text: "0%", color: "var(--text-muted)" };
-    if (p <= 0 && l > 0) return { symbol: "↑", text: "nieuw", color: "var(--ok)" };
-    const delta = ((l - p) / p) * 100;
-    if (delta > 0.5) return { symbol: "↑", text: `+${num(delta, 1)}%`, color: "var(--ok)" };
-    if (delta < -0.5) return { symbol: "↓", text: `${num(delta, 1)}%`, color: "var(--danger)" };
-    return { symbol: "→", text: `${num(delta, 1)}%`, color: "var(--text-muted)" };
-  }
-
-  function addDays(yyyyMmDd, days) {
-    return addDaysIso(yyyyMmDd, days);
-  }
 
   async function fetchDrilldown(
     weekStart,
@@ -2194,7 +1778,7 @@ export default function Home() {
     setDrillLoading(true);
 
     try {
-      const weekEnd = addDays(weekStart, 7);
+      const weekEnd = addDaysIso(weekStart, 7);
 
       const params = new URLSearchParams({
         date_from: weekStart,
@@ -2477,23 +2061,6 @@ export default function Home() {
     gap: 8,
     marginLeft: "auto",
     flexShrink: 0,
-  };
-  const vacationBannerStyle = {
-    gridColumn: 2,
-    marginBottom: 0,
-    border: "1px solid color-mix(in srgb, var(--ok) 45%, var(--border))",
-    borderRadius: 10,
-    background: "color-mix(in srgb, var(--ok) 14%, var(--surface))",
-    color: "var(--text-main)",
-    padding: "8px 18px",
-    fontSize: 14,
-    fontWeight: 700,
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 8,
-    justifySelf: "center",
-    marginLeft: "auto",
-    marginRight: "auto",
   };
   const activeFiltersBadgeStyle = {
     height: 36,
@@ -2991,6 +2558,7 @@ export default function Home() {
                 plugins: {
                   legend: { display: false },
                   tooltip: { mode: "nearest", intersect: false },
+                  releaseCadence: releaseCadencePlugin,
                   simpleDataLabels: { mode: "line", maxLabels: expanded ? 24 : 12 },
                 },
                 interaction: { mode: "nearest", intersect: false },
@@ -3029,6 +2597,7 @@ export default function Home() {
                   plugins: {
                     legend: { display: false },
                     tooltip: { mode: "nearest", intersect: false },
+                    releaseCadence: releaseCadenceOnderwerpPlugin,
                     simpleDataLabels: { mode: "line", maxLabels: expanded ? 24 : 12 },
                   },
                   interaction: { mode: "nearest", intersect: false },
@@ -3057,6 +2626,7 @@ export default function Home() {
                       legend: {
                         display: true,
                         position: "right",
+                        onClick: legendNoopHandler,
                         labels: {
                           color: (ctx) => priorityColors?.[ctx.index] || "#6b7280",
                         },
@@ -3091,6 +2661,7 @@ export default function Home() {
                       legend: {
                         display: true,
                         position: "right",
+                        onClick: legendNoopHandler,
                         labels: {
                           color: (ctx) => assigneeColors?.[ctx.index] || "#6b7280",
                         },
@@ -3193,6 +2764,7 @@ export default function Home() {
                       label: (ctx) => `${ctx.dataset.label}: ${num(ctx.parsed.y)} tickets`,
                     },
                   },
+                  releaseCadence: releaseCadencePlugin,
                   simpleDataLabels: false,
                 },
                 interaction: { mode: "nearest", intersect: false },
@@ -3229,6 +2801,7 @@ export default function Home() {
                 plugins: {
                   legend: { display: true, position: "top" },
                   tooltip: { mode: "nearest", intersect: false },
+                  releaseCadence: releaseCadencePlugin,
                   simpleDataLabels: false,
                 },
                 interaction: { mode: "nearest", intersect: false },
@@ -3262,6 +2835,7 @@ export default function Home() {
                 plugins: {
                   legend: { display: true, position: "top" },
                   tooltip: { mode: "nearest", intersect: false },
+                  releaseCadence: releaseCadencePlugin,
                   simpleDataLabels: false,
                 },
                 interaction: { mode: "nearest", intersect: false },
@@ -3348,8 +2922,7 @@ export default function Home() {
                       onBlur={() => {
                         const iso = parseNlDateToIso(vacationStartUi);
                         if (iso) {
-                          setVacationForm((prev) => ({ ...prev, startDate: iso }));
-                          setVacationStartUi(fmtDate(iso));
+                          applyVacationStartDate(iso);
                         } else {
                           flashToast("Ongeldige startdatum. Gebruik dd/mm/jjjj.", "error");
                           setVacationStartUi(fmtDate(vacationForm.startDate));
@@ -3384,8 +2957,7 @@ export default function Home() {
                       min={isoDate(new Date())}
                       onChange={(e) => {
                         const iso = e.target.value;
-                        setVacationForm((prev) => ({ ...prev, startDate: iso }));
-                        setVacationStartUi(fmtDate(iso));
+                        applyVacationStartDate(iso);
                       }}
                       style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 0, height: 0 }}
                       tabIndex={-1}
@@ -3452,10 +3024,20 @@ export default function Home() {
                 </label>
               </div>
               <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                <button type="button" onClick={saveVacation} disabled={vacationSaving} style={layoutPrimaryButtonStyle}>
+                <button
+                  type="button"
+                  onClick={saveVacation}
+                  disabled={vacationSaving || !vacationFormDirty}
+                  style={layoutPrimaryButtonStyle}
+                >
                   Opslaan
                 </button>
-                <button type="button" onClick={cancelVacationEdit} disabled={vacationSaving} style={buttonBaseStyle}>
+                <button
+                  type="button"
+                  onClick={cancelVacationEdit}
+                  disabled={vacationSaving}
+                  style={buttonBaseStyle}
+                >
                   Annuleren
                 </button>
               </div>
@@ -3466,6 +3048,10 @@ export default function Home() {
                 {upcomingVacations.slice(0, 3).map((item) => (
                   (() => {
                     const isActiveToday = isVacationActiveToday(item);
+                    const todayIso = isoDate(new Date());
+                    const startDate = String(item?.start_date || "");
+                    const workdaysUntilStart = startDate ? businessDaysUntil(todayIso, startDate) : 0;
+                    const isSoonWarning = !isActiveToday && workdaysUntilStart >= 1 && workdaysUntilStart <= 2;
                     const activeTodayStyle = isActiveToday
                       ? {
                           minHeight: 78, // ~1.5x base item height
@@ -3473,21 +3059,33 @@ export default function Home() {
                           background: "color-mix(in srgb, var(--ok) 18%, var(--surface))",
                         }
                       : null;
+                    const soonWarningStyle = isSoonWarning
+                      ? {
+                          borderColor: "color-mix(in srgb, #f59e0b 55%, var(--border))",
+                          background: "color-mix(in srgb, #f59e0b 14%, var(--surface))",
+                        }
+                      : null;
                     return (
                   <li
                     key={`vac-upcoming-${item.id}`}
                     className="vacation-row"
-                    style={{ ...vacationItemStyle, ...(activeTodayStyle || {}) }}
+                    style={{ ...vacationItemStyle, ...(soonWarningStyle || {}), ...(activeTodayStyle || {}) }}
                     onMouseEnter={() => setVacationHoverId(item.id)}
                     onMouseLeave={() => setVacationHoverId((prev) => (prev === item.id ? null : prev))}
                     onFocus={() => setVacationHoverId(item.id)}
                     onBlur={() => setVacationHoverId((prev) => (prev === item.id ? null : prev))}
                   >
-                    <div style={{ display: "grid", gap: 2 }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
+                      <VacationAvatar
+                        name={item.member_name}
+                        avatarUrl={servicedeskConfig?.team_member_avatars?.[item.member_name] || ""}
+                      />
+                      <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
                       <strong>{item.member_name}</strong>
                       <span style={{ color: "var(--text-muted)" }}>
                         {formatVacationRangeLabel(item.start_date, item.end_date)}
                       </span>
+                      </div>
                     </div>
                     <div
                       className="vacation-row-actions"
@@ -3619,121 +3217,41 @@ export default function Home() {
     const state = dragStateRef.current;
     clearDrag();
     if (!state || state.kind !== "kpi") return;
-    setDashboardLayout((prev) => {
-      const key = state.key;
-      let row = prev.kpiRow.filter((k) => k !== key);
-      const hidden = prev.hiddenKpis.filter((k) => k !== key);
-      if (targetKey && row.includes(targetKey)) {
-        const baseIndex = row.indexOf(targetKey);
-        const insertIndex = position === "after" ? baseIndex + 1 : baseIndex;
-        row.splice(insertIndex, 0, key);
-      } else {
-        row.push(key);
-      }
-      if (row.length > MAX_KPI_TILES) {
-        const overflow = row.slice(MAX_KPI_TILES);
-        row = row.slice(0, MAX_KPI_TILES);
-        overflow.forEach((k) => {
-          if (!hidden.includes(k)) hidden.push(k);
-        });
-      }
-      return { ...prev, kpiRow: row, hiddenKpis: hidden };
-    });
+    setDashboardLayout((prev) => moveKpiToVisibleLayout(prev, state.key, targetKey, position));
   }
 
   function hideKpi() {
     const state = dragStateRef.current;
     clearDrag();
     if (!state || state.kind !== "kpi") return;
-    setDashboardLayout((prev) => {
-      const key = state.key;
-      const row = prev.kpiRow.filter((k) => k !== key);
-      const hidden = prev.hiddenKpis.includes(key) ? prev.hiddenKpis : [...prev.hiddenKpis, key];
-      return { ...prev, kpiRow: row, hiddenKpis: hidden };
-    });
+    setDashboardLayout((prev) => hideKpiLayout(prev, state.key));
   }
 
   function hideKpiByKey(key) {
-    setDashboardLayout((prev) => ({
-      ...prev,
-      kpiRow: prev.kpiRow.filter((k) => k !== key),
-      hiddenKpis: prev.hiddenKpis.includes(key) ? prev.hiddenKpis : [...prev.hiddenKpis, key],
-    }));
+    setDashboardLayout((prev) => hideKpiLayout(prev, key));
   }
 
   function moveCardToRow(rowIndex, targetKey = null, position = "before") {
     const state = dragStateRef.current;
     clearDrag();
     if (!state || state.kind !== "card" || rowIndex < 0 || rowIndex > 1) return;
-    setDashboardLayout((prev) => {
-      const key = state.key;
-      const nextRows = prev.cardRows.map((row) => row.filter((k) => k !== key));
-      const hidden = prev.hiddenCards.filter((k) => k !== key);
-      const expandedByRow = [...(prev.expandedByRow || [null, null])].map((v) => (v === key ? null : v));
-      if (targetKey && nextRows[rowIndex].includes(targetKey)) {
-        const baseIndex = nextRows[rowIndex].indexOf(targetKey);
-        const insertIndex = position === "after" ? baseIndex + 1 : baseIndex;
-        nextRows[rowIndex].splice(insertIndex, 0, key);
-      } else {
-        nextRows[rowIndex].push(key);
-      }
-
-      // Keep rows readable: max 5 cards per row, overflow to hidden cards.
-      [0, 1].forEach((idx) => {
-        if (nextRows[idx].length > MAX_CARDS_PER_ROW) {
-          const overflow = nextRows[idx].slice(MAX_CARDS_PER_ROW);
-          nextRows[idx] = nextRows[idx].slice(0, MAX_CARDS_PER_ROW);
-          overflow.forEach((k) => {
-            if (!hidden.includes(k)) hidden.push(k);
-          });
-        }
-      });
-      [0, 1].forEach((idx) => {
-        if (expandedByRow[idx] && !nextRows[idx].includes(expandedByRow[idx])) expandedByRow[idx] = null;
-      });
-
-      return { ...prev, cardRows: nextRows, hiddenCards: hidden, expandedByRow };
-    });
+    setDashboardLayout((prev) => moveCardToRowLayout(prev, state.key, rowIndex, targetKey, position));
   }
 
   function hideCard() {
     const state = dragStateRef.current;
     clearDrag();
     if (!state || state.kind !== "card") return;
-    setDashboardLayout((prev) => {
-      const key = state.key;
-      const nextRows = prev.cardRows.map((row) => row.filter((k) => k !== key));
-      const hidden = prev.hiddenCards.includes(key) ? prev.hiddenCards : [...prev.hiddenCards, key];
-      const expandedByRow = [...(prev.expandedByRow || [null, null])].map((v) => (v === key ? null : v));
-      return { ...prev, cardRows: nextRows, hiddenCards: hidden, expandedByRow };
-    });
+    setDashboardLayout((prev) => hideCardLayout(prev, state.key));
   }
 
   function hideCardByKey(key) {
-    setDashboardLayout((prev) => ({
-      ...prev,
-      cardRows: prev.cardRows.map((row) => row.filter((k) => k !== key)),
-      hiddenCards: prev.hiddenCards.includes(key) ? prev.hiddenCards : [...prev.hiddenCards, key],
-      expandedByRow: [...(prev.expandedByRow || [null, null])].map((v) => (v === key ? null : v)),
-    }));
+    setDashboardLayout((prev) => hideCardLayout(prev, key));
   }
 
   function toggleRowExpandCard(rowIndex, key) {
     if (!isLayoutEditing || rowIndex < 0 || rowIndex > 1) return;
-    setDashboardLayout((prev) => {
-      const row = prev.cardRows[rowIndex] || [];
-      if (!row.includes(key)) return prev;
-      const current = (prev.expandedByRow || [null, null])[rowIndex];
-      if (current === key) {
-        const next = [...(prev.expandedByRow || [null, null])];
-        next[rowIndex] = null;
-        return { ...prev, expandedByRow: next };
-      }
-      if (row.length > 4) return prev;
-      const next = [...(prev.expandedByRow || [null, null])];
-      next[rowIndex] = key;
-      return { ...prev, expandedByRow: next };
-    });
+    setDashboardLayout((prev) => toggleRowExpandCardLayout(prev, rowIndex, key));
   }
 
   function hideDraggedToOverlay() {
@@ -3765,36 +3283,13 @@ export default function Home() {
   }
 
   function renderKpiRowWithHint(row) {
-    if (!isLayoutEditing) return row;
     const draggingKey = dragStateRef.current?.kind === "kpi" ? dragStateRef.current.key : null;
-    const cleanRow = row.filter((key) => key !== draggingKey);
-    if (!kpiDropHint) return cleanRow;
-    const withHint = [...cleanRow];
-    if (!kpiDropHint.targetKey || !withHint.includes(kpiDropHint.targetKey)) {
-      withHint.push("__KPI_DROP_HINT__");
-      return withHint;
-    }
-    const targetIndex = withHint.indexOf(kpiDropHint.targetKey);
-    const insertIndex = kpiDropHint.position === "after" ? targetIndex + 1 : targetIndex;
-    withHint.splice(insertIndex, 0, "__KPI_DROP_HINT__");
-    return withHint;
+    return renderKpiRowWithHintLayout(row, isLayoutEditing, draggingKey, kpiDropHint);
   }
 
   function renderCardRowWithHint(row, rowIndex) {
-    if (!isLayoutEditing) return row;
     const draggingKey = dragStateRef.current?.kind === "card" ? dragStateRef.current.key : null;
-    const cleanRow = row.filter((key) => key !== draggingKey);
-    const hint = cardDropHint && cardDropHint.rowIndex === rowIndex ? cardDropHint : null;
-    if (!hint) return cleanRow;
-    const withHint = [...cleanRow];
-    if (!hint.targetKey || !withHint.includes(hint.targetKey)) {
-      withHint.push("__DROP_HINT__");
-      return withHint;
-    }
-    const targetIndex = withHint.indexOf(hint.targetKey);
-    const insertIndex = hint.position === "after" ? targetIndex + 1 : targetIndex;
-    withHint.splice(insertIndex, 0, "__DROP_HINT__");
-    return withHint;
+    return renderCardRowWithHintLayout(row, rowIndex, isLayoutEditing, draggingKey, cardDropHint);
   }
 
   useEffect(() => {
@@ -3828,8 +3323,31 @@ export default function Home() {
         <h1 style={titleStyle}>Dashboard Servicedesk Planningsagenda</h1>
         {vacationBanner ? (
           <div style={vacationBannerStyle}>
-            <span aria-hidden>{vacationBannerEmoji}</span>
+            <VacationAvatar
+              name={vacationBanner.memberName}
+              avatarUrl={vacationBanner.avatarUrl}
+              style={{ width: 30, height: 30, fontSize: 11 }}
+            />
             <span>{vacationBanner.text}</span>
+            <span aria-hidden>{vacationBanner.emoji}</span>
+            {vacationBannerItems.length > 1 ? (
+              <span style={{ display: "inline-flex", gap: 4, marginLeft: 4, alignItems: "center" }}>
+                {vacationBannerItems.map((item, idx) => (
+                  <span
+                    key={`banner-dot-${item.key}`}
+                    aria-hidden
+                    style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: 999,
+                      background: idx === (vacationBannerIndex % vacationBannerItems.length)
+                        ? "var(--text-main)"
+                        : "color-mix(in srgb, var(--text-muted) 48%, transparent)",
+                    }}
+                  />
+                ))}
+              </span>
+            ) : null}
           </div>
         ) : null}
         <div style={headerActionsStyle}>
@@ -4151,10 +3669,20 @@ export default function Home() {
               ))}
             </div>
             <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-              <button type="button" onClick={saveTeamConfig} disabled={teamConfigSaving} style={layoutPrimaryButtonStyle}>
+              <button
+                type="button"
+                onClick={saveTeamConfig}
+                disabled={teamConfigSaving || !teamConfigDirty}
+                style={layoutPrimaryButtonStyle}
+              >
                 Opslaan
               </button>
-              <button type="button" onClick={cancelTeamConfig} disabled={teamConfigSaving} style={buttonBaseStyle}>
+              <button
+                type="button"
+                onClick={cancelTeamConfig}
+                disabled={teamConfigSaving || !teamConfigDirty}
+                style={buttonBaseStyle}
+              >
                 Annuleren
               </button>
             </div>
@@ -4175,12 +3703,35 @@ export default function Home() {
               ))}
             </div>
             <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-              <button type="button" onClick={saveOnderwerpConfig} disabled={onderwerpConfigSaving} style={layoutPrimaryButtonStyle}>
+              <button
+                type="button"
+                onClick={saveOnderwerpConfig}
+                disabled={onderwerpConfigSaving || !onderwerpConfigDirty}
+                style={layoutPrimaryButtonStyle}
+              >
                 Opslaan
               </button>
-              <button type="button" onClick={cancelOnderwerpConfig} disabled={onderwerpConfigSaving} style={buttonBaseStyle}>
+              <button
+                type="button"
+                onClick={cancelOnderwerpConfig}
+                disabled={onderwerpConfigSaving || !onderwerpConfigDirty}
+                style={buttonBaseStyle}
+              >
                 Annuleren
               </button>
+              {onderwerpResetAvailable ? (
+                <button
+                  type="button"
+                  onClick={() => setOnderwerpenDraft(Array.isArray(servicedeskOnderwerpenBaseline) ? servicedeskOnderwerpenBaseline : [])}
+                  disabled={onderwerpConfigSaving}
+                  style={filterOpenButtonStyle}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  Opnieuw beginnen
+                </button>
+              ) : null}
             </div>
           </details>
         </div>
@@ -4810,9 +4361,11 @@ export default function Home() {
       </div>
 
       {syncStatus ? (
-        <div title={syncStatusInlineText} style={syncDockStyle}>
-          {syncStatusInlineText}
-        </div>
+        <Link href="/status" title="Open statuspagina" style={{ textDecoration: "none" }}>
+          <div title={syncStatusInlineText} style={{ ...syncDockStyle, cursor: "pointer" }}>
+            {syncStatusInlineText}
+          </div>
+        </Link>
       ) : null}
 
       <style jsx global>{`
@@ -4870,6 +4423,12 @@ export default function Home() {
         textarea,
         button {
           color: var(--text-main);
+        }
+        button:disabled {
+          opacity: 0.5;
+          cursor: not-allowed !important;
+          filter: grayscale(0.2);
+          box-shadow: none !important;
         }
         a {
           color: var(--accent);

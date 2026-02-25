@@ -5,3 +5,10 @@ node_modules/
 __pycache__/
 *.pyc
 .npm-cache/
+# testing
+/coverage
+.coverage
+dashboard/coverage/
+dashboard/playwright-report/
+dashboard/test-results/
+dashboard/e2e/

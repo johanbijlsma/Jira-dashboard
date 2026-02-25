@@ -10,3 +10,19 @@
 ## Commits
 - Keep changes on the active feature branch.
 - Only commit/push when the user asks.
+
+### Commit Confirmation Flow (Repo-Wide)
+- When a commit is requested (or considered), always start with `git status` and show all changed files.
+- Ask whether all changed files should be added:
+  - If yes: run `git add .` and proceed with commit.
+  - If no: ask which files should be excluded, then stage accordingly.
+
+## PR Quality Gates
+- When preparing a PR, backend tests must pass.
+- When preparing a PR, frontend tests must pass.
+- Backend code coverage must be at least 80%.
+- Frontend code coverage must be at least 80%.
+- If tests fail or coverage is below threshold, update code/tests until all gates pass before marking PR ready.
+
+## Scope Clarification
+- If it is unclear whether a requested rule/change applies only to the current branch or to the whole repository, ask the user first before applying it.
