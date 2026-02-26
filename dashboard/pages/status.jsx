@@ -30,6 +30,7 @@ export default function StatusPage() {
   const [actionBusy, setActionBusy] = useState("");
   const [actionMessage, setActionMessage] = useState("");
   const [actionPulse, setActionPulse] = useState(0);
+  const [testAlertKeys, setTestAlertKeys] = useState([]);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -42,6 +43,17 @@ export default function StatusPage() {
       setError(err?.message || "Status ophalen mislukt");
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const fetchTestAlertState = useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/dev/alerts/test-state`);
+      if (!r.ok) return;
+      const data = await r.json();
+      setTestAlertKeys(Array.isArray(data?.keys) ? data.keys : []);
+    } catch {
+      // Ignore in non-dev environments.
     }
   }, []);
 
@@ -62,15 +74,55 @@ export default function StatusPage() {
     }
   }, [fetchStatus]);
 
+  const triggerDevAlert = useCallback(async () => {
+    try {
+      setActionBusy("dev-alert");
+      setActionMessage("");
+      const r = await fetch(`${API}/dev/alerts/trigger`, { method: "POST" });
+      if (!r.ok) throw new Error(`Test alert triggeren mislukt (${r.status})`);
+      await fetch(`${API}/alerts/live?servicedesk_only=true`);
+      setActionMessage("Test alert is gezet.");
+      setActionPulse((v) => v + 1);
+      await fetchStatus();
+      await fetchTestAlertState();
+    } catch (err) {
+      setActionMessage(err?.message || "Test alert triggeren mislukt.");
+    } finally {
+      setActionBusy("");
+    }
+  }, [fetchStatus, fetchTestAlertState]);
+
+  const clearDevAlert = useCallback(async (issueKey) => {
+    try {
+      setActionBusy("dev-alert-clear");
+      setActionMessage("");
+      const suffix = issueKey ? `?issue_key=${encodeURIComponent(issueKey)}` : "";
+      const r = await fetch(`${API}/dev/alerts/clear${suffix}`, { method: "POST" });
+      if (!r.ok) throw new Error(`Test alert wissen mislukt (${r.status})`);
+      setActionMessage("Test alert is verwijderd.");
+      setActionPulse((v) => v + 1);
+      await fetchStatus();
+      await fetchTestAlertState();
+    } catch (err) {
+      setActionMessage(err?.message || "Test alert wissen mislukt.");
+    } finally {
+      setActionBusy("");
+    }
+  }, [fetchStatus, fetchTestAlertState]);
+
   useEffect(() => {
     fetchStatus();
-  }, [fetchStatus]);
+    fetchTestAlertState();
+  }, [fetchStatus, fetchTestAlertState]);
 
   useEffect(() => {
     const intervalMs = status?.running ? 3000 : 15000;
-    const timer = window.setInterval(fetchStatus, intervalMs);
+    const timer = window.setInterval(() => {
+      fetchStatus();
+      fetchTestAlertState();
+    }, intervalMs);
     return () => window.clearInterval(timer);
-  }, [fetchStatus, status?.running]);
+  }, [fetchStatus, fetchTestAlertState, status?.running]);
 
   const successfulRuns = useMemo(
     () => (Array.isArray(status?.successful_runs) ? status.successful_runs : []),
@@ -216,6 +268,24 @@ export default function StatusPage() {
             <button type="button" onClick={fetchStatus} style={buttonStyle} disabled={loading}>
               {loading ? "Vernersen…" : "Ververs"}
             </button>
+            <button
+              type="button"
+              onClick={triggerDevAlert}
+              style={buttonStyle}
+              disabled={loading || actionBusy === "dev-alert"}
+            >
+              {actionBusy === "dev-alert" ? "Bezig…" : "Test alert"}
+            </button>
+            {testAlertKeys.length ? (
+              <button
+                type="button"
+                onClick={() => clearDevAlert(testAlertKeys[0])}
+                style={buttonStyle}
+                disabled={loading || actionBusy === "dev-alert-clear"}
+              >
+                {actionBusy === "dev-alert-clear" ? "Bezig…" : "Verwijder test"}
+              </button>
+            ) : null}
           </div>
         </div>
 
