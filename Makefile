@@ -5,7 +5,7 @@ DEV_COMPOSE=docker compose -f $(DEV_COMPOSE_FILE)
 
 .PHONY: up down logs logs-api logs-dashboard ps rebuild restart sync sync-full \
 	dev-up dev-down dev-logs dev-ps dev-rebuild dev-restart dev-api dev-api-no-reload dev-frontend \
-	install-hooks test-api test-dashboard test
+	install-hooks test-api test-dashboard test backup-db restore-db
 
 up:
 	$(COMPOSE) up -d --build
@@ -78,3 +78,10 @@ test-dashboard:
 	npm --prefix dashboard run test
 
 test: test-api test-dashboard
+
+backup-db:
+	sh ops/backup/backup.sh
+
+restore-db:
+	@if [ -z "$(DUMP)" ]; then echo "Usage: make restore-db DUMP=backups/<file>.dump"; exit 1; fi
+	sh ops/backup/restore.sh "$(DUMP)"

@@ -98,3 +98,61 @@ Stop:
 ```bash
 docker compose -f docker-compose.prod.yml down
 ```
+
+## 8) Two-phase rollout: cloud now, Raspberry Pi later
+
+Use this when you want team access immediately but still end on a local-first setup.
+
+### Phase A: Temporary cloud deployment
+
+1. Create an account at your cloud provider (for this project: Koyeb).
+2. Deploy the API and dashboard as separate services from the existing Dockerfiles.
+3. Use a managed PostgreSQL instance and fill in the same `POSTGRES_*` variables.
+4. Set:
+   - `NEXT_PUBLIC_API_BASE` to your public API URL
+   - `BACKEND_CORS_ORIGINS` to your dashboard URL
+5. Rebuild the dashboard service whenever `NEXT_PUBLIC_API_BASE` changes.
+
+### Phase B: Backup routine (required before Pi migration)
+
+Run a daily database backup:
+
+```bash
+make backup-db
+```
+
+Optional retention settings:
+- `BACKUP_DIR` (default: `backups`)
+- `RETENTION_DAYS` (default: `14`)
+
+Restore test (run against a non-production database):
+
+```bash
+make restore-db DUMP=backups/<file>.dump
+```
+
+### Phase C: Migrate to Raspberry Pi
+
+1. Install Docker and Docker Compose on the Pi.
+2. Copy project files and `.env` to the Pi.
+3. Set `POSTGRES_HOST=db` in `.env` for local compose.
+4. Start services:
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+5. Restore the latest cloud dump on the Pi database:
+
+```bash
+make restore-db DUMP=backups/<file>.dump
+```
+
+6. Validate:
+   - API health/status endpoint
+   - Dashboard loads and charts show data
+   - Manual sync works from `/status`
+
+### Phase D: Team access from home
+
+Use a private VPN overlay (for example Tailscale) so colleagues can access the Pi safely without exposing public ports.
