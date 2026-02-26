@@ -12,3 +12,6 @@ dashboard/coverage/
 dashboard/playwright-report/
 dashboard/test-results/
 dashboard/e2e/
+/.DS_Store
+.DS_Store
+.DS_Store/

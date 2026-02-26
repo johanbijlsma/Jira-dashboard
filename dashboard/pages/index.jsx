@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { parseNlDateToIso } from "../lib/date";
 import { buildUpcomingWarningText, businessDaysUntil } from "../lib/vacation-banner";
 import Link from "next/link";
+import Head from "next/head";
 import {
   API,
   CARD_TITLES,
@@ -68,6 +69,14 @@ ChartJS.register(
   Legend
 );
 setupChartDefaults(ChartJS);
+
+function alertFaviconDataUri(color, ring = false) {
+  const ringSvg = ring
+    ? `<circle cx='32' cy='32' r='26' fill='none' stroke='${color}' stroke-width='6' opacity='0.95'/>`
+    : `<circle cx='32' cy='32' r='26' fill='${color}' opacity='0.95'/>`;
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='12' fill='#0f172a'/>${ringSvg}</svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
 
 export default function Home() {
   const today = useMemo(() => new Date(), []);
@@ -155,6 +164,7 @@ export default function Home() {
   const vacationEndNativeRef = useRef(null);
 
   const [selectedWeek, setSelectedWeek] = useState("");
+  const [sidePanelMode, setSidePanelMode] = useState("");
   const [selectedType, setSelectedType] = useState("");
   const [selectedOnderwerp, setSelectedOnderwerp] = useState("");
   const [selectedDrillDateField, setSelectedDrillDateField] = useState("created");
@@ -163,6 +173,8 @@ export default function Home() {
   const [drillLoading, setDrillLoading] = useState(false);
   const [drillOffset, setDrillOffset] = useState(0);
   const [drillHasNext, setDrillHasNext] = useState(false);
+  const [alertLogEntries, setAlertLogEntries] = useState([]);
+  const [faviconPulseOn, setFaviconPulseOn] = useState(false);
   const drillPanelRef = useRef(null);
   const drillCloseRef = useRef(null);
   const hotkeysPopupRef = useRef(null);
@@ -192,6 +204,8 @@ export default function Home() {
   );
 
   const DRILL_LIMIT = 100;
+  const ALERT_LOG_LIMIT = 300;
+  const sidePanelOpen = sidePanelMode === "alerts" || !!selectedWeek;
   const syncBusy = syncLoading || !!syncStatus?.running;
   const syncStatusInlineText = useMemo(() => {
     if (!syncStatus) return "";
@@ -248,7 +262,8 @@ export default function Home() {
     };
   }, [dateFrom, dateTo]);
 
-  function closeDrilldown() {
+  const closeDrilldown = useCallback(() => {
+    setSidePanelMode("");
     setSelectedWeek("");
     setSelectedType("");
     setSelectedOnderwerp("");
@@ -257,7 +272,15 @@ export default function Home() {
     setDrillIssues([]);
     setDrillOffset(0);
     setDrillHasNext(false);
-  }
+  }, []);
+
+  const closeSidePanel = useCallback(() => {
+    if (sidePanelMode === "alerts") {
+      setSidePanelMode("");
+      return;
+    }
+    closeDrilldown();
+  }, [closeDrilldown, sidePanelMode]);
 
   const flashToast = useCallback((message, kind = "success", ms = 3000) => {
     setSyncMessage(message);
@@ -455,6 +478,25 @@ export default function Home() {
     return s;
   }, []);
 
+  const refreshAlertLogs = useCallback(async () => {
+    const params = new URLSearchParams();
+    params.set("limit", String(ALERT_LOG_LIMIT));
+    if (servicedeskOnly) params.set("servicedesk_only", "true");
+    const r = await fetch(`${API}/alerts/logs?${params.toString()}`);
+    const data = await r.json();
+    const normalized = Array.isArray(data)
+      ? data.map((entry) => ({
+          id: entry?.id != null ? String(entry.id) : `${entry?.kind || ""}:${entry?.issue_key || ""}:${entry?.detected_at || ""}`,
+          detected_at: entry?.detected_at || null,
+          kind: String(entry?.kind || ""),
+          issue_key: String(entry?.issue_key || ""),
+          status: String(entry?.status || ""),
+          meta: String(entry?.meta || ""),
+        }))
+      : [];
+    setAlertLogEntries(normalized);
+  }, [servicedeskOnly, ALERT_LOG_LIMIT]);
+
   const refreshLiveAlerts = useCallback(async () => {
     const params = new URLSearchParams();
     if (servicedeskOnly) params.set("servicedesk_only", "true");
@@ -494,7 +536,8 @@ export default function Home() {
     } else if (newSla.length) {
       flashToast(`ALERT SLA <5m: ${newSla[0].issue_key}${newSla.length > 1 ? ` +${newSla.length - 1}` : ""}`, "error", 9000);
     }
-  }, [flashToast, servicedeskOnly]);
+    await refreshAlertLogs();
+  }, [flashToast, servicedeskOnly, refreshAlertLogs]);
 
   const refreshVacations = useCallback(async () => {
     const [allRes, upcomingRes, todayRes] = await Promise.all([
@@ -846,6 +889,10 @@ export default function Home() {
   }, [refreshLiveAlerts]);
 
   useEffect(() => {
+    refreshAlertLogs().catch(() => {});
+  }, [refreshAlertLogs]);
+
+  useEffect(() => {
     refreshVacations().catch(() => {});
   }, [refreshVacations]);
 
@@ -869,6 +916,38 @@ export default function Home() {
     }, 20000);
     return () => clearInterval(t);
   }, [refreshLiveAlerts]);
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      refreshAlertLogs().catch(() => {});
+    }, 30000);
+    return () => clearInterval(t);
+  }, [refreshAlertLogs]);
+
+  useEffect(() => {
+    const hasP1 = Array.isArray(liveAlerts?.priority1) && liveAlerts.priority1.length > 0;
+    const hasSla =
+      (Array.isArray(liveAlerts?.first_response_due_soon) && liveAlerts.first_response_due_soon.length > 0) ||
+      (Array.isArray(liveAlerts?.first_response_overdue) && liveAlerts.first_response_overdue.length > 0);
+    if (!(hasP1 || hasSla)) {
+      setFaviconPulseOn(false);
+      return;
+    }
+    const t = window.setInterval(() => setFaviconPulseOn((v) => !v), 700);
+    return () => {
+      window.clearInterval(t);
+    };
+  }, [liveAlerts]);
+
+  const faviconHref = useMemo(() => {
+    const hasP1 = Array.isArray(liveAlerts?.priority1) && liveAlerts.priority1.length > 0;
+    const hasSla =
+      (Array.isArray(liveAlerts?.first_response_due_soon) && liveAlerts.first_response_due_soon.length > 0) ||
+      (Array.isArray(liveAlerts?.first_response_overdue) && liveAlerts.first_response_overdue.length > 0);
+    if (!hasP1 && !hasSla) return "/favicon.ico";
+    const color = hasP1 ? "#dc2626" : "#f59e0b";
+    return alertFaviconDataUri(color, faviconPulseOn);
+  }, [liveAlerts, faviconPulseOn]);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -973,14 +1052,14 @@ export default function Home() {
   }, [hotkeysOpen]);
 
   useEffect(() => {
-    if (!selectedWeek) return;
+    if (!sidePanelOpen) return;
     function onKeyDown(e) {
       if (isTextEntryTarget(e.target)) return;
-      if (e.key === "Escape") closeDrilldown();
+      if (e.key === "Escape") closeSidePanel();
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedWeek]);
+  }, [sidePanelOpen, closeSidePanel]);
 
   useEffect(() => {
     if (!expandedCard) return;
@@ -1003,15 +1082,15 @@ export default function Home() {
   }, [filtersOpen]);
 
   useEffect(() => {
-    if (!selectedWeek) return;
+    if (!sidePanelOpen) return;
     const t = setTimeout(() => {
       drillCloseRef.current?.focus?.();
     }, 0);
     return () => clearTimeout(t);
-  }, [selectedWeek]);
+  }, [sidePanelOpen]);
 
   useEffect(() => {
-    if (!selectedWeek) return;
+    if (!sidePanelOpen) return;
     function onKeyDown(e) {
       if (e.key !== "Tab") return;
       const panel = drillPanelRef.current;
@@ -1037,7 +1116,7 @@ export default function Home() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedWeek]);
+  }, [sidePanelOpen]);
 
   useEffect(() => {
     const params = new URLSearchParams({
@@ -1767,6 +1846,7 @@ export default function Home() {
     options = {}
   ) {
     if (isLayoutEditing) return;
+    setSidePanelMode("drilldown");
     const dateField = options?.dateField === "resolved" ? "resolved" : "created";
     const basisLabel = options?.basisLabel || (dateField === "resolved" ? "Afgesloten" : "Binnengekomen");
     setSelectedWeek(weekStart);
@@ -2275,7 +2355,7 @@ export default function Home() {
     width: "100%",
     display: "flex",
     justifyContent: "center",
-    transform: selectedWeek ? "translateX(clamp(-360px, -18vw, -96px))" : "translateX(0)",
+    transform: sidePanelOpen ? "translateX(clamp(-360px, -18vw, -96px))" : "translateX(0)",
     transition: "transform 220ms ease",
     pointerEvents: "none",
   };
@@ -3302,10 +3382,13 @@ export default function Home() {
       closeDrilldown();
       setExpandedCard("");
     }
-  }, [isLayoutEditing]);
+  }, [isLayoutEditing, closeDrilldown]);
 
   return (
     <div style={pageStyle}>
+      <Head>
+        <link rel="icon" href={faviconHref} />
+      </Head>
       <Toast message={syncMessage} kind={syncMessageKind} onClose={() => setSyncMessage("")} />
       <LiveAlertStack alerts={liveAlerts} />
       <button
@@ -3365,8 +3448,22 @@ export default function Home() {
             </>
           ) : null}
           <div style={headerPrimaryButtonsStyle}>
-            <button type="button" onClick={toggleTvMode} style={filterOpenButtonStyle}>
-              {isTvMode ? "TV-modus uit" : "TV-modus aan"}
+            <button
+              type="button"
+              onClick={() => setSidePanelMode("alerts")}
+              style={{ ...layoutPrimaryButtonStyle, width: 36, padding: 0, justifyContent: "center" }}
+              title="Alerts logboek openen"
+              aria-label="Alerts logboek openen"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path
+                  d="M12 3a5 5 0 0 0-5 5v3.5L5 14v1h14v-1l-2-2.5V8a5 5 0 0 0-5-5zM10 18a2 2 0 0 0 4 0"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
             </button>
             {isLayoutEditing ? (
               <button type="button" onClick={cancelLayoutEditing} style={filterOpenButtonStyle}>
@@ -4056,6 +4153,9 @@ export default function Home() {
           <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <h3 style={hiddenOverlayTitleStyle}>Verborgen kaarten</h3>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <button type="button" onClick={toggleTvMode} style={filterOpenButtonStyle}>
+                {isTvMode ? "TV-modus uit" : "TV-modus aan"}
+              </button>
               <button type="button" onClick={resetLayoutAndClose} style={filterOpenButtonStyle}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                   <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
@@ -4164,24 +4264,24 @@ export default function Home() {
       ) : null}
 
       <div
-        aria-hidden={!selectedWeek}
-        onClick={closeDrilldown}
+        aria-hidden={!sidePanelOpen}
+        onClick={closeSidePanel}
         style={{
           position: "fixed",
           inset: 0,
           background: "var(--overlay-soft)",
-          opacity: selectedWeek ? 1 : 0,
-          pointerEvents: selectedWeek ? "auto" : "none",
+          opacity: sidePanelOpen ? 1 : 0,
+          pointerEvents: sidePanelOpen ? "auto" : "none",
           transition: "opacity 200ms ease",
           zIndex: 1200,
         }}
       />
 
       <div
-        aria-hidden={!selectedWeek}
+        aria-hidden={!sidePanelOpen}
         role="dialog"
         aria-modal="true"
-        aria-label="Drilldown"
+        aria-label={sidePanelMode === "alerts" ? "Alerts logboek" : "Drilldown"}
         onClick={(e) => e.stopPropagation()}
         ref={drillPanelRef}
         style={{
@@ -4192,7 +4292,7 @@ export default function Home() {
           width: "min(60vw, 1200px)",
           background: "var(--surface)",
           boxShadow: "0 10px 30px var(--shadow-medium)",
-          transform: selectedWeek ? "translateX(0)" : "translateX(100%)",
+          transform: sidePanelOpen ? "translateX(0)" : "translateX(100%)",
           transition: "transform 200ms ease",
           zIndex: 1201,
           display: "flex",
@@ -4201,24 +4301,35 @@ export default function Home() {
       >
         <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border-strong)", display: "flex", gap: 10 }}>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Drilldown</div>
-            <div style={{ fontSize: 16 }}>
-              Week vanaf <b>{fmtDate(selectedWeek)}</b>
-              {" "}— basis: <b>{selectedDrillBasisLabel}</b>
-              {selectedType ? (
-                <>
-                  {" "}— type: <b style={{ color: typeColor(selectedType) }}>{selectedType}</b>
-                </>
-              ) : null}
-              {selectedOnderwerp ? (
-                <>
-                  {" "}— onderwerp: <b>{selectedOnderwerp}</b>
-                </>
-              ) : null}
-            </div>
+            {sidePanelMode === "alerts" ? (
+              <>
+                <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Alerts</div>
+                <div style={{ fontSize: 16 }}>
+                  Alerts logboek — <b>{alertLogEntries.length}</b> gebeurtenissen
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Drilldown</div>
+                <div style={{ fontSize: 16 }}>
+                  Week vanaf <b>{fmtDate(selectedWeek)}</b>
+                  {" "}— basis: <b>{selectedDrillBasisLabel}</b>
+                  {selectedType ? (
+                    <>
+                      {" "}— type: <b style={{ color: typeColor(selectedType) }}>{selectedType}</b>
+                    </>
+                  ) : null}
+                  {selectedOnderwerp ? (
+                    <>
+                      {" "}— onderwerp: <b>{selectedOnderwerp}</b>
+                    </>
+                  ) : null}
+                </div>
+              </>
+            )}
           </div>
           <button
-            onClick={closeDrilldown}
+            onClick={closeSidePanel}
             aria-label="Sluiten"
             title="Sluiten"
             ref={drillCloseRef}
@@ -4235,61 +4346,138 @@ export default function Home() {
           </button>
         </div>
 
-        <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border)" }}>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <button
-              onClick={() =>
-                fetchDrilldown(
-                  selectedWeek,
-                  selectedType,
-                  selectedOnderwerp,
-                  Math.max(0, drillOffset - DRILL_LIMIT),
-                  { dateField: selectedDrillDateField, basisLabel: selectedDrillBasisLabel }
-                )
-              }
-              disabled={!selectedWeek || drillOffset === 0 || drillLoading}
-            >
-              Vorige
-            </button>
-            <button
-              onClick={() =>
-                fetchDrilldown(
-                  selectedWeek,
-                  selectedType,
-                  selectedOnderwerp,
-                  drillOffset + DRILL_LIMIT,
-                  { dateField: selectedDrillDateField, basisLabel: selectedDrillBasisLabel }
-                )
-              }
-              disabled={!selectedWeek || !drillHasNext || drillLoading}
-            >
-              Volgende
-            </button>
-            <span style={{ color: "var(--text-muted)" }}>
-              rijen {drillOffset + 1}–{drillOffset + drillIssues.length}
-            </span>
-            <span style={{ color: "var(--text-faint)" }}>•</span>
-            <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <input
-                type="checkbox"
-                checked={showPriority}
-                onChange={(e) => setShowPriority(e.target.checked)}
-              />
-              Priority
-            </label>
-            <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <input
-                type="checkbox"
-                checked={showAssignee}
-                onChange={(e) => setShowAssignee(e.target.checked)}
-              />
-              Assignee
-            </label>
+        {sidePanelMode === "alerts" ? (
+          <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border)" }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ color: "var(--text-muted)" }}>
+                Meest recente alerts bovenaan
+              </span>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border)" }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <button
+                onClick={() =>
+                  fetchDrilldown(
+                    selectedWeek,
+                    selectedType,
+                    selectedOnderwerp,
+                    Math.max(0, drillOffset - DRILL_LIMIT),
+                    { dateField: selectedDrillDateField, basisLabel: selectedDrillBasisLabel }
+                  )
+                }
+                disabled={!selectedWeek || drillOffset === 0 || drillLoading}
+              >
+                Vorige
+              </button>
+              <button
+                onClick={() =>
+                  fetchDrilldown(
+                    selectedWeek,
+                    selectedType,
+                    selectedOnderwerp,
+                    drillOffset + DRILL_LIMIT,
+                    { dateField: selectedDrillDateField, basisLabel: selectedDrillBasisLabel }
+                  )
+                }
+                disabled={!selectedWeek || !drillHasNext || drillLoading}
+              >
+                Volgende
+              </button>
+              <span style={{ color: "var(--text-muted)" }}>
+                rijen {drillOffset + 1}–{drillOffset + drillIssues.length}
+              </span>
+              <span style={{ color: "var(--text-faint)" }}>•</span>
+              <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={showPriority}
+                  onChange={(e) => setShowPriority(e.target.checked)}
+                />
+                Priority
+              </label>
+              <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={showAssignee}
+                  onChange={(e) => setShowAssignee(e.target.checked)}
+                />
+                Assignee
+              </label>
+            </div>
+          </div>
+        )}
 
         <div style={{ padding: "12px 20px", overflow: "auto", flex: 1 }}>
-          {drillLoading ? (
+          {sidePanelMode === "alerts" ? (
+            alertLogEntries.length ? (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Tijd</th>
+                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Soort</th>
+                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Issue</th>
+                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Status</th>
+                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Info</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {alertLogEntries.map((entry) => (
+                      <tr key={entry.id}>
+                        <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                          {fmtDateTime(entry.detected_at)}
+                        </td>
+                        <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              padding: "2px 8px",
+                              borderRadius: 999,
+                              fontWeight: 700,
+                              fontSize: 12,
+                              border: "1px solid",
+                              borderColor:
+                                entry.kind === "P1"
+                                  ? "rgba(127, 29, 29, 0.42)"
+                                  : entry.kind === "SLA_OVERDUE"
+                                    ? "rgba(126, 34, 206, 0.42)"
+                                    : "rgba(180, 83, 9, 0.42)",
+                              background:
+                                entry.kind === "P1"
+                                  ? "color-mix(in srgb, #ef4444 18%, var(--surface))"
+                                  : entry.kind === "SLA_OVERDUE"
+                                    ? "color-mix(in srgb, #a855f7 16%, var(--surface))"
+                                    : "color-mix(in srgb, #f59e0b 16%, var(--surface))",
+                              color:
+                                entry.kind === "P1"
+                                  ? "#b91c1c"
+                                  : entry.kind === "SLA_OVERDUE"
+                                    ? "#7e22ce"
+                                    : "#b45309",
+                            }}
+                          >
+                            {entry.kind === "P1" ? "P1" : entry.kind === "SLA_OVERDUE" ? "SLA verlopen" : "SLA bijna"}
+                          </span>
+                        </td>
+                        <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                          <a href={`${JIRA_BASE}/browse/${entry.issue_key}`} target="_blank" rel="noreferrer">
+                            {entry.issue_key}
+                          </a>
+                        </td>
+                        <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>{entry.status || "—"}</td>
+                        <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>{entry.meta || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div style={{ color: "var(--text-muted)" }}>Nog geen alerts in dit logboek.</div>
+            )
+          ) : drillLoading ? (
             <div>Bezig met laden…</div>
           ) : selectedWeek ? (
             <div style={{ overflowX: "auto" }}>

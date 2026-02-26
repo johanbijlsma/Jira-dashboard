@@ -73,7 +73,8 @@ describe("Status page", () => {
     });
 
     render(<StatusPage />);
-    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+    expect(global.fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/status");
     await waitFor(() => expect(intervalSpy).toHaveBeenCalled());
     expect(intervalSpy).toHaveBeenCalledWith(expect.any(Function), 3000);
   });

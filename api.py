@@ -32,6 +32,16 @@ ALERT_P1_PRIORITIES = [
     ).split(",")
     if p.strip()
 ]
+ALERT_P1_ACTIVE_STATUSES = [
+    s.strip().lower()
+    for s in os.environ.get(
+        "ALERT_P1_ACTIVE_STATUSES",
+        "nieuwe melding",
+    ).split(",")
+    if s.strip()
+]
+ALERT_TEAMS_WEBHOOK_URL = (os.environ.get("ALERT_TEAMS_WEBHOOK_URL") or "").strip()
+ALERT_TEAMS_TIMEOUT_SECONDS = float(os.environ.get("ALERT_TEAMS_TIMEOUT_SECONDS", "3"))
 CORS_ORIGINS_RAW = os.environ.get(
     "BACKEND_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
 )
@@ -50,6 +60,8 @@ _sync_last_result = None
 _schema_checked = False
 _issue_existence_cache = {}
 _issue_existence_cache_ttl_seconds = 60
+_last_alert_log_cleanup_at = 0.0
+DEV_ALERT_ISSUE_KEY = "DEV-ALERT-TEST"
 DEFAULT_SERVICEDESK_TEAM_MEMBERS = ["Johan", "Ashley", "Jarno"]
 DEFAULT_NON_SERVICEDESK_ONDERWERPEN = {
     "Koppelingen",
@@ -151,6 +163,22 @@ def ensure_schema():
             );
             """
         )
+        cur.execute(
+            """
+            create table if not exists alert_logs (
+              id bigserial primary key,
+              issue_key text not null,
+              alert_kind text not null,
+              status text,
+              meta text,
+              status_key text not null default '',
+              meta_key text not null default '',
+              servicedesk_only boolean not null default true,
+              detected_at timestamptz not null default now(),
+              logged_on date not null default current_date
+            );
+            """
+        )
         cur.execute("insert into sync_state(id, last_sync) values (1, null) on conflict (id) do nothing;")
         cur.execute("alter table issues add column if not exists request_type text;")
         cur.execute("alter table issues add column if not exists onderwerp_logging text;")
@@ -183,6 +211,31 @@ def ensure_schema():
         cur.execute("alter table dashboard_config add column if not exists servicedesk_team_members text[] not null default '{}';")
         cur.execute("alter table dashboard_config add column if not exists servicedesk_onderwerpen text[] not null default '{}';")
         cur.execute("alter table dashboard_config add column if not exists updated_at timestamptz not null default now();")
+        cur.execute("alter table alert_logs add column if not exists issue_key text;")
+        cur.execute("alter table alert_logs add column if not exists alert_kind text;")
+        cur.execute("alter table alert_logs add column if not exists status text;")
+        cur.execute("alter table alert_logs add column if not exists meta text;")
+        cur.execute("alter table alert_logs add column if not exists status_key text not null default '';")
+        cur.execute("alter table alert_logs add column if not exists meta_key text not null default '';")
+        cur.execute("alter table alert_logs add column if not exists servicedesk_only boolean not null default true;")
+        cur.execute("alter table alert_logs add column if not exists detected_at timestamptz not null default now();")
+        cur.execute("alter table alert_logs add column if not exists logged_on date not null default current_date;")
+        cur.execute("update alert_logs set status_key = coalesce(status, ''), meta_key = coalesce(meta, '') where status_key = '' and meta_key = '';")
+        cur.execute("create index if not exists alert_logs_detected_at_idx on alert_logs(detected_at desc);")
+        cur.execute("drop index if exists alert_logs_daily_dedupe_idx;")
+        cur.execute(
+            """
+            create unique index alert_logs_daily_dedupe_idx
+            on alert_logs(
+              issue_key,
+              alert_kind,
+              status_key,
+              meta_key,
+              servicedesk_only,
+              logged_on
+            );
+            """
+        )
         cur.execute("insert into dashboard_config(id) values (1) on conflict (id) do nothing;")
         cur.execute(
             """
@@ -641,6 +694,90 @@ def is_priority1_priority(value: Optional[str]) -> bool:
     return False
 
 
+def is_priority1_alert_status(value: Optional[str]) -> bool:
+    """Only alert for fresh/new P1 intake states."""
+    status = str(value or "").strip().lower()
+    if not status:
+        return False
+    return status in ALERT_P1_ACTIVE_STATUSES
+
+
+def _maybe_cleanup_alert_logs(cur):
+    global _last_alert_log_cleanup_at
+    now_ts = time.time()
+    if now_ts - _last_alert_log_cleanup_at < 3600:
+        return
+    cur.execute("delete from alert_logs where detected_at < now() - interval '30 days';")
+    _last_alert_log_cleanup_at = now_ts
+
+
+def _persist_alert_log_events(cur, events):
+    inserted_events = []
+    if not events:
+        return inserted_events
+    for event in events:
+        cur.execute(
+            """
+            insert into alert_logs(issue_key, alert_kind, status, meta, status_key, meta_key, servicedesk_only, detected_at, logged_on)
+            values (%s, %s, %s, %s, %s, %s, %s, now(), current_date)
+            on conflict (issue_key, alert_kind, status_key, meta_key, servicedesk_only, logged_on)
+            do nothing
+            returning id;
+            """,
+            (
+                event["issue_key"],
+                event["alert_kind"],
+                event.get("status"),
+                event.get("meta"),
+                str(event.get("status") or ""),
+                str(event.get("meta") or ""),
+                bool(event.get("servicedesk_only", True)),
+            ),
+        )
+        inserted = cur.fetchone()
+        if inserted:
+            inserted_events.append(event)
+    return inserted_events
+
+
+def _send_teams_alert_notification(events):
+    result = {"attempted": False, "ok": False, "status_code": None, "error": None}
+    if not ALERT_TEAMS_WEBHOOK_URL or not events:
+        return result
+    try:
+        result["attempted"] = True
+        top = events[:8]
+        lines = []
+        for e in top:
+            kind = e.get("alert_kind") or "ALERT"
+            issue_key = e.get("issue_key") or "?"
+            status = e.get("status")
+            meta = e.get("meta")
+            parts = [f"**{kind}**", issue_key]
+            if status:
+                parts.append(f"status: {status}")
+            if meta:
+                parts.append(str(meta))
+            lines.append(" - ".join(parts))
+        if len(events) > len(top):
+            lines.append(f"... +{len(events) - len(top)} extra")
+        payload = {
+            "text": "Nieuwe dashboard alerts:\n" + "\n".join(lines),
+        }
+        response = requests.post(ALERT_TEAMS_WEBHOOK_URL, json=payload, timeout=ALERT_TEAMS_TIMEOUT_SECONDS)
+        status_code = getattr(response, "status_code", None)
+        result["status_code"] = status_code
+        result["ok"] = bool(status_code and 200 <= int(status_code) < 300)
+        if not result["ok"]:
+            body = getattr(response, "text", "")
+            result["error"] = f"HTTP {status_code}: {str(body)[:240]}"
+    except Exception as exc:
+        # Alerts endpoint should stay responsive even when webhook delivery fails.
+        result["attempted"] = True
+        result["error"] = str(exc)
+    return result
+
+
 def _jira_existing_issue_keys(keys):
     """
     Validate issue existence in Jira for alert candidates.
@@ -657,6 +794,9 @@ def _jira_existing_issue_keys(keys):
     to_query = []
 
     for key in unique_keys:
+        if str(key).startswith("DEV-"):
+            existing.add(key)
+            continue
         cached = _issue_existence_cache.get(key)
         if cached and now_ts - cached["checked_at"] <= _issue_existence_cache_ttl_seconds:
             if cached["exists"]:
@@ -1727,7 +1867,7 @@ def alerts_live(servicedesk_only: bool = True):
             """,
             (servicedesk_only,),
         )
-        p1_rows = [r for r in cur.fetchall() if is_priority1_priority(r[2])][:25]
+        p1_rows = [r for r in cur.fetchall() if is_priority1_priority(r[2]) and is_priority1_alert_status(r[3])][:25]
 
         cur.execute(
             """
@@ -1764,7 +1904,8 @@ def alerts_live(servicedesk_only: bool = True):
               first_response_due_at,
               ceil(extract(epoch from (now() - first_response_due_at)) / 60.0)::int as minutes_overdue
             from issues
-            where lower(coalesce(current_status, '')) = 'nieuwe melding'
+            where resolved_at is null
+              and lower(coalesce(current_status, '')) = 'nieuwe melding'
               and first_response_due_at is not null
               and first_response_due_at < now()
               and (
@@ -1786,36 +1927,235 @@ def alerts_live(servicedesk_only: bool = True):
     all_keys = [r[0] for r in p1_rows] + [r[0] for r in sla_rows] + [r[0] for r in overdue_rows]
     existing_keys = _jira_existing_issue_keys(all_keys)
 
+    priority_items = [
+        {
+            "issue_key": r[0],
+            "created_at": r[1].isoformat() if r[1] else None,
+            "priority": r[2],
+            "status": r[3],
+        }
+        for r in p1_rows
+        if r[0] in existing_keys
+    ]
+    due_soon_items = [
+        {
+            "issue_key": r[0],
+            "due_at": r[1].isoformat() if r[1] else None,
+            "minutes_left": int(r[2] or 0),
+        }
+        for r in sla_rows
+        if r[0] in existing_keys
+    ]
+    overdue_items = [
+        {
+            "issue_key": r[0],
+            "due_at": r[1].isoformat() if r[1] else None,
+            "minutes_overdue": int(r[2] or 0),
+        }
+        for r in overdue_rows
+        if r[0] in existing_keys
+    ]
+
+    log_events = []
+    log_events.extend(
+        {
+            "issue_key": item["issue_key"],
+            "alert_kind": "P1",
+            "status": item.get("status"),
+            "meta": item.get("priority"),
+            "servicedesk_only": servicedesk_only,
+        }
+        for item in priority_items
+    )
+    log_events.extend(
+        {
+            "issue_key": item["issue_key"],
+            "alert_kind": "SLA_SOON",
+            "status": None,
+            "meta": f"{int(item.get('minutes_left') or 0)} min",
+            "servicedesk_only": servicedesk_only,
+        }
+        for item in due_soon_items
+    )
+    log_events.extend(
+        {
+            "issue_key": item["issue_key"],
+            "alert_kind": "SLA_OVERDUE",
+            "status": None,
+            "meta": f"{int(item.get('minutes_overdue') or 0)} min te laat",
+            "servicedesk_only": servicedesk_only,
+        }
+        for item in overdue_items
+    )
+
+    with conn() as c, c.cursor() as cur:
+        _maybe_cleanup_alert_logs(cur)
+        inserted_events = _persist_alert_log_events(cur, log_events)
+        c.commit()
+    _send_teams_alert_notification(inserted_events)
+
     return {
-        "priority1": [
-            {
-                "issue_key": r[0],
-                "created_at": r[1].isoformat() if r[1] else None,
-                "priority": r[2],
-                "status": r[3],
-            }
-            for r in p1_rows
-            if r[0] in existing_keys
-        ],
-        "first_response_due_soon": [
-            {
-                "issue_key": r[0],
-                "due_at": r[1].isoformat() if r[1] else None,
-                "minutes_left": int(r[2] or 0),
-            }
-            for r in sla_rows
-            if r[0] in existing_keys
-        ],
-        "first_response_overdue": [
-            {
-                "issue_key": r[0],
-                "due_at": r[1].isoformat() if r[1] else None,
-                "minutes_overdue": int(r[2] or 0),
-            }
-            for r in overdue_rows
-            if r[0] in existing_keys
-        ],
+        "priority1": priority_items,
+        "first_response_due_soon": due_soon_items,
+        "first_response_overdue": overdue_items,
     }
+
+
+@app.get("/alerts/logs")
+def alerts_logs(limit: int = 200, servicedesk_only: bool = True):
+    ensure_schema()
+    safe_limit = max(1, min(int(limit or 200), 1000))
+    with conn() as c, c.cursor() as cur:
+        _maybe_cleanup_alert_logs(cur)
+        cur.execute(
+            """
+            select id, issue_key, alert_kind, status, meta, servicedesk_only, detected_at
+            from alert_logs
+            where servicedesk_only = %s
+            order by detected_at desc, id desc
+            limit %s;
+            """,
+            (servicedesk_only, safe_limit),
+        )
+        rows = cur.fetchall()
+        c.commit()
+    return [
+        {
+            "id": int(r[0]),
+            "issue_key": r[1],
+            "kind": r[2],
+            "status": r[3],
+            "meta": r[4],
+            "servicedesk_only": bool(r[5]),
+            "detected_at": r[6].isoformat() if r[6] else None,
+        }
+        for r in rows
+    ]
+
+
+@app.post("/dev/alerts/trigger")
+def dev_alert_trigger(servicedesk_only: bool = True):
+    ensure_schema()
+    issue_key = f"{DEV_ALERT_ISSUE_KEY}-{int(time.time())}"
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            select
+              coalesce((select servicedesk_team_members[1] from dashboard_config where id=1), 'Johan'),
+              coalesce((select servicedesk_onderwerpen[1] from dashboard_config where id=1), 'Koppelingen');
+            """
+        )
+        row = cur.fetchone() or ("Johan", "Koppelingen")
+        assignee = row[0] or "Johan"
+        onderwerp = row[1] or "Koppelingen"
+        cur.execute(
+            """
+            update dashboard_config
+            set
+              servicedesk_team_members = case
+                when %s = any(servicedesk_team_members) then servicedesk_team_members
+                else array_append(servicedesk_team_members, %s)
+              end,
+              servicedesk_onderwerpen = case
+                when %s = any(servicedesk_onderwerpen) then servicedesk_onderwerpen
+                else array_append(servicedesk_onderwerpen, %s)
+              end,
+              updated_at = now()
+            where id = 1;
+            """,
+            (assignee, assignee, onderwerp, onderwerp),
+        )
+        cur.execute(
+            """
+            insert into issues(
+              issue_key,
+              request_type,
+              onderwerp_logging,
+              organizations,
+              created_at,
+              resolved_at,
+              updated_at,
+              priority,
+              assignee,
+              assignee_avatar_url,
+              current_status,
+              first_response_due_at
+            )
+            values (%s, %s, %s, %s, now(), null, now(), %s, %s, null, %s, now() + interval '3 minutes')
+            on conflict (issue_key) do update set
+              request_type=excluded.request_type,
+              onderwerp_logging=excluded.onderwerp_logging,
+              organizations=excluded.organizations,
+              created_at=excluded.created_at,
+              resolved_at=excluded.resolved_at,
+              updated_at=excluded.updated_at,
+              priority=excluded.priority,
+              assignee=excluded.assignee,
+              assignee_avatar_url=excluded.assignee_avatar_url,
+              current_status=excluded.current_status,
+              first_response_due_at=excluded.first_response_due_at;
+            """,
+            (
+                issue_key,
+                "Dev Alert",
+                onderwerp,
+                ["Dev"],
+                "P1",
+                assignee,
+                "Nieuwe melding",
+            ),
+        )
+        c.commit()
+    return {"ok": True, "issue_key": issue_key, "servicedesk_only": bool(servicedesk_only)}
+
+
+@app.post("/dev/alerts/clear")
+def dev_alert_clear(issue_key: Optional[str] = None):
+    ensure_schema()
+    with conn() as c, c.cursor() as cur:
+        if issue_key:
+            cur.execute("delete from issues where issue_key = %s;", (issue_key,))
+            cur.execute("delete from alert_logs where issue_key = %s;", (issue_key,))
+        else:
+            cur.execute("delete from issues where issue_key like %s;", (f"{DEV_ALERT_ISSUE_KEY}-%",))
+            cur.execute("delete from alert_logs where issue_key like %s;", (f"{DEV_ALERT_ISSUE_KEY}-%",))
+        c.commit()
+    return {"ok": True, "issue_key": issue_key or f"{DEV_ALERT_ISSUE_KEY}-*"}
+
+
+@app.get("/dev/alerts/test-state")
+def dev_alert_test_state():
+    ensure_schema()
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            select issue_key
+            from issues
+            where issue_key like %s
+              and resolved_at is null
+              and lower(coalesce(current_status, '')) = 'nieuwe melding'
+            order by created_at desc nulls last;
+            """,
+            (f"{DEV_ALERT_ISSUE_KEY}-%",),
+        )
+        keys = [r[0] for r in cur.fetchall()]
+    return {"keys": keys, "count": len(keys)}
+
+
+@app.post("/dev/alerts/notify-test")
+def dev_alert_notify_test():
+    result = _send_teams_alert_notification(
+        [
+            {
+                "issue_key": f"{DEV_ALERT_ISSUE_KEY}-NOTIFY",
+                "alert_kind": "P1",
+                "status": "Nieuwe melding",
+                "meta": "Priority 1",
+                "servicedesk_only": True,
+            }
+        ]
+    )
+    return result
 
 
 @app.get("/vacations")

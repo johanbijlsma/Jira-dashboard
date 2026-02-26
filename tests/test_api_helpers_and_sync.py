@@ -136,6 +136,12 @@ def test_normalizers_and_priority_helpers(monkeypatch):
     assert api.is_priority1_priority("level 1") is False
     assert api.is_priority1_priority("normaal") is False
 
+    monkeypatch.setattr(api, "ALERT_P1_ACTIVE_STATUSES", ["nieuwe melding"])
+    assert api.is_priority1_alert_status("Nieuwe melding") is True
+    assert api.is_priority1_alert_status("Open") is False
+    assert api.is_priority1_alert_status("In behandeling") is False
+    assert api.is_priority1_alert_status("Development") is False
+
 
 def test_jira_search_with_retry(monkeypatch):
     class Resp:
@@ -315,7 +321,11 @@ def test_meta_alerts_and_issue_endpoints(monkeypatch):
             [("P1",)],
             [("Johan",)],
             [("Org A",)],
-            [("SD-1", now, "P1", "Nieuwe melding"), ("SD-2", now, "Normaal", "Nieuwe melding")],
+            [
+                ("SD-1", now, "P1", "Nieuwe melding"),
+                ("SD-2", now, "Normaal", "Nieuwe melding"),
+                ("SD-20", now, "P1", "In behandeling"),
+            ],
             [("SD-3", now, 2)],
             [("SD-4", now, 8)],
             [("SD-10", "Incident", "Koppelingen", now, now, "P1", "Johan", "Open")],
@@ -344,6 +354,142 @@ def test_meta_alerts_and_issue_endpoints(monkeypatch):
     assert issue["status"] == "Open"
 
 
+def test_alerts_overdue_query_only_uses_open_issues(monkeypatch):
+    now = datetime(2026, 2, 25, 10, 0, 0)
+    cursor = CursorStub(
+        fetchall_values=[
+            [("SD-1", now, "P1", "Nieuwe melding")],
+            [("SD-2", now, 2)],
+            [("SD-3", now, 8)],
+        ]
+    )
+    patch_conn(monkeypatch, cursor)
+    monkeypatch.setattr(api, "_jira_existing_issue_keys", lambda keys: set(keys))
+
+    response = client.get("/alerts/live")
+    assert response.status_code == 200
+
+    overdue_queries = [q for q, _params in cursor.executed if "minutes_overdue" in q]
+    assert overdue_queries
+    assert "resolved_at is null" in overdue_queries[0].lower()
+
+
+def test_alerts_live_persists_log_events_and_cleans_up(monkeypatch):
+    now = datetime(2026, 2, 25, 10, 0, 0)
+    cursor = CursorStub(
+        fetchall_values=[
+            [("SD-1", now, "P1", "Nieuwe melding")],
+            [("SD-2", now, 2)],
+            [("SD-3", now, 8)],
+        ]
+    )
+    patch_conn(monkeypatch, cursor)
+    monkeypatch.setattr(api, "_jira_existing_issue_keys", lambda keys: set(keys))
+    monkeypatch.setattr(api, "_last_alert_log_cleanup_at", 0.0)
+    monkeypatch.setattr(api.time, "time", lambda: 999999.0)
+
+    response = client.get("/alerts/live")
+    assert response.status_code == 200
+
+    delete_queries = [q for q, _params in cursor.executed if "delete from alert_logs" in q.lower()]
+    assert delete_queries
+    insert_queries = [q for q, _params in cursor.executed if "insert into alert_logs" in q.lower()]
+    assert insert_queries
+
+
+def test_alerts_logs_endpoint_maps_rows(monkeypatch):
+    now = datetime(2026, 2, 25, 10, 0, 0)
+    cursor = CursorStub(
+        fetchall_values=[
+            [(1, "SD-1", "P1", "Nieuwe melding", "Priority 1", True, now)]
+        ]
+    )
+    patch_conn(monkeypatch, cursor)
+    monkeypatch.setattr(api, "_last_alert_log_cleanup_at", 999999.0)
+    monkeypatch.setattr(api.time, "time", lambda: 1000000.0)
+
+    response = client.get("/alerts/logs?limit=5&servicedesk_only=true")
+    assert response.status_code == 200
+    data = response.json()
+    assert data[0]["id"] == 1
+    assert data[0]["issue_key"] == "SD-1"
+    assert data[0]["kind"] == "P1"
+    assert data[0]["servicedesk_only"] is True
+
+
+def test_alerts_live_sends_teams_notification_for_new_events(monkeypatch):
+    now = datetime(2026, 2, 25, 10, 0, 0)
+    cursor = CursorStub(
+        fetchall_values=[
+            [("SD-1", now, "P1", "Nieuwe melding")],
+            [("SD-2", now, 2)],
+            [("SD-3", now, 8)],
+        ],
+        fetchone_values=[(1,), (2,), (3,)],
+    )
+    patch_conn(monkeypatch, cursor)
+    monkeypatch.setattr(api, "_jira_existing_issue_keys", lambda keys: set(keys))
+    monkeypatch.setattr(api, "_last_alert_log_cleanup_at", 999999.0)
+    monkeypatch.setattr(api.time, "time", lambda: 1000000.0)
+    monkeypatch.setattr(api, "ALERT_TEAMS_WEBHOOK_URL", "https://example.invalid/webhook")
+
+    sent = []
+
+    def fake_post(url, json, timeout):
+        sent.append((url, json, timeout))
+
+    monkeypatch.setattr(api.requests, "post", fake_post)
+
+    response = client.get("/alerts/live")
+    assert response.status_code == 200
+    assert len(sent) == 1
+    assert sent[0][0] == "https://example.invalid/webhook"
+    assert "Nieuwe dashboard alerts" in sent[0][1]["text"]
+
+
+def test_dev_alert_trigger_and_clear(monkeypatch):
+    cursor = CursorStub(fetchone_values=[("Johan", "Koppelingen"), (1,), (0,)])
+    patch_conn(monkeypatch, cursor)
+    monkeypatch.setattr(api.time, "time", lambda: 1234567890.0)
+
+    trigger_response = client.post("/dev/alerts/trigger")
+    assert trigger_response.status_code == 200
+    issue_key = trigger_response.json()["issue_key"]
+    assert issue_key.startswith("DEV-ALERT-TEST-")
+    assert any("insert into issues" in q.lower() for q, _ in cursor.executed)
+    assert any("update dashboard_config" in q.lower() for q, _ in cursor.executed)
+
+    state_response = client.get("/dev/alerts/test-state")
+    assert state_response.status_code == 200
+    assert "count" in state_response.json()
+
+    clear_response = client.post(f"/dev/alerts/clear?issue_key={issue_key}")
+    assert clear_response.status_code == 200
+    assert clear_response.json()["issue_key"] == issue_key
+    assert any("delete from issues" in q.lower() for q, _ in cursor.executed)
+    assert any("delete from alert_logs" in q.lower() for q, _ in cursor.executed)
+
+
+def test_dev_alert_notify_test(monkeypatch):
+    monkeypatch.setattr(api, "ALERT_TEAMS_WEBHOOK_URL", "https://example.invalid/webhook")
+    sent = []
+
+    def fake_post(url, json, timeout):
+        class _Resp:
+            status_code = 200
+            text = "ok"
+
+        sent.append((url, json, timeout))
+        return _Resp()
+
+    monkeypatch.setattr(api.requests, "post", fake_post)
+    response = client.post("/dev/alerts/notify-test")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert len(sent) == 1
+
+
 def test_vacation_update_and_delete_not_found(monkeypatch):
     cursor = CursorStub(fetchone_values=[None, None])
     patch_conn(monkeypatch, cursor)
@@ -361,4 +507,3 @@ def test_vacation_update_and_delete_not_found(monkeypatch):
 
     delete_response = client.delete("/vacations/999")
     assert delete_response.status_code == 404
-
