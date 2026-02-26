@@ -105,7 +105,7 @@ Use this when you want team access immediately but still end on a local-first se
 
 ### Phase A: Temporary cloud deployment
 
-1. Create an account at your cloud provider (for this project: Koyeb).
+1. Create an account at your temporary cloud provider.
 2. Deploy the API and dashboard as separate services from the existing Dockerfiles.
 3. Use a managed PostgreSQL instance and fill in the same `POSTGRES_*` variables.
 4. Set:
