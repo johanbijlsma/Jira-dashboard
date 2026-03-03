@@ -2,6 +2,10 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+const INSIGHTS_ENABLED =
+  process.env.NEXT_PUBLIC_INSIGHTS_ENABLED == null
+    ? process.env.NODE_ENV !== "production"
+    : String(process.env.NEXT_PUBLIC_INSIGHTS_ENABLED).toLowerCase() === "true";
 
 function fmtDateTime(value) {
   if (!value) return "—";
@@ -249,6 +253,7 @@ export default function StatusPage() {
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <Link href="/" style={backLinkStyle}>Terug naar dashboard</Link>
+            {INSIGHTS_ENABLED ? <Link href="/insights" style={backLinkStyle}>Insights</Link> : null}
             <button
               type="button"
               onClick={() => triggerSync(false)}

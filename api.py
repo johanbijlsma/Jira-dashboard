@@ -2,8 +2,10 @@ import os
 import time
 import threading
 import re
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+import math
+import json
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 
 import requests
 import psycopg2
@@ -47,6 +49,48 @@ CORS_ORIGINS_RAW = os.environ.get(
 )
 BACKEND_CORS_ORIGINS = [x.strip() for x in CORS_ORIGINS_RAW.split(",") if x.strip()]
 
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+APP_ENV = (os.environ.get("APP_ENV") or os.environ.get("ENV") or "").strip().lower()
+INSIGHTS_ENABLED = _env_flag("INSIGHTS_ENABLED", APP_ENV not in {"prod", "production"})
+INSIGHTS_METRIC_CONFIG: Dict[str, Dict[str, float]] = {
+    "backlog_gap": {
+        "min_abs_delta": 3.0,
+        "min_rel_delta": 0.60,
+        "trend_delta_min": 2.0,
+        "trend_rel_delta_min": 0.25,
+        "min_sample_size": 12.0,
+    },
+    "time_to_resolution": {
+        "min_abs_delta": 1.0,
+        "min_rel_delta": 0.25,
+        "trend_delta_min": 0.5,
+        "trend_rel_delta_min": 0.25,
+        "min_sample_size": 8.0,
+    },
+    "time_to_first_response": {
+        "min_abs_delta": 0.5,
+        "min_rel_delta": 0.30,
+        "trend_delta_min": 0.25,
+        "trend_rel_delta_min": 0.25,
+        "min_sample_size": 10.0,
+    },
+    "default": {
+        "min_abs_delta": 1.0,
+        "min_rel_delta": 0.30,
+        "trend_delta_min": 1.0,
+        "trend_rel_delta_min": 0.25,
+        "min_sample_size": 8.0,
+    },
+}
+INSIGHTS_METRIC_DEFAULT_CONFIG: Dict[str, Dict[str, float]] = json.loads(json.dumps(INSIGHTS_METRIC_CONFIG))
+
 _jira = requests.Session()
 if JIRA_EMAIL and JIRA_TOKEN:
     _jira.auth = (JIRA_EMAIL, JIRA_TOKEN)
@@ -61,6 +105,8 @@ _schema_checked = False
 _issue_existence_cache = {}
 _issue_existence_cache_ttl_seconds = 60
 _last_alert_log_cleanup_at = 0.0
+_insights_config_lock = threading.Lock()
+_insights_config_loaded = False
 DEV_ALERT_ISSUE_KEY = "DEV-ALERT-TEST"
 DEFAULT_SERVICEDESK_TEAM_MEMBERS = ["Johan", "Ashley", "Jarno"]
 DEFAULT_NON_SERVICEDESK_ONDERWERPEN = {
@@ -152,6 +198,15 @@ def ensure_schema():
         )
         cur.execute(
             """
+            create table if not exists insights_config (
+              id integer primary key,
+              metric_config jsonb not null default '{}'::jsonb,
+              updated_at timestamptz not null default now()
+            );
+            """
+        )
+        cur.execute(
+            """
             create table if not exists vacations (
               id bigserial primary key,
               member_name text not null,
@@ -211,6 +266,8 @@ def ensure_schema():
         cur.execute("alter table dashboard_config add column if not exists servicedesk_team_members text[] not null default '{}';")
         cur.execute("alter table dashboard_config add column if not exists servicedesk_onderwerpen text[] not null default '{}';")
         cur.execute("alter table dashboard_config add column if not exists updated_at timestamptz not null default now();")
+        cur.execute("alter table insights_config add column if not exists metric_config jsonb not null default '{}'::jsonb;")
+        cur.execute("alter table insights_config add column if not exists updated_at timestamptz not null default now();")
         cur.execute("alter table alert_logs add column if not exists issue_key text;")
         cur.execute("alter table alert_logs add column if not exists alert_kind text;")
         cur.execute("alter table alert_logs add column if not exists status text;")
@@ -237,6 +294,14 @@ def ensure_schema():
             """
         )
         cur.execute("insert into dashboard_config(id) values (1) on conflict (id) do nothing;")
+        cur.execute(
+            """
+            insert into insights_config(id, metric_config)
+            values (1, %s::jsonb)
+            on conflict (id) do nothing;
+            """,
+            (json.dumps(_default_insights_metric_config()),),
+        )
         cur.execute(
             """
             update dashboard_config
@@ -302,6 +367,10 @@ class ServicedeskConfigPayload(BaseModel):
     onderwerpen: list[str]
 
 
+class InsightsConfigPayload(BaseModel):
+    metric_config: Dict[str, Dict[str, float]]
+
+
 def _normalize_text_list(values):
     if not isinstance(values, list):
         return []
@@ -355,6 +424,77 @@ def get_servicedesk_config():
         "updated_at": row[2].isoformat() if row[2] else None,
         "team_member_avatars": {name: avatar_map.get(name) for name in team_members if avatar_map.get(name)},
     }
+
+
+def _sanitize_metric_config(raw_config: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
+    allowed_metrics = ("backlog_gap", "time_to_resolution", "time_to_first_response")
+    allowed_fields = (
+        "min_abs_delta",
+        "min_rel_delta",
+        "trend_delta_min",
+        "trend_rel_delta_min",
+        "min_sample_size",
+    )
+    sanitized: Dict[str, Dict[str, float]] = {}
+    for metric in allowed_metrics:
+        incoming = raw_config.get(metric) if isinstance(raw_config, dict) else None
+        defaults = INSIGHTS_METRIC_DEFAULT_CONFIG.get(metric) or INSIGHTS_METRIC_DEFAULT_CONFIG["default"]
+        metric_cfg: Dict[str, float] = {}
+        for field in allowed_fields:
+            candidate = defaults[field]
+            if isinstance(incoming, dict) and field in incoming:
+                candidate = incoming[field]
+            try:
+                value = float(candidate)
+            except Exception as exc:
+                raise ValueError(f"Ongeldige waarde voor {metric}.{field}.") from exc
+            if value < 0:
+                raise ValueError(f"Waarde voor {metric}.{field} mag niet negatief zijn.")
+            if field.endswith("rel_delta_min") and value > 5:
+                raise ValueError(f"Waarde voor {metric}.{field} is onrealistisch hoog.")
+            metric_cfg[field] = value
+        sanitized[metric] = metric_cfg
+    sanitized["default"] = dict(INSIGHTS_METRIC_DEFAULT_CONFIG["default"])
+    return sanitized
+
+
+def _default_insights_metric_config() -> Dict[str, Dict[str, float]]:
+    return json.loads(json.dumps(INSIGHTS_METRIC_DEFAULT_CONFIG))
+
+
+def _load_insights_config_if_needed():
+    global _insights_config_loaded, INSIGHTS_METRIC_CONFIG
+    if _insights_config_loaded:
+        return
+    with _insights_config_lock:
+        if _insights_config_loaded:
+            return
+        ensure_schema()
+        with conn() as c, c.cursor() as cur:
+            cur.execute("select metric_config from insights_config where id = 1;")
+            row = cur.fetchone()
+        if row and isinstance(row[0], dict):
+            try:
+                INSIGHTS_METRIC_CONFIG = _sanitize_metric_config(row[0])
+            except Exception:
+                pass
+        _insights_config_loaded = True
+
+
+def get_insights_config():
+    _load_insights_config_if_needed()
+    ensure_schema()
+    with conn() as c, c.cursor() as cur:
+        cur.execute("select metric_config, updated_at from insights_config where id = 1;")
+        row = cur.fetchone()
+    if not row:
+        return {"metric_config": _default_insights_metric_config(), "updated_at": None}
+    stored = row[0] if isinstance(row[0], dict) else {}
+    try:
+        metric_config = _sanitize_metric_config(stored)
+    except Exception:
+        metric_config = _default_insights_metric_config()
+    return {"metric_config": metric_config, "updated_at": row[1].isoformat() if row[1] else None}
 
 
 def servicedesk_filter_clause(alias: str = ""):
@@ -1051,6 +1191,61 @@ def update_servicedesk_config(payload: ServicedeskConfigPayload):
     return get_servicedesk_config()
 
 
+@app.get("/config/insights")
+def insights_config():
+    _ensure_insights_enabled()
+    return get_insights_config()
+
+
+@app.put("/config/insights")
+def update_insights_config(payload: InsightsConfigPayload):
+    _ensure_insights_enabled()
+    global INSIGHTS_METRIC_CONFIG, _insights_config_loaded
+    try:
+        sanitized = _sanitize_metric_config(payload.metric_config)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    ensure_schema()
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            insert into insights_config(id, metric_config, updated_at)
+            values (1, %s::jsonb, now())
+            on conflict (id)
+            do update set metric_config = excluded.metric_config, updated_at = now();
+            """,
+            (json.dumps(sanitized),),
+        )
+        c.commit()
+    with _insights_config_lock:
+        INSIGHTS_METRIC_CONFIG = sanitized
+        _insights_config_loaded = True
+    return get_insights_config()
+
+
+@app.post("/config/insights/reset")
+def reset_insights_config_to_defaults():
+    _ensure_insights_enabled()
+    global INSIGHTS_METRIC_CONFIG, _insights_config_loaded
+    defaults = _default_insights_metric_config()
+    ensure_schema()
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            insert into insights_config(id, metric_config, updated_at)
+            values (1, %s::jsonb, now())
+            on conflict (id)
+            do update set metric_config = excluded.metric_config, updated_at = now();
+            """,
+            (json.dumps(defaults),),
+        )
+        c.commit()
+    with _insights_config_lock:
+        INSIGHTS_METRIC_CONFIG = defaults
+        _insights_config_loaded = True
+    return get_insights_config()
+
+
 @app.get("/metrics/volume_weekly")
 def volume_weekly(
     date_from: str = Query(..., description="ISO date/time, e.g. 2025-01-01"),
@@ -1518,6 +1713,808 @@ def time_to_first_response_weekly(
         }
         for r in rows
     ]
+
+
+def _ensure_insights_enabled():
+    if not INSIGHTS_ENABLED:
+        raise HTTPException(status_code=404, detail="Insights is uitgeschakeld.")
+
+
+def _parse_insight_window(date_from: str, date_to: str):
+    start = _parse_iso_date_or_raise(date_from, "date_from")
+    end = _parse_iso_date_or_raise(date_to, "date_to")
+    if end < start:
+        raise HTTPException(status_code=400, detail="date_to mag niet voor date_from liggen.")
+    days = (end - start).days + 1
+    baseline_end = start - timedelta(days=1)
+    baseline_start = baseline_end - timedelta(days=days - 1)
+    return {
+        "observed_start": start,
+        "observed_end": end,
+        "baseline_start": baseline_start,
+        "baseline_end": baseline_end,
+    }
+
+
+def _mean(values: List[float]) -> Optional[float]:
+    cleaned = [float(v) for v in values if v is not None]
+    if not cleaned:
+        return None
+    return sum(cleaned) / len(cleaned)
+
+
+def _stddev(values: List[float]) -> float:
+    cleaned = [float(v) for v in values if v is not None]
+    n = len(cleaned)
+    if n < 2:
+        return 0.0
+    avg = sum(cleaned) / n
+    var = sum((x - avg) ** 2 for x in cleaned) / (n - 1)
+    return math.sqrt(max(var, 0.0))
+
+
+def _quantile(sorted_values: List[float], q: float) -> Optional[float]:
+    if not sorted_values:
+        return None
+    if len(sorted_values) == 1:
+        return float(sorted_values[0])
+    pos = (len(sorted_values) - 1) * q
+    lower = int(math.floor(pos))
+    upper = int(math.ceil(pos))
+    if lower == upper:
+        return float(sorted_values[lower])
+    weight = pos - lower
+    return float(sorted_values[lower] * (1 - weight) + sorted_values[upper] * weight)
+
+
+def _metric_thresholds(metric: str) -> Dict[str, float]:
+    _load_insights_config_if_needed()
+    raw = INSIGHTS_METRIC_CONFIG.get(metric) or INSIGHTS_METRIC_CONFIG["default"]
+    return {
+        "min_abs_delta": float(raw["min_abs_delta"]),
+        "min_rel_delta": float(raw["min_rel_delta"]),
+        "trend_delta_min": float(raw["trend_delta_min"]),
+        "trend_rel_delta_min": float(raw.get("trend_rel_delta_min", 0.25)),
+        "min_sample_size": float(raw["min_sample_size"]),
+    }
+
+
+def _detect_anomaly(
+    value: Optional[float],
+    baseline_values: List[float],
+    min_abs_delta: float,
+    min_rel_delta: float,
+    sample_size: Optional[float] = None,
+    min_sample_size: float = 0.0,
+) -> Dict[str, Any]:
+    if value is None:
+        return {
+            "is_anomaly": False,
+            "score": 0.0,
+            "z_score": 0.0,
+            "delta_abs": 0.0,
+            "delta_rel": 0.0,
+            "passes_sample_gate": False,
+            "passes_effect_gate": False,
+            "trigger_rule": "missing_value",
+        }
+    if sample_size is not None and float(sample_size) < float(min_sample_size or 0.0):
+        return {
+            "is_anomaly": False,
+            "score": 0.0,
+            "z_score": 0.0,
+            "delta_abs": 0.0,
+            "delta_rel": 0.0,
+            "passes_sample_gate": False,
+            "passes_effect_gate": False,
+            "trigger_rule": "sample_below_min",
+        }
+    cleaned = sorted(float(v) for v in baseline_values if v is not None)
+    if len(cleaned) < 4:
+        return {
+            "is_anomaly": False,
+            "score": 0.0,
+            "z_score": 0.0,
+            "delta_abs": 0.0,
+            "delta_rel": 0.0,
+            "passes_sample_gate": True,
+            "passes_effect_gate": False,
+            "trigger_rule": "insufficient_baseline_points",
+        }
+
+    avg = _mean(cleaned) or 0.0
+    std = _stddev(cleaned)
+    z = 0.0 if std <= 1e-9 else abs((float(value) - avg) / std)
+    delta_abs = abs(float(value) - avg)
+    delta_rel = delta_abs / max(abs(avg), 1.0)
+
+    q1 = _quantile(cleaned, 0.25)
+    q3 = _quantile(cleaned, 0.75)
+    iqr = (q3 - q1) if q1 is not None and q3 is not None else 0.0
+    lower = (q1 - 1.5 * iqr) if q1 is not None else None
+    upper = (q3 + 1.5 * iqr) if q3 is not None else None
+    iqr_anomaly = False
+    iqr_score = 0.0
+    if lower is not None and upper is not None and iqr > 1e-9:
+        iqr_anomaly = float(value) < lower or float(value) > upper
+        if float(value) > upper:
+            iqr_score = (float(value) - upper) / iqr
+        elif float(value) < lower:
+            iqr_score = (lower - float(value)) / iqr
+
+    passes_effect = delta_abs >= min_abs_delta or delta_rel >= min_rel_delta
+    is_anomaly = (z >= 2.4 or iqr_anomaly) and passes_effect
+    score = max(z / 2.4, iqr_score, delta_rel / max(min_rel_delta, 1e-9))
+    return {
+        "is_anomaly": is_anomaly,
+        "score": float(score),
+        "z_score": float(z),
+        "delta_abs": float(delta_abs),
+        "delta_rel": float(delta_rel),
+        "passes_sample_gate": True,
+        "passes_effect_gate": bool(passes_effect),
+        "trigger_rule": "zscore_or_iqr_with_effect" if is_anomaly else "within_bounds_or_effect_too_small",
+    }
+
+
+def _confidence_label(score: float) -> str:
+    if score >= 1.5:
+        return "high"
+    if score >= 0.7:
+        return "medium"
+    return "low"
+
+
+def _decision_score(urgency: str, confidence: str, impact_score: float) -> Dict[str, Any]:
+    urgency_points = {"now": 45, "this_week": 30, "monitor": 15}.get(str(urgency), 15)
+    confidence_points = {"high": 30, "medium": 20, "low": 10}.get(str(confidence), 10)
+    impact_points = min(25, max(0, int(round(float(impact_score) * 10))))
+    total = min(100, urgency_points + confidence_points + impact_points)
+    return {
+        "score": int(total),
+        "breakdown": {
+            "urgency_points": urgency_points,
+            "confidence_points": confidence_points,
+            "impact_points": impact_points,
+        },
+    }
+
+
+def _week_key(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    return str(value)[:10]
+
+
+def _weighted_weekly_average(rows: List[Dict[str, Any]], value_key: str = "avg_hours") -> List[Dict[str, Any]]:
+    buckets: Dict[str, Dict[str, float]] = {}
+    for row in rows or []:
+        week = _week_key(row.get("week"))
+        if not week:
+            continue
+        value = row.get(value_key)
+        n = int(row.get("n") or 0)
+        if value is None or n <= 0:
+            continue
+        current = buckets.setdefault(week, {"sum": 0.0, "weight": 0.0})
+        current["sum"] += float(value) * n
+        current["weight"] += n
+
+    result = []
+    for week in sorted(buckets.keys()):
+        bucket = buckets[week]
+        if bucket["weight"] <= 0:
+            continue
+        result.append({"week": week, "value": bucket["sum"] / bucket["weight"], "sample_size": bucket["weight"]})
+    return result
+
+
+def _simple_weekly_values(rows: List[Dict[str, Any]], value_key: str = "avg_hours") -> List[Dict[str, Any]]:
+    items = []
+    for row in rows or []:
+        week = _week_key(row.get("week"))
+        value = row.get(value_key)
+        if not week or value is None:
+            continue
+        items.append({"week": week, "value": float(value), "sample_size": int(row.get("n") or 0)})
+    items.sort(key=lambda x: x["week"])
+    return items
+
+
+def _backlog_gap_weekly(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    items = []
+    for row in rows or []:
+        week = _week_key(row.get("week"))
+        incoming = int(row.get("incoming_count") or 0)
+        closed = int(row.get("closed_count") or 0)
+        if not week:
+            continue
+        items.append({"week": week, "value": float(incoming - closed), "sample_size": incoming + closed})
+    items.sort(key=lambda x: x["week"])
+    return items
+
+
+def _build_trend_series(
+    metric: str,
+    label: str,
+    unit: str,
+    observed_values: List[Dict[str, Any]],
+    baseline_values: List[Dict[str, Any]],
+):
+    baseline = [float(x["value"]) for x in baseline_values if x.get("value") is not None]
+    expected = _mean(baseline)
+    thresholds = _metric_thresholds(metric)
+    baseline_mean = float(expected) if expected is not None else None
+    points = []
+    for row in observed_values:
+        actual = float(row["value"])
+        sample_size = float(row.get("sample_size") or 0)
+        anomaly = _detect_anomaly(
+            actual,
+            baseline,
+            min_abs_delta=thresholds["min_abs_delta"],
+            min_rel_delta=thresholds["min_rel_delta"],
+            sample_size=sample_size,
+            min_sample_size=thresholds["min_sample_size"],
+        )
+        points.append(
+            {
+                "week": row["week"],
+                "actual": actual,
+                "expected": expected,
+                "is_anomaly": anomaly["is_anomaly"],
+                "confidence": _confidence_label(anomaly["score"]),
+                "score": round(float(anomaly["score"]), 3),
+                "sample_size": sample_size,
+                "explainability": {
+                    "trigger_rule": anomaly["trigger_rule"],
+                    "baseline_mean": baseline_mean,
+                    "observed_value": actual,
+                    "sample_size": sample_size,
+                    "passes_sample_gate": anomaly["passes_sample_gate"],
+                    "passes_effect_gate": anomaly["passes_effect_gate"],
+                    "z_score": round(float(anomaly["z_score"]), 3),
+                    "delta_abs": round(float(anomaly["delta_abs"]), 3),
+                    "delta_rel": round(float(anomaly["delta_rel"]), 3),
+                    "threshold_used": {
+                        "min_abs_delta": thresholds["min_abs_delta"],
+                        "min_rel_delta": thresholds["min_rel_delta"],
+                        "min_sample_size": thresholds["min_sample_size"],
+                    },
+                },
+            }
+        )
+    return {
+        "metric": metric,
+        "label": label,
+        "unit": unit,
+        "min_sample_size": thresholds["min_sample_size"],
+        "baseline_mean": baseline_mean,
+        "threshold_used": thresholds,
+        "points": points,
+    }
+
+
+def _build_highlight_card(
+    *,
+    card_id: str,
+    card_type: str,
+    title: str,
+    summary: str,
+    impact_value: float,
+    impact_unit: str,
+    why: str,
+    window: Dict[str, str],
+    baseline_window: Dict[str, str],
+    metrics_used: List[str],
+    confidence_score: Optional[float] = None,
+    explainability: Optional[Dict[str, Any]] = None,
+    business_summary: Optional[str] = None,
+    recommended_action: Optional[str] = None,
+    owner_hint: Optional[str] = None,
+    due_hint: Optional[str] = None,
+    urgency: Optional[str] = None,
+):
+    impact_score = float(confidence_score) if confidence_score is not None else abs(float(impact_value))
+    confidence = _confidence_label(impact_score)
+    urgency_value = urgency or "monitor"
+    decision = _decision_score(urgency_value, confidence, impact_score)
+    return {
+        "id": card_id,
+        "type": card_type,
+        "title": title,
+        "summary": summary,
+        "impact_value": round(float(impact_value), 2),
+        "impact_unit": impact_unit,
+        "confidence": confidence,
+        "why": why,
+        "window": window,
+        "baseline_window": baseline_window,
+        "metrics_used": metrics_used,
+        "explainability": explainability or {},
+        "business_summary": business_summary or summary,
+        "recommended_action": recommended_action or "Controleer dit signaal met het team.",
+        "owner_hint": owner_hint or "Servicedesk lead",
+        "due_hint": due_hint or "Deze week",
+        "urgency": urgency_value,
+        "decision_score": decision["score"],
+        "decision_breakdown": decision["breakdown"],
+        "last_updated": _to_utc_z(datetime.utcnow().replace(tzinfo=timezone.utc)),
+    }
+
+
+def _compute_highlights_from_series(
+    trend_series: List[Dict[str, Any]], window: Dict[str, str], baseline_window: Dict[str, str]
+) -> List[Dict[str, Any]]:
+    cards = []
+    for series in trend_series:
+        points = series.get("points") or []
+        if len(points) < 2:
+            continue
+        observed = [p.get("actual") for p in points if p.get("actual") is not None]
+        observed_samples = [float(p.get("sample_size") or 0) for p in points]
+        baseline = [p.get("expected") for p in points if p.get("expected") is not None]
+        observed_mean = _mean(observed)
+        baseline_mean = _mean(baseline)
+        if observed_mean is None or baseline_mean is None:
+            continue
+        delta = float(observed_mean - baseline_mean)
+        rel_delta = float(delta / max(abs(float(baseline_mean)), 1e-6))
+        metric = series.get("metric")
+        thresholds = _metric_thresholds(metric)
+        observed_sample_avg = _mean(observed_samples) or 0.0
+        if observed_sample_avg < thresholds["min_sample_size"]:
+            continue
+        if metric == "backlog_gap" and (
+            delta >= thresholds["trend_delta_min"] or rel_delta >= thresholds["trend_rel_delta_min"]
+        ):
+            cards.append(
+                _build_highlight_card(
+                    card_id="backlog-gap-growth",
+                    card_type="trend_shift",
+                    title="Backlog groeit sneller dan sluiting",
+                    summary=f"Gemiddelde backlog-gap ligt {delta:.1f} ({rel_delta * 100:.0f}%) boven baseline.",
+                    impact_value=delta,
+                    impact_unit="tickets/week",
+                    why="Inflow minus gesloten tickets ligt structureel hoger dan in de referentieperiode.",
+                    window=window,
+                    baseline_window=baseline_window,
+                    metrics_used=["inflow_vs_closed_weekly"],
+                    confidence_score=max(abs(delta) / max(abs(baseline_mean), 1.0), abs(delta) / thresholds["trend_delta_min"]),
+                    explainability={
+                        "trigger_rule": "trend_delta_over_threshold",
+                        "observed_mean": round(float(observed_mean), 3),
+                        "baseline_mean": round(float(baseline_mean), 3),
+                        "delta": round(float(delta), 3),
+                        "relative_delta_pct": round(float(rel_delta * 100), 2),
+                        "sample_size_avg": round(float(observed_sample_avg), 3),
+                        "threshold_used": thresholds,
+                    },
+                    business_summary="De achterstand groeit; er komen structureel meer tickets binnen dan er worden gesloten.",
+                    recommended_action="Plan vandaag een korte triage op instroompieken en herverdeel capaciteit op de topdriver.",
+                    owner_hint="Servicedesk lead",
+                    due_hint="Vandaag",
+                    urgency="now",
+                )
+            )
+        if metric == "time_to_resolution" and (
+            rel_delta >= thresholds["trend_rel_delta_min"] and delta >= thresholds["trend_delta_min"]
+        ):
+            cards.append(
+                _build_highlight_card(
+                    card_id="ttr-growth",
+                    card_type="sla_risk",
+                    title="Time to Resolution stijgt",
+                    summary=f"TTR ligt gemiddeld {rel_delta * 100:.0f}% ({delta:.1f} uur) boven baseline.",
+                    impact_value=delta,
+                    impact_unit="hours",
+                    why="Gemiddelde oplostijd per week neemt toe ten opzichte van de referentieperiode.",
+                    window=window,
+                    baseline_window=baseline_window,
+                    metrics_used=["time_to_resolution_weekly_by_type"],
+                    confidence_score=max(abs(delta) / max(abs(baseline_mean), 1.0), abs(delta) / thresholds["trend_delta_min"]),
+                    explainability={
+                        "trigger_rule": "trend_delta_over_threshold",
+                        "observed_mean": round(float(observed_mean), 3),
+                        "baseline_mean": round(float(baseline_mean), 3),
+                        "delta": round(float(delta), 3),
+                        "relative_delta_pct": round(float(rel_delta * 100), 2),
+                        "sample_size_avg": round(float(observed_sample_avg), 3),
+                        "threshold_used": thresholds,
+                    },
+                    business_summary="Tickets blijven langer open dan normaal, waardoor doorlooptijden oplopen.",
+                    recommended_action="Analyseer de traagste categorie en zet een tijdelijke fast-lane voor P1/P2.",
+                    owner_hint="Procesowner + Servicedesk lead",
+                    due_hint="Binnen 2 werkdagen",
+                    urgency="this_week",
+                )
+            )
+        if metric == "time_to_first_response" and (
+            rel_delta >= thresholds["trend_rel_delta_min"] and delta >= thresholds["trend_delta_min"]
+        ):
+            cards.append(
+                _build_highlight_card(
+                    card_id="tfr-growth",
+                    card_type="sla_risk",
+                    title="Time to First Response stijgt",
+                    summary=f"Eerste reactietijd ligt gemiddeld {rel_delta * 100:.0f}% ({delta:.1f} uur) boven baseline.",
+                    impact_value=delta,
+                    impact_unit="hours",
+                    why="Reactietijd op nieuwe tickets verslechtert ten opzichte van de referentieperiode.",
+                    window=window,
+                    baseline_window=baseline_window,
+                    metrics_used=["time_to_first_response_weekly"],
+                    confidence_score=max(abs(delta) / max(abs(baseline_mean), 1.0), abs(delta) / thresholds["trend_delta_min"]),
+                    explainability={
+                        "trigger_rule": "trend_delta_over_threshold",
+                        "observed_mean": round(float(observed_mean), 3),
+                        "baseline_mean": round(float(baseline_mean), 3),
+                        "delta": round(float(delta), 3),
+                        "relative_delta_pct": round(float(rel_delta * 100), 2),
+                        "sample_size_avg": round(float(observed_sample_avg), 3),
+                        "threshold_used": thresholds,
+                    },
+                    business_summary="Nieuwe tickets krijgen later een eerste reactie, wat SLA-risico verhoogt.",
+                    recommended_action="Plan extra eerste-respons blokken in piekuren en check bezetting per shift.",
+                    owner_hint="Teamcoördinator",
+                    due_hint="Vandaag",
+                    urgency="now",
+                )
+            )
+        latest = points[-1]
+        if (
+            latest.get("is_anomaly")
+            and latest.get("confidence") != "low"
+            and float(latest.get("sample_size") or 0) >= thresholds["min_sample_size"]
+        ):
+            cards.append(
+                _build_highlight_card(
+                    card_id=f"{metric}-latest-anomaly",
+                    card_type="anomaly",
+                    title=f"Afwijking in {series.get('label')}",
+                    summary=f"Laatste week wijkt af van verwacht patroon ({latest.get('actual'):.2f} vs {latest.get('expected'):.2f}).",
+                    impact_value=float(abs((latest.get("actual") or 0) - (latest.get("expected") or 0))),
+                    impact_unit=series.get("unit") or "value",
+                    why="Laatste datapunt valt buiten de normale bandbreedte van de baseline.",
+                    window=window,
+                    baseline_window=baseline_window,
+                    metrics_used=[series.get("metric")],
+                    confidence_score=float(latest.get("score") or 0.0),
+                    explainability={
+                        "trigger_rule": "point_anomaly_with_gates",
+                        "observed_week": latest.get("week"),
+                        "observed_value": latest.get("actual"),
+                        "baseline_mean": latest.get("expected"),
+                        "sample_size": latest.get("sample_size"),
+                        "anomaly_score": latest.get("score"),
+                        "point_explainability": latest.get("explainability") or {},
+                        "threshold_used": thresholds,
+                    },
+                    business_summary="Er is een duidelijke afwijking ten opzichte van het normale patroon.",
+                    recommended_action="Controleer of dit een incidentgolf of procesafwijking is en documenteer oorzaak.",
+                    owner_hint="Servicedesk lead",
+                    due_hint="Deze week",
+                    urgency="monitor" if latest.get("confidence") == "medium" else "this_week",
+                )
+            )
+    cards.sort(
+        key=lambda x: (
+            int(x.get("decision_score") or 0),
+            abs(float(x.get("impact_value") or 0)),
+        ),
+        reverse=True,
+    )
+    return cards[:6]
+
+
+def _fetch_driver_rows_for_dimension(
+    *,
+    dimension: str,
+    column_expr: str,
+    join_sql: str = "",
+    date_from: str,
+    date_to: str,
+    baseline_from: str,
+    baseline_to: str,
+    organization: Optional[str],
+    servicedesk_only: bool,
+) -> List[Dict[str, Any]]:
+    ensure_schema()
+    q = f"""
+    with current_rows as (
+      select
+        {column_expr} as category,
+        count(*) as cnt
+      from issues i
+      {join_sql}
+      where i.created_at >= %s::timestamptz and i.created_at < (%s::timestamptz + interval '1 day')
+        and (%s is null or (i.organizations is not null and i.organizations @> array[%s]::text[]))
+        {servicedesk_filter_clause('i')}
+      group by 1
+    ),
+    baseline_rows as (
+      select
+        {column_expr} as category,
+        count(*) as cnt
+      from issues i
+      {join_sql}
+      where i.created_at >= %s::timestamptz and i.created_at < (%s::timestamptz + interval '1 day')
+        and (%s is null or (i.organizations is not null and i.organizations @> array[%s]::text[]))
+        {servicedesk_filter_clause('i')}
+      group by 1
+    )
+    select
+      coalesce(c.category, b.category) as category,
+      coalesce(c.cnt, 0) as current_count,
+      coalesce(b.cnt, 0) as baseline_count
+    from current_rows c
+    full outer join baseline_rows b on b.category = c.category
+    where coalesce(c.category, b.category) is not null
+      and coalesce(c.category, b.category) <> ''
+    order by 1;
+    """
+    params = (
+        date_from,
+        date_to,
+        organization,
+        organization,
+        servicedesk_only,
+        baseline_from,
+        baseline_to,
+        organization,
+        organization,
+        servicedesk_only,
+    )
+    with conn() as c, c.cursor() as cur:
+        cur.execute(q, params)
+        rows = cur.fetchall()
+
+    scored = []
+    for category, current_count, baseline_count in rows:
+        current_val = int(current_count or 0)
+        baseline_val = int(baseline_count or 0)
+        delta = current_val - baseline_val
+        score = max(delta, 0) * math.log1p(max(current_val, 0))
+        scored.append(
+            {
+                "dimension": dimension,
+                "category": str(category),
+                "current_count": current_val,
+                "baseline_count": baseline_val,
+                "delta": delta,
+                "contribution_score": float(score),
+            }
+        )
+
+    positive_total = sum(x["contribution_score"] for x in scored if x["contribution_score"] > 0)
+    for item in scored:
+        if positive_total > 0 and item["contribution_score"] > 0:
+            item["contribution_pct"] = round((item["contribution_score"] / positive_total) * 100, 2)
+        else:
+            item["contribution_pct"] = 0.0
+    scored.sort(key=lambda x: (x["contribution_score"], x["delta"], x["current_count"]), reverse=True)
+    return scored[:8]
+
+
+def _insights_metric_config_payload() -> Dict[str, Dict[str, float]]:
+    return {
+        metric: _metric_thresholds(metric)
+        for metric in ("backlog_gap", "time_to_resolution", "time_to_first_response")
+    }
+
+
+def _build_trends_payload(
+    date_from: str, date_to: str, organization: Optional[str], servicedesk_only: bool
+) -> Dict[str, Any]:
+    windows = _parse_insight_window(date_from, date_to)
+    observed_window = {
+        "from": windows["observed_start"].isoformat(),
+        "to": windows["observed_end"].isoformat(),
+    }
+    baseline_window = {
+        "from": windows["baseline_start"].isoformat(),
+        "to": windows["baseline_end"].isoformat(),
+    }
+    observed_from = observed_window["from"]
+    observed_to = observed_window["to"]
+    baseline_from = baseline_window["from"]
+    baseline_to = baseline_window["to"]
+
+    observed_inflow = inflow_vs_closed_weekly(
+        date_from=observed_from,
+        date_to=observed_to,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+    )
+    baseline_inflow = inflow_vs_closed_weekly(
+        date_from=baseline_from,
+        date_to=baseline_to,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+    )
+    observed_ttr = time_to_resolution_weekly_by_type(
+        date_from=observed_from,
+        date_to=observed_to,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+    )
+    baseline_ttr = time_to_resolution_weekly_by_type(
+        date_from=baseline_from,
+        date_to=baseline_to,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+    )
+    observed_tfr = time_to_first_response_weekly(
+        date_from=observed_from,
+        date_to=observed_to,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+    )
+    baseline_tfr = time_to_first_response_weekly(
+        date_from=baseline_from,
+        date_to=baseline_to,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+    )
+
+    series = [
+        _build_trend_series(
+            metric="backlog_gap",
+            label="Backlog gap",
+            unit="tickets/week",
+            observed_values=_backlog_gap_weekly(observed_inflow),
+            baseline_values=_backlog_gap_weekly(baseline_inflow),
+        ),
+        _build_trend_series(
+            metric="time_to_resolution",
+            label="Time to Resolution",
+            unit="hours",
+            observed_values=_weighted_weekly_average(observed_ttr, "avg_hours"),
+            baseline_values=_weighted_weekly_average(baseline_ttr, "avg_hours"),
+        ),
+        _build_trend_series(
+            metric="time_to_first_response",
+            label="Time to First Response",
+            unit="hours",
+            observed_values=_simple_weekly_values(observed_tfr, "avg_hours"),
+            baseline_values=_simple_weekly_values(baseline_tfr, "avg_hours"),
+        ),
+    ]
+    return {
+        "window": observed_window,
+        "baseline_window": baseline_window,
+        "series": series,
+        "metric_config": _insights_metric_config_payload(),
+        "generated_at": _to_utc_z(datetime.utcnow().replace(tzinfo=timezone.utc)),
+    }
+
+
+@app.get("/insights/trends")
+def insights_trends(
+    date_from: str = Query(...),
+    date_to: str = Query(...),
+    organization: Optional[str] = None,
+    servicedesk_only: bool = False,
+):
+    _ensure_insights_enabled()
+    return _build_trends_payload(
+        date_from=date_from,
+        date_to=date_to,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+    )
+
+
+@app.get("/insights/highlights")
+def insights_highlights(
+    date_from: str = Query(...),
+    date_to: str = Query(...),
+    organization: Optional[str] = None,
+    servicedesk_only: bool = False,
+):
+    _ensure_insights_enabled()
+    trends = _build_trends_payload(
+        date_from=date_from,
+        date_to=date_to,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+    )
+    cards = _compute_highlights_from_series(
+        trends.get("series") or [],
+        trends.get("window") or {"from": date_from, "to": date_to},
+        trends.get("baseline_window") or {"from": date_from, "to": date_to},
+    )
+    return {
+        "window": trends["window"],
+        "baseline_window": trends["baseline_window"],
+        "cards": cards,
+        "metric_config": trends.get("metric_config") or _insights_metric_config_payload(),
+        "generated_at": trends["generated_at"],
+    }
+
+
+@app.get("/insights/drivers")
+def insights_drivers(
+    date_from: str = Query(...),
+    date_to: str = Query(...),
+    organization: Optional[str] = None,
+    servicedesk_only: bool = False,
+):
+    _ensure_insights_enabled()
+    windows = _parse_insight_window(date_from, date_to)
+    observed_window = {
+        "from": windows["observed_start"].isoformat(),
+        "to": windows["observed_end"].isoformat(),
+    }
+    baseline_window = {
+        "from": windows["baseline_start"].isoformat(),
+        "to": windows["baseline_end"].isoformat(),
+    }
+    drivers = [
+        {
+            "dimension": "onderwerp",
+            "label": "Onderwerp",
+            "items": _fetch_driver_rows_for_dimension(
+                dimension="onderwerp",
+                column_expr="i.onderwerp_logging",
+                date_from=observed_window["from"],
+                date_to=observed_window["to"],
+                baseline_from=baseline_window["from"],
+                baseline_to=baseline_window["to"],
+                organization=organization,
+                servicedesk_only=servicedesk_only,
+            ),
+        },
+        {
+            "dimension": "organization",
+            "label": "Organization",
+            "items": _fetch_driver_rows_for_dimension(
+                dimension="organization",
+                column_expr="org.org_name",
+                join_sql="cross join lateral unnest(i.organizations) as org(org_name)",
+                date_from=observed_window["from"],
+                date_to=observed_window["to"],
+                baseline_from=baseline_window["from"],
+                baseline_to=baseline_window["to"],
+                organization=organization,
+                servicedesk_only=servicedesk_only,
+            ),
+        },
+        {
+            "dimension": "priority",
+            "label": "Priority",
+            "items": _fetch_driver_rows_for_dimension(
+                dimension="priority",
+                column_expr="i.priority",
+                date_from=observed_window["from"],
+                date_to=observed_window["to"],
+                baseline_from=baseline_window["from"],
+                baseline_to=baseline_window["to"],
+                organization=organization,
+                servicedesk_only=servicedesk_only,
+            ),
+        },
+        {
+            "dimension": "assignee",
+            "label": "Assignee",
+            "items": _fetch_driver_rows_for_dimension(
+                dimension="assignee",
+                column_expr="i.assignee",
+                date_from=observed_window["from"],
+                date_to=observed_window["to"],
+                baseline_from=baseline_window["from"],
+                baseline_to=baseline_window["to"],
+                organization=organization,
+                servicedesk_only=servicedesk_only,
+            ),
+        },
+    ]
+    return {
+        "window": observed_window,
+        "baseline_window": baseline_window,
+        "drivers": drivers,
+        "generated_at": _to_utc_z(datetime.utcnow().replace(tzinfo=timezone.utc)),
+    }
 
 
 @app.get("/metrics/volume_by_priority")

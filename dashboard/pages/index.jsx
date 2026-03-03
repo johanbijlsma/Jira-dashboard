@@ -15,6 +15,7 @@ import { parseNlDateToIso } from "../lib/date";
 import { buildUpcomingWarningText, businessDaysUntil } from "../lib/vacation-banner";
 import Link from "next/link";
 import Head from "next/head";
+import { useRouter } from "next/router";
 import {
   API,
   CARD_TITLES,
@@ -55,8 +56,10 @@ import {
 import { isTotalLabel, median, trendInfo, uniqueChartColor, wowSortValue } from "../lib/dashboard-metrics";
 import EmptyChartState from "../components/EmptyChartState";
 import LiveAlertStack from "../components/LiveAlertStack";
+import MainNav from "../components/MainNav";
 import Toast from "../components/Toast";
 import VacationAvatar from "../components/VacationAvatar";
+import { fetchAlertLogs, fetchLiveAlerts } from "../lib/alerts-service";
 
 ChartJS.register(
   CategoryScale,
@@ -79,6 +82,7 @@ function alertFaviconDataUri(color, ring = false) {
 }
 
 export default function Home() {
+  const router = useRouter();
   const today = useMemo(() => new Date(), []);
   const defaultFrom = useMemo(() => {
     const d = new Date();
@@ -479,34 +483,12 @@ export default function Home() {
   }, []);
 
   const refreshAlertLogs = useCallback(async () => {
-    const params = new URLSearchParams();
-    params.set("limit", String(ALERT_LOG_LIMIT));
-    if (servicedeskOnly) params.set("servicedesk_only", "true");
-    const r = await fetch(`${API}/alerts/logs?${params.toString()}`);
-    const data = await r.json();
-    const normalized = Array.isArray(data)
-      ? data.map((entry) => ({
-          id: entry?.id != null ? String(entry.id) : `${entry?.kind || ""}:${entry?.issue_key || ""}:${entry?.detected_at || ""}`,
-          detected_at: entry?.detected_at || null,
-          kind: String(entry?.kind || ""),
-          issue_key: String(entry?.issue_key || ""),
-          status: String(entry?.status || ""),
-          meta: String(entry?.meta || ""),
-        }))
-      : [];
+    const normalized = await fetchAlertLogs({ servicedeskOnly, limit: ALERT_LOG_LIMIT });
     setAlertLogEntries(normalized);
   }, [servicedeskOnly, ALERT_LOG_LIMIT]);
 
   const refreshLiveAlerts = useCallback(async () => {
-    const params = new URLSearchParams();
-    if (servicedeskOnly) params.set("servicedesk_only", "true");
-    const r = await fetch(`${API}/alerts/live?${params.toString()}`);
-    const data = await r.json();
-    const normalized = {
-      priority1: Array.isArray(data?.priority1) ? data.priority1 : [],
-      first_response_due_soon: Array.isArray(data?.first_response_due_soon) ? data.first_response_due_soon : [],
-      first_response_overdue: Array.isArray(data?.first_response_overdue) ? data.first_response_overdue : [],
-    };
+    const normalized = await fetchLiveAlerts({ servicedeskOnly });
     setLiveAlerts(normalized);
 
     const seen = seenLiveAlertKeysRef.current;
@@ -2152,24 +2134,6 @@ export default function Home() {
     fontWeight: 700,
     whiteSpace: "nowrap",
   };
-  const syncDockStyle = {
-    position: "fixed",
-    left: 12,
-    bottom: 8,
-    zIndex: 1000,
-    color: "var(--text-muted)",
-    fontSize: 12,
-    lineHeight: 1.2,
-    padding: "4px 8px",
-    borderRadius: 8,
-    border: "1px solid var(--border)",
-    background: "color-mix(in srgb, var(--surface) 94%, transparent)",
-    boxShadow: "0 4px 10px var(--shadow-medium)",
-    maxWidth: "min(680px, calc(100vw - 24px))",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-  };
   const filterOpenButtonStyle = {
     ...buttonBaseStyle,
     borderColor: "var(--accent)",
@@ -3384,13 +3348,20 @@ export default function Home() {
     }
   }, [isLayoutEditing, closeDrilldown]);
 
+  useEffect(() => {
+    if (!router.isReady) return;
+    if (router.query?.panel === "alerts") {
+      setSidePanelMode("alerts");
+    }
+  }, [router.isReady, router.query?.panel]);
+
   return (
     <div style={pageStyle}>
       <Head>
         <link rel="icon" href={faviconHref} />
       </Head>
       <Toast message={syncMessage} kind={syncMessageKind} onClose={() => setSyncMessage("")} />
-      <LiveAlertStack alerts={liveAlerts} />
+      <LiveAlertStack alerts={liveAlerts} onAlertClick={() => setSidePanelMode("alerts")} />
       <button
         ref={hotkeysButtonRef}
         type="button"
@@ -3402,6 +3373,7 @@ export default function Home() {
       >
         ?
       </button>
+      <MainNav current="dashboard" syncStatusText={syncStatusInlineText} />
       <div style={headerRowStyle}>
         <h1 style={titleStyle}>Dashboard Servicedesk Planningsagenda</h1>
         {vacationBanner ? (
@@ -4548,14 +4520,6 @@ export default function Home() {
         </div>
       </div>
 
-      {syncStatus ? (
-        <Link href="/status" title="Open statuspagina" style={{ textDecoration: "none" }}>
-          <div title={syncStatusInlineText} style={{ ...syncDockStyle, cursor: "pointer" }}>
-            {syncStatusInlineText}
-          </div>
-        </Link>
-      ) : null}
-
       <style jsx global>{`
         :root {
           color-scheme: light dark;
@@ -4602,6 +4566,7 @@ export default function Home() {
         body {
           background: var(--page-bg);
           color: var(--text-main);
+          font-family: "IBM Plex Sans", "Segoe UI", "Inter", "Roboto", "Helvetica Neue", Arial, sans-serif;
           margin: 0;
           height: 100%;
           overflow: hidden;

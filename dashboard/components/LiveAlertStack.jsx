@@ -1,6 +1,6 @@
 import { JIRA_BASE } from "../lib/dashboard-constants";
 
-export default function LiveAlertStack({ alerts }) {
+export default function LiveAlertStack({ alerts, onAlertClick }) {
   const p1Items = Array.isArray(alerts?.priority1) ? alerts.priority1 : [];
   const slaItems = Array.isArray(alerts?.first_response_due_soon) ? alerts.first_response_due_soon : [];
   const overdueItems = Array.isArray(alerts?.first_response_overdue) ? alerts.first_response_overdue : [];
@@ -56,11 +56,13 @@ export default function LiveAlertStack({ alerts }) {
     <div style={shellStyle} aria-live="assertive" aria-atomic="false">
       {p1Items.length ? (
         <section
+          onClick={() => onAlertClick?.({ kind: "P1" })}
           style={{
             ...cardStyle,
             borderColor: "rgba(127, 29, 29, 0.45)",
             background: "linear-gradient(135deg, #7f1d1d, #991b1b)",
             color: "#fee2e2",
+            cursor: onAlertClick ? "pointer" : "default",
           }}
         >
           <div style={titleRowStyle}>
@@ -78,6 +80,7 @@ export default function LiveAlertStack({ alerts }) {
                   target="_blank"
                   rel="noreferrer"
                   style={{ color: "#fff", fontWeight: 700 }}
+                  onClick={(e) => e.stopPropagation()}
                 >
                   {item.issue_key}
                 </a>
@@ -90,11 +93,13 @@ export default function LiveAlertStack({ alerts }) {
 
       {slaItems.length ? (
         <section
+          onClick={() => onAlertClick?.({ kind: "SLA_SOON" })}
           style={{
             ...cardStyle,
             borderColor: "rgba(120, 53, 15, 0.45)",
             background: "linear-gradient(135deg, #78350f, #b45309)",
             color: "#ffedd5",
+            cursor: onAlertClick ? "pointer" : "default",
           }}
         >
           <div style={titleRowStyle}>
@@ -112,6 +117,7 @@ export default function LiveAlertStack({ alerts }) {
                   target="_blank"
                   rel="noreferrer"
                   style={{ color: "#fff", fontWeight: 700 }}
+                  onClick={(e) => e.stopPropagation()}
                 >
                   {item.issue_key}
                 </a>
@@ -124,11 +130,13 @@ export default function LiveAlertStack({ alerts }) {
 
       {overdueItems.length ? (
         <section
+          onClick={() => onAlertClick?.({ kind: "SLA_OVERDUE" })}
           style={{
             ...cardStyle,
             borderColor: "rgba(120, 16, 16, 0.55)",
             background: "linear-gradient(135deg, #581c87, #7f1d1d)",
             color: "#f5d0fe",
+            cursor: onAlertClick ? "pointer" : "default",
           }}
         >
           <div style={titleRowStyle}>
@@ -146,6 +154,7 @@ export default function LiveAlertStack({ alerts }) {
                   target="_blank"
                   rel="noreferrer"
                   style={{ color: "#fff", fontWeight: 700 }}
+                  onClick={(e) => e.stopPropagation()}
                 >
                   {item.issue_key}
                 </a>

@@ -205,6 +205,146 @@ def test_servicedesk_config_endpoint(monkeypatch):
     assert response.json()["team_member_avatars"]["Johan"] == "http://avatar"
 
 
+def test_insights_config_endpoint(monkeypatch):
+    monkeypatch.setattr(api, "INSIGHTS_ENABLED", True)
+    monkeypatch.setattr(
+        api,
+        "get_insights_config",
+        lambda: {
+            "metric_config": {
+                "backlog_gap": {
+                    "min_abs_delta": 3.0,
+                    "min_rel_delta": 0.6,
+                    "trend_delta_min": 2.0,
+                    "trend_rel_delta_min": 0.25,
+                    "min_sample_size": 12.0,
+                }
+            },
+            "updated_at": "2026-03-02T10:00:00Z",
+        },
+    )
+    response = client.get("/config/insights")
+    assert response.status_code == 200
+    assert response.json()["metric_config"]["backlog_gap"]["min_abs_delta"] == 3.0
+
+
+def test_update_insights_config_rejects_negative_values(monkeypatch):
+    monkeypatch.setattr(api, "INSIGHTS_ENABLED", True)
+    response = client.put(
+        "/config/insights",
+        json={
+            "metric_config": {
+                "backlog_gap": {
+                    "min_abs_delta": -1,
+                    "min_rel_delta": 0.6,
+                    "trend_delta_min": 2.0,
+                    "trend_rel_delta_min": 0.25,
+                    "min_sample_size": 12.0,
+                }
+            }
+        },
+    )
+    assert response.status_code == 400
+    assert "mag niet negatief" in response.json()["detail"].lower()
+
+
+def test_update_insights_config_success(monkeypatch):
+    monkeypatch.setattr(api, "INSIGHTS_ENABLED", True)
+    cursor = _CursorStub(fetchone_values=[({"backlog_gap": {"min_abs_delta": 4.0}}, datetime(2026, 3, 2, 10, 0))])
+    _patch_conn(monkeypatch, cursor)
+    monkeypatch.setattr(
+        api,
+        "_sanitize_metric_config",
+        lambda cfg: {
+            "backlog_gap": {
+                "min_abs_delta": 4.0,
+                "min_rel_delta": 0.6,
+                "trend_delta_min": 2.0,
+                "trend_rel_delta_min": 0.25,
+                "min_sample_size": 12.0,
+            },
+            "time_to_resolution": {
+                "min_abs_delta": 1.0,
+                "min_rel_delta": 0.25,
+                "trend_delta_min": 0.5,
+                "trend_rel_delta_min": 0.25,
+                "min_sample_size": 8.0,
+            },
+            "time_to_first_response": {
+                "min_abs_delta": 0.5,
+                "min_rel_delta": 0.30,
+                "trend_delta_min": 0.25,
+                "trend_rel_delta_min": 0.25,
+                "min_sample_size": 10.0,
+            },
+            "default": {
+                "min_abs_delta": 1.0,
+                "min_rel_delta": 0.30,
+                "trend_delta_min": 1.0,
+                "trend_rel_delta_min": 0.25,
+                "min_sample_size": 8.0,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        api,
+        "get_insights_config",
+        lambda: {
+            "metric_config": {
+                "backlog_gap": {
+                    "min_abs_delta": 4.0,
+                    "min_rel_delta": 0.6,
+                    "trend_delta_min": 2.0,
+                    "trend_rel_delta_min": 0.25,
+                    "min_sample_size": 12.0,
+                }
+            },
+            "updated_at": "2026-03-02T10:00:00Z",
+        },
+    )
+    response = client.put(
+        "/config/insights",
+        json={
+            "metric_config": {
+                "backlog_gap": {
+                    "min_abs_delta": 4.0,
+                    "min_rel_delta": 0.6,
+                    "trend_delta_min": 2.0,
+                    "trend_rel_delta_min": 0.25,
+                    "min_sample_size": 12.0,
+                }
+            }
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["metric_config"]["backlog_gap"]["min_abs_delta"] == 4.0
+
+
+def test_reset_insights_config_to_defaults(monkeypatch):
+    monkeypatch.setattr(api, "INSIGHTS_ENABLED", True)
+    cursor = _CursorStub()
+    _patch_conn(monkeypatch, cursor)
+    monkeypatch.setattr(
+        api,
+        "get_insights_config",
+        lambda: {
+            "metric_config": {
+                "backlog_gap": {
+                    "min_abs_delta": 3.0,
+                    "min_rel_delta": 0.6,
+                    "trend_delta_min": 2.0,
+                    "trend_rel_delta_min": 0.25,
+                    "min_sample_size": 12.0,
+                }
+            },
+            "updated_at": "2026-03-02T12:00:00Z",
+        },
+    )
+    response = client.post("/config/insights/reset")
+    assert response.status_code == 200
+    assert response.json()["metric_config"]["backlog_gap"]["trend_delta_min"] == 2.0
+
+
 def test_metrics_inflow_vs_closed_maps_rows(monkeypatch):
     cursor = _CursorStub(
         fetchall_values=[[(datetime(2026, 1, 19, 0, 0), 8, 5)]]
@@ -320,3 +460,136 @@ def test_update_and_delete_vacation_success(monkeypatch):
     delete_response = client.delete("/vacations/7")
     assert delete_response.status_code == 200
     assert delete_response.json() == {"deleted": True, "id": 7}
+
+
+def test_insights_trends_contract_and_anomaly(monkeypatch):
+    monkeypatch.setattr(api, "INSIGHTS_ENABLED", True)
+
+    def inflow_stub(**kwargs):
+        if kwargs["date_from"] == "2026-02-01":
+            return [
+                {"week": "2026-01-18T00:00:00", "incoming_count": 10, "closed_count": 9},
+                {"week": "2026-01-25T00:00:00", "incoming_count": 11, "closed_count": 10},
+                {"week": "2026-02-01T00:00:00", "incoming_count": 9, "closed_count": 9},
+                {"week": "2026-02-08T00:00:00", "incoming_count": 10, "closed_count": 10},
+            ]
+        return [
+            {"week": "2026-02-15T00:00:00", "incoming_count": 14, "closed_count": 10},
+            {"week": "2026-02-22T00:00:00", "incoming_count": 25, "closed_count": 8},
+        ]
+
+    def ttr_stub(**kwargs):
+        if kwargs["date_from"] == "2026-02-01":
+            return [
+                {"week": "2026-01-18T00:00:00", "request_type": "Incident", "avg_hours": 5.0, "n": 4},
+                {"week": "2026-01-25T00:00:00", "request_type": "Incident", "avg_hours": 4.8, "n": 4},
+                {"week": "2026-02-01T00:00:00", "request_type": "Incident", "avg_hours": 5.2, "n": 4},
+                {"week": "2026-02-08T00:00:00", "request_type": "Incident", "avg_hours": 5.1, "n": 4},
+            ]
+        return [
+            {"week": "2026-02-15T00:00:00", "request_type": "Incident", "avg_hours": 7.0, "n": 4},
+            {"week": "2026-02-22T00:00:00", "request_type": "Incident", "avg_hours": 9.0, "n": 4},
+        ]
+
+    def tfr_stub(**kwargs):
+        if kwargs["date_from"] == "2026-02-01":
+            return [
+                {"week": "2026-01-18T00:00:00", "avg_hours": 1.0, "n": 6},
+                {"week": "2026-01-25T00:00:00", "avg_hours": 1.1, "n": 6},
+                {"week": "2026-02-01T00:00:00", "avg_hours": 1.2, "n": 6},
+                {"week": "2026-02-08T00:00:00", "avg_hours": 1.0, "n": 6},
+            ]
+        return [
+            {"week": "2026-02-15T00:00:00", "avg_hours": 1.4, "n": 6},
+            {"week": "2026-02-22T00:00:00", "avg_hours": 1.5, "n": 6},
+        ]
+
+    monkeypatch.setattr(api, "inflow_vs_closed_weekly", inflow_stub)
+    monkeypatch.setattr(api, "time_to_resolution_weekly_by_type", ttr_stub)
+    monkeypatch.setattr(api, "time_to_first_response_weekly", tfr_stub)
+
+    response = client.get("/insights/trends?date_from=2026-02-15&date_to=2026-02-28")
+    assert response.status_code == 200
+    data = response.json()
+    assert "series" in data and len(data["series"]) == 3
+    assert "metric_config" in data
+    backlog = next(x for x in data["series"] if x["metric"] == "backlog_gap")
+    assert "threshold_used" in backlog
+    assert "baseline_mean" in backlog
+    assert "explainability" in backlog["points"][-1]
+    assert backlog["points"][-1]["is_anomaly"] is True
+
+
+def test_insights_highlights_returns_cards(monkeypatch):
+    monkeypatch.setattr(api, "INSIGHTS_ENABLED", True)
+    monkeypatch.setattr(
+        api,
+        "_build_trends_payload",
+        lambda **kwargs: {
+            "window": {"from": "2026-02-15", "to": "2026-02-28"},
+            "baseline_window": {"from": "2026-01-18", "to": "2026-01-31"},
+            "generated_at": "2026-03-02T10:00:00Z",
+            "series": [
+                {
+                    "metric": "backlog_gap",
+                    "label": "Backlog gap",
+                    "unit": "tickets/week",
+                        "points": [
+                            {
+                                "week": "2026-02-15",
+                                "actual": 2.0,
+                                "expected": 1.0,
+                                "is_anomaly": False,
+                                "confidence": "medium",
+                                "sample_size": 18,
+                                "score": 0.9,
+                            },
+                            {
+                                "week": "2026-02-22",
+                                "actual": 6.0,
+                                "expected": 1.0,
+                                "is_anomaly": True,
+                                "confidence": "high",
+                                "sample_size": 22,
+                                "score": 1.8,
+                            },
+                        ],
+                    }
+                ],
+            },
+    )
+    response = client.get("/insights/highlights?date_from=2026-02-15&date_to=2026-02-28")
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data["cards"], list)
+    assert "metric_config" in data
+    assert "explainability" in data["cards"][0]
+    assert "decision_score" in data["cards"][0]
+    assert isinstance(data["cards"][0]["decision_score"], int)
+    assert any(card["type"] == "anomaly" for card in data["cards"])
+
+
+def test_insights_drivers_uses_dimensions(monkeypatch):
+    monkeypatch.setattr(api, "INSIGHTS_ENABLED", True)
+    calls = []
+
+    def drivers_stub(**kwargs):
+        calls.append(kwargs["dimension"])
+        return [
+            {
+                "dimension": kwargs["dimension"],
+                "category": "A",
+                "current_count": 10,
+                "baseline_count": 4,
+                "delta": 6,
+                "contribution_score": 5.1,
+                "contribution_pct": 100.0,
+            }
+        ]
+
+    monkeypatch.setattr(api, "_fetch_driver_rows_for_dimension", drivers_stub)
+    response = client.get("/insights/drivers?date_from=2026-02-15&date_to=2026-02-28&servicedesk_only=true")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["drivers"]) == 4
+    assert set(calls) == {"onderwerp", "organization", "priority", "assignee"}
