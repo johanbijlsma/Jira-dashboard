@@ -90,7 +90,7 @@ describe("Status page", () => {
     });
 
     render(<StatusPage />);
-    await waitFor(() => expect(screen.getByText("Geen succesvolle syncs gevonden.")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Geen syncs gevonden.")).toBeInTheDocument());
     expect(intervalSpy).toHaveBeenCalledWith(expect.any(Function), 15000);
   });
 

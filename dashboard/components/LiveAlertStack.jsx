@@ -2,9 +2,12 @@ import { JIRA_BASE } from "../lib/dashboard-constants";
 
 export default function LiveAlertStack({ alerts }) {
   const p1Items = Array.isArray(alerts?.priority1) ? alerts.priority1 : [];
-  const slaItems = Array.isArray(alerts?.first_response_due_soon) ? alerts.first_response_due_soon : [];
+  const slaWarningItems = Array.isArray(alerts?.first_response_due_warning)
+    ? alerts.first_response_due_warning
+    : (Array.isArray(alerts?.first_response_due_soon) ? alerts.first_response_due_soon : []);
+  const slaCriticalItems = Array.isArray(alerts?.first_response_due_critical) ? alerts.first_response_due_critical : [];
   const overdueItems = Array.isArray(alerts?.first_response_overdue) ? alerts.first_response_overdue : [];
-  if (!p1Items.length && !slaItems.length && !overdueItems.length) return null;
+  if (!p1Items.length && !slaWarningItems.length && !slaCriticalItems.length && !overdueItems.length) return null;
 
   const shellStyle = {
     position: "fixed",
@@ -88,7 +91,7 @@ export default function LiveAlertStack({ alerts }) {
         </section>
       ) : null}
 
-      {slaItems.length ? (
+      {slaWarningItems.length ? (
         <section
           style={{
             ...cardStyle,
@@ -99,14 +102,48 @@ export default function LiveAlertStack({ alerts }) {
         >
           <div style={titleRowStyle}>
             <span style={{ fontSize: 11, border: "1px solid rgba(255,237,213,0.45)", borderRadius: 999, padding: "2px 8px" }}>
-              SLA
+              SLA W
             </span>
-            <span>First response bijna verlopen</span>
-            <strong style={{ marginLeft: "auto", fontSize: 12 }}>{slaItems.length}</strong>
+            <span>First response waarschuwing (&lt;30m)</span>
+            <strong style={{ marginLeft: "auto", fontSize: 12 }}>{slaWarningItems.length}</strong>
           </div>
           <ul style={listStyle}>
-            {slaItems.slice(0, 5).map((item) => (
+            {slaWarningItems.slice(0, 5).map((item) => (
               <li key={`sla-${item.issue_key}`} style={itemStyle}>
+                <a
+                  href={`${JIRA_BASE}/browse/${item.issue_key}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: "#fff", fontWeight: 700 }}
+                >
+                  {item.issue_key}
+                </a>
+                <span>{Math.max(0, Number(item.minutes_left) || 0)} min</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {slaCriticalItems.length ? (
+        <section
+          style={{
+            ...cardStyle,
+            borderColor: "rgba(120, 16, 16, 0.55)",
+            background: "linear-gradient(135deg, #7f1d1d, #b91c1c)",
+            color: "#fee2e2",
+          }}
+        >
+          <div style={titleRowStyle}>
+            <span style={{ fontSize: 11, border: "1px solid rgba(254,226,226,0.45)", borderRadius: 999, padding: "2px 8px" }}>
+              SLA !
+            </span>
+            <span>First response escalatie (&lt;5m)</span>
+            <strong style={{ marginLeft: "auto", fontSize: 12 }}>{slaCriticalItems.length}</strong>
+          </div>
+          <ul style={listStyle}>
+            {slaCriticalItems.slice(0, 5).map((item) => (
+              <li key={`sla-critical-${item.issue_key}`} style={itemStyle}>
                 <a
                   href={`${JIRA_BASE}/browse/${item.issue_key}`}
                   target="_blank"

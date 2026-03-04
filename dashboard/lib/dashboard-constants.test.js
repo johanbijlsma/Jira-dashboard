@@ -16,7 +16,8 @@ describe("dashboard-constants", () => {
     expect(CARD_TITLES.volume).toContain("tickets");
     expect(VACATION_TEAM_MEMBERS.length).toBeGreaterThan(0);
     expect(MAX_CARDS_PER_ROW).toBe(5);
-    expect(MAX_KPI_TILES).toBe(6);
+    expect(MAX_KPI_TILES).toBe(7);
+    expect(KPI_KEYS).toContain("ttfrOverdue");
   });
 
   it("creates a normalized default layout", () => {

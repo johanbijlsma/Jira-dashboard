@@ -34,8 +34,8 @@ def test_sync_status_exposes_runtime_state(monkeypatch):
 def test_sync_endpoint_queues_background_task(monkeypatch):
     calls = []
 
-    def fake_run_sync_once(full: bool = False):
-        calls.append(full)
+    def fake_run_sync_once(full: bool = False, trigger_type: str = "manual"):
+        calls.append((full, trigger_type))
         return {"started": True}
 
     monkeypatch.setattr(api, "run_sync_once", fake_run_sync_once)
@@ -43,14 +43,14 @@ def test_sync_endpoint_queues_background_task(monkeypatch):
     response = client.post("/sync")
     assert response.status_code == 200
     assert response.json() == {"queued": True}
-    assert calls == [False]
+    assert calls == [(False, "manual")]
 
 
 def test_sync_full_endpoint_queues_full_sync(monkeypatch):
     calls = []
 
-    def fake_run_sync_once(full: bool = False):
-        calls.append(full)
+    def fake_run_sync_once(full: bool = False, trigger_type: str = "manual"):
+        calls.append((full, trigger_type))
         return {"started": True}
 
     monkeypatch.setattr(api, "run_sync_once", fake_run_sync_once)
@@ -58,4 +58,4 @@ def test_sync_full_endpoint_queues_full_sync(monkeypatch):
     response = client.post("/sync/full")
     assert response.status_code == 200
     assert response.json() == {"queued": True, "mode": "full"}
-    assert calls == [True]
+    assert calls == [(True, "manual")]

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Head from "next/head";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
@@ -23,6 +24,19 @@ function num(value) {
   return new Intl.NumberFormat("nl-NL").format(Number(value));
 }
 
+function statusFaviconDataUri(hasError) {
+  const glyph = hasError ? "❌" : "✅";
+  const bg = hasError ? "#7f1d1d" : "#14532d";
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='12' fill='${bg}'/><text x='32' y='42' text-anchor='middle' font-size='30'>${glyph}</text></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+function triggerBadge(triggerType) {
+  const normalized = String(triggerType || "").toLowerCase();
+  if (normalized === "automatic") return "⚙️ Automatisch";
+  return "👤 Handmatig";
+}
+
 export default function StatusPage() {
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -31,6 +45,7 @@ export default function StatusPage() {
   const [actionMessage, setActionMessage] = useState("");
   const [actionPulse, setActionPulse] = useState(0);
   const [testAlertKeys, setTestAlertKeys] = useState([]);
+  const [selectedRunIndex, setSelectedRunIndex] = useState(0);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -124,10 +139,23 @@ export default function StatusPage() {
     return () => window.clearInterval(timer);
   }, [fetchStatus, fetchTestAlertState, status?.running]);
 
-  const successfulRuns = useMemo(
-    () => (Array.isArray(status?.successful_runs) ? status.successful_runs : []),
+  const recentRuns = useMemo(
+    () =>
+      Array.isArray(status?.recent_runs)
+        ? status.recent_runs
+        : (Array.isArray(status?.successful_runs)
+          ? status.successful_runs.map((row) => ({ ...row, success: true, error: null }))
+          : []),
     [status]
   );
+  const selectedRun = recentRuns[selectedRunIndex] || recentRuns[0] || null;
+  const latestRunHasError = recentRuns.length ? recentRuns[0]?.success === false : false;
+  const faviconHref = useMemo(() => statusFaviconDataUri(Boolean(latestRunHasError)), [latestRunHasError]);
+
+  useEffect(() => {
+    if (!recentRuns.length) return;
+    if (selectedRunIndex >= recentRuns.length) setSelectedRunIndex(0);
+  }, [recentRuns, selectedRunIndex]);
 
   const pageStyle = {
     minHeight: "100vh",
@@ -241,6 +269,10 @@ export default function StatusPage() {
 
   return (
     <main style={pageStyle}>
+      <Head>
+        <title>Status | Dashboard Servicedesk Planningsagenda</title>
+        <link rel="icon" href={faviconHref} />
+      </Head>
       <div style={shellStyle}>
         <div style={headerStyle}>
           <div>
@@ -337,14 +369,9 @@ export default function StatusPage() {
             <p style={cardMetaStyle}>Laatste run gestart: {fmtDateTime(status?.last_run)}</p>
             <p style={cardMetaStyle}>Laatste sync-positie: {fmtDateTime(status?.last_sync)}</p>
             <p style={cardMetaStyle}>Laatste upserts: {num(status?.last_result?.upserts)}</p>
-          </section>
-
-          <section style={cardStyle}>
-            <h2 style={cardTitleStyle}>Laatste fout</h2>
-            <p style={cardValueStyle}>{status?.last_failed_run?.message ? "Aanwezig" : "Geen"}</p>
-            <p style={cardMetaStyle}>Run: {fmtDateTime(status?.last_failed_run?.started_at)}</p>
-            <p style={cardMetaStyle}>Type: {status?.last_failed_run?.mode || "—"}</p>
-            <p style={cardMetaStyle}>{status?.last_failed_run?.message || "Geen fout geregistreerd."}</p>
+            <p style={cardMetaStyle}>
+              Autosync: {status?.auto_sync?.enabled ? "Aan" : "Uit"} · {num(status?.auto_sync?.incremental_interval_seconds)}s
+            </p>
           </section>
 
           <section style={cardStyle}>
@@ -352,13 +379,30 @@ export default function StatusPage() {
             <p style={cardValueStyle}>{fmtDateTime(status?.last_full_sync?.started_at)}</p>
             <p style={cardMetaStyle}>Einde: {fmtDateTime(status?.last_full_sync?.finished_at)}</p>
             <p style={cardMetaStyle}>Upserts: {num(status?.last_full_sync?.upserts)}</p>
+            <p style={cardMetaStyle}>Trigger: {triggerBadge(status?.last_full_sync?.trigger_type)}</p>
             <p style={cardMetaStyle}>Set last sync: {fmtDateTime(status?.last_full_sync?.set_last_sync)}</p>
+          </section>
+
+          <section style={cardStyle}>
+            <h2 style={cardTitleStyle}>Geselecteerde sync</h2>
+            <p style={cardValueStyle}>
+              {selectedRun
+                ? (selectedRun.success ? "✅ Succes" : (selectedRun.error ? "❌ Fout" : "⏳ Bezig"))
+                : "—"}
+            </p>
+            <p style={cardMetaStyle}>Start: {fmtDateTime(selectedRun?.started_at)}</p>
+            <p style={cardMetaStyle}>Einde: {fmtDateTime(selectedRun?.finished_at)}</p>
+            <p style={cardMetaStyle}>Type: {selectedRun?.mode || "—"}</p>
+            <p style={cardMetaStyle}>Trigger: {triggerBadge(selectedRun?.trigger_type)}</p>
+            <p style={cardMetaStyle}>Upserts: {num(selectedRun?.upserts)}</p>
+            <p style={cardMetaStyle}>Set last sync: {fmtDateTime(selectedRun?.set_last_sync)}</p>
+            <p style={cardMetaStyle}>Foutmelding: {selectedRun?.error || "Geen"}</p>
           </section>
         </div>
 
         <section style={tableWrapStyle}>
           <div style={{ padding: "12px 12px 0", color: "var(--text-subtle)", fontWeight: 700 }}>
-            Laatste 10 succesvolle syncs
+            Laatste 10 syncs
           </div>
           <div style={{ overflowX: "auto", padding: 12 }}>
             <table style={tableStyle}>
@@ -367,24 +411,34 @@ export default function StatusPage() {
                   <th style={thStyle}>Start</th>
                   <th style={thStyle}>Einde</th>
                   <th style={thStyle}>Type</th>
+                  <th style={thStyle}>Trigger</th>
+                  <th style={thStyle}>Status</th>
                   <th style={thStyle}>Upserts</th>
                   <th style={thStyle}>Set last sync</th>
                 </tr>
               </thead>
               <tbody>
-                {successfulRuns.length ? (
-                  successfulRuns.map((row, idx) => (
-                    <tr key={`run-${idx}`}>
+                {recentRuns.length ? (
+                  recentRuns.map((row, idx) => (
+                    <tr
+                      key={`run-${idx}`}
+                      onClick={() => setSelectedRunIndex(idx)}
+                      style={{ cursor: "pointer", background: idx === selectedRunIndex ? "var(--surface-muted)" : "transparent" }}
+                    >
                       <td style={tdStyle}>{fmtDateTime(row.started_at)}</td>
                       <td style={tdStyle}>{fmtDateTime(row.finished_at)}</td>
                       <td style={tdStyle}>{row.mode || "—"}</td>
+                      <td style={tdStyle}>{triggerBadge(row.trigger_type)}</td>
+                      <td style={tdStyle}>
+                        {row.success ? "✅ Succes" : (row.error ? "❌ Fout" : "⏳ Bezig")}
+                      </td>
                       <td style={tdStyle}>{num(row.upserts)}</td>
                       <td style={tdStyle}>{fmtDateTime(row.set_last_sync)}</td>
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td style={tdStyle} colSpan={5}>Geen succesvolle syncs gevonden.</td>
+                    <td style={tdStyle} colSpan={7}>Geen syncs gevonden.</td>
                   </tr>
                 )}
               </tbody>

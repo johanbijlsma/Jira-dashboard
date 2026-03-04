@@ -17,8 +17,18 @@ Required backend values:
 - `JIRA_PROJECT`
 - `BACKEND_CORS_ORIGINS` (comma-separated, e.g. `https://dashboard.example.com`)
 
+Recommended sync/alert values for production:
+- `AUTO_SYNC_ENABLED=true`
+- `SYNC_INCREMENTAL_INTERVAL_SECONDS=45`
+- `SYNC_FULL_INTERVAL_HOURS=24`
+- `SLA_WARNING_MINUTES=30`
+- `SLA_CRITICAL_MINUTES=5`
+- `SLA_OVERDUE_MAX_AGE_HOURS=24` (voorkomt ruis van oude verlopen TTFR-issues in live alerts)
+
 Create `dashboard/.env.production` based on `dashboard/.env.example`:
 - `NEXT_PUBLIC_API_BASE=https://api.example.com`
+- `NEXT_PUBLIC_AUTO_SYNC_INTERVAL_SECONDS=120` (fallback only; frontend skips auto-trigger when backend autosync is enabled)
+- `NEXT_PUBLIC_AUTO_RESET_IDLE_SECONDS=120` (auto-reset filters naar standaardweergave na 2 minuten inactiviteit)
 
 If you deploy with Docker Compose, set this in root `.env` as well:
 - `NEXT_PUBLIC_API_BASE=https://api.example.com`

@@ -70,6 +70,17 @@ ChartJS.register(
 );
 setupChartDefaults(ChartJS);
 
+const AUTO_SYNC_INTERVAL_MS = Math.max(
+  15000,
+  (Number(process.env.NEXT_PUBLIC_AUTO_SYNC_INTERVAL_SECONDS) || 120) * 1000
+);
+const STALE_SYNC_THRESHOLD_MS = Math.max(3 * AUTO_SYNC_INTERVAL_MS, 5 * 60 * 1000);
+const AUTO_SYNC_RETRY_THROTTLE_MS = Math.max(AUTO_SYNC_INTERVAL_MS, 60 * 1000);
+const AUTO_RESET_IDLE_MS = Math.max(
+  0,
+  (Number(process.env.NEXT_PUBLIC_AUTO_RESET_IDLE_SECONDS) || 120) * 1000
+);
+
 function alertFaviconDataUri(color, ring = false) {
   const ringSvg = ring
     ? `<circle cx='32' cy='32' r='26' fill='none' stroke='${color}' stroke-width='6' opacity='0.95'/>`
@@ -128,6 +139,7 @@ export default function Home() {
   const [inflowVsClosedWeekly, setInflowVsClosedWeekly] = useState([]);
   const [incidentResolutionWeekly, setIncidentResolutionWeekly] = useState([]);
   const [firstResponseWeekly, setFirstResponseWeekly] = useState([]);
+  const [ttfrOverdueWeekly, setTtfrOverdueWeekly] = useState([]);
 
   const [syncStatus, setSyncStatus] = useState(null);
   const [syncLoading, setSyncLoading] = useState(false);
@@ -135,7 +147,8 @@ export default function Home() {
   const [syncMessageKind, setSyncMessageKind] = useState("success"); // "success" | "error"
   const [liveAlerts, setLiveAlerts] = useState({
     priority1: [],
-    first_response_due_soon: [],
+    first_response_due_warning: [],
+    first_response_due_critical: [],
     first_response_overdue: [],
   });
   const [upcomingVacations, setUpcomingVacations] = useState([]);
@@ -183,11 +196,13 @@ export default function Home() {
   const [showAssignee, setShowAssignee] = useState(false);
   const [expandedCard, setExpandedCard] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [showStartupSkeleton, setShowStartupSkeleton] = useState(true);
   const [dashboardLayout, setDashboardLayout] = useState(createDefaultDashboardLayout);
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
   const [topOnderwerpSort, setTopOnderwerpSort] = useState("wow");
   const [isTvMode, setIsTvMode] = useState(false);
   const autoSyncAttemptRef = useRef(0);
+  const autoResetTimerRef = useRef(null);
   const seenLiveAlertKeysRef = useRef(new Set());
   const dragStateRef = useRef(null);
   const [layoutSavedSnapshot, setLayoutSavedSnapshot] = useState("");
@@ -206,7 +221,18 @@ export default function Home() {
   const DRILL_LIMIT = 100;
   const ALERT_LOG_LIMIT = 300;
   const sidePanelOpen = sidePanelMode === "alerts" || !!selectedWeek;
+  const filtersAreDefault = useMemo(
+    () =>
+      !requestType &&
+      !onderwerp &&
+      !priority &&
+      !assignee &&
+      !organization &&
+      servicedeskOnly === DEFAULT_SERVICEDESK_ONLY,
+    [requestType, onderwerp, priority, assignee, organization, servicedeskOnly]
+  );
   const syncBusy = syncLoading || !!syncStatus?.running;
+  const backendAutoSyncEnabled = !!syncStatus?.auto_sync?.enabled;
   const syncStatusInlineText = useMemo(() => {
     if (!syncStatus) return "";
     const base = syncStatus.running
@@ -303,14 +329,15 @@ export default function Home() {
   }, []);
 
   const resetFilters = useCallback((showToast = true) => {
+    applyDateRange({ months: 1 });
     setRequestType("");
     setOnderwerp("");
     setPriority("");
     setAssignee("");
     setOrganization("");
     setServicedeskOnly(DEFAULT_SERVICEDESK_ONLY);
-    if (showToast) flashToast("Filters gereset");
-  }, [flashToast]);
+    if (showToast) flashToast("Filters en datumrange gereset (laatste maand)");
+  }, [applyDateRange, flashToast]);
 
   const toggleTvMode = useCallback(() => {
     setIsTvMode((prev) => {
@@ -502,9 +529,13 @@ export default function Home() {
     if (servicedeskOnly) params.set("servicedesk_only", "true");
     const r = await fetch(`${API}/alerts/live?${params.toString()}`);
     const data = await r.json();
+    const warningItems = Array.isArray(data?.first_response_due_warning)
+      ? data.first_response_due_warning
+      : (Array.isArray(data?.first_response_due_soon) ? data.first_response_due_soon : []);
     const normalized = {
       priority1: Array.isArray(data?.priority1) ? data.priority1 : [],
-      first_response_due_soon: Array.isArray(data?.first_response_due_soon) ? data.first_response_due_soon : [],
+      first_response_due_warning: warningItems,
+      first_response_due_critical: Array.isArray(data?.first_response_due_critical) ? data.first_response_due_critical : [],
       first_response_overdue: Array.isArray(data?.first_response_overdue) ? data.first_response_overdue : [],
     };
     setLiveAlerts(normalized);
@@ -516,8 +547,14 @@ export default function Home() {
       seen.add(key);
       return true;
     });
-    const newSla = normalized.first_response_due_soon.filter((item) => {
-      const key = `sla:${item.issue_key}`;
+    const newSlaWarning = normalized.first_response_due_warning.filter((item) => {
+      const key = `sla-warning:${item.issue_key}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const newSlaCritical = normalized.first_response_due_critical.filter((item) => {
+      const key = `sla-critical:${item.issue_key}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -531,10 +568,20 @@ export default function Home() {
 
     if (newP1.length) {
       flashToast(`ALERT P1: ${newP1[0].issue_key}${newP1.length > 1 ? ` +${newP1.length - 1}` : ""}`, "error", 9000);
+    } else if (newSlaCritical.length) {
+      flashToast(
+        `ALERT SLA <5m: ${newSlaCritical[0].issue_key}${newSlaCritical.length > 1 ? ` +${newSlaCritical.length - 1}` : ""}`,
+        "error",
+        9000
+      );
     } else if (newOverdue.length) {
       flashToast(`ALERT SLA VERLOPEN: ${newOverdue[0].issue_key}${newOverdue.length > 1 ? ` +${newOverdue.length - 1}` : ""}`, "error", 9000);
-    } else if (newSla.length) {
-      flashToast(`ALERT SLA <5m: ${newSla[0].issue_key}${newSla.length > 1 ? ` +${newSla.length - 1}` : ""}`, "error", 9000);
+    } else if (newSlaWarning.length) {
+      flashToast(
+        `ALERT SLA <30m: ${newSlaWarning[0].issue_key}${newSlaWarning.length > 1 ? ` +${newSlaWarning.length - 1}` : ""}`,
+        "error",
+        9000
+      );
     }
     await refreshAlertLogs();
   }, [flashToast, servicedeskOnly, refreshAlertLogs]);
@@ -769,6 +816,10 @@ export default function Home() {
       .then((r) => r.json())
       .then((data) => (Array.isArray(data) ? setFirstResponseWeekly(data) : setFirstResponseWeekly([])));
 
+    fetch(`${API}/metrics/ttfr_overdue_weekly?` + params.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setTtfrOverdueWeekly(data) : setTtfrOverdueWeekly([])));
+
     if (!p90Period.hasData) {
       setP90([]);
     } else {
@@ -830,6 +881,11 @@ export default function Home() {
     if (typeof document !== "undefined") {
       document.title = "Dashboard Servicedesk Planningsagenda";
     }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setShowStartupSkeleton(false), 1800);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -927,7 +983,8 @@ export default function Home() {
   useEffect(() => {
     const hasP1 = Array.isArray(liveAlerts?.priority1) && liveAlerts.priority1.length > 0;
     const hasSla =
-      (Array.isArray(liveAlerts?.first_response_due_soon) && liveAlerts.first_response_due_soon.length > 0) ||
+      (Array.isArray(liveAlerts?.first_response_due_warning) && liveAlerts.first_response_due_warning.length > 0) ||
+      (Array.isArray(liveAlerts?.first_response_due_critical) && liveAlerts.first_response_due_critical.length > 0) ||
       (Array.isArray(liveAlerts?.first_response_overdue) && liveAlerts.first_response_overdue.length > 0);
     if (!(hasP1 || hasSla)) {
       setFaviconPulseOn(false);
@@ -941,11 +998,12 @@ export default function Home() {
 
   const faviconHref = useMemo(() => {
     const hasP1 = Array.isArray(liveAlerts?.priority1) && liveAlerts.priority1.length > 0;
-    const hasSla =
-      (Array.isArray(liveAlerts?.first_response_due_soon) && liveAlerts.first_response_due_soon.length > 0) ||
-      (Array.isArray(liveAlerts?.first_response_overdue) && liveAlerts.first_response_overdue.length > 0);
+    const hasSlaWarning = Array.isArray(liveAlerts?.first_response_due_warning) && liveAlerts.first_response_due_warning.length > 0;
+    const hasSlaCritical = Array.isArray(liveAlerts?.first_response_due_critical) && liveAlerts.first_response_due_critical.length > 0;
+    const hasOverdue = Array.isArray(liveAlerts?.first_response_overdue) && liveAlerts.first_response_overdue.length > 0;
+    const hasSla = hasSlaWarning || hasSlaCritical || hasOverdue;
     if (!hasP1 && !hasSla) return "/favicon.ico";
-    const color = hasP1 ? "#dc2626" : "#f59e0b";
+    const color = hasP1 || hasSlaCritical || hasOverdue ? "#dc2626" : "#f59e0b";
     return alertFaviconDataUri(color, faviconPulseOn);
   }, [liveAlerts, faviconPulseOn]);
 
@@ -957,27 +1015,76 @@ export default function Home() {
   }, [refreshVacations]);
 
   useEffect(() => {
+    if (backendAutoSyncEnabled) return undefined;
     const t = setInterval(() => {
       if (syncBusy) return;
       triggerSync({ silent: true }).catch(() => {});
-    }, 5 * 60 * 1000);
+    }, AUTO_SYNC_INTERVAL_MS);
     return () => clearInterval(t);
-  }, [syncBusy, triggerSync]);
+  }, [backendAutoSyncEnabled, syncBusy, triggerSync]);
 
   useEffect(() => {
+    if (backendAutoSyncEnabled) return;
     if (!syncStatus || syncBusy) return;
     const lastSyncRaw = syncStatus.last_sync;
     const lastSync = lastSyncRaw ? new Date(lastSyncRaw) : null;
     const now = Date.now();
     const isStale =
-      !lastSync || Number.isNaN(lastSync.getTime()) || now - lastSync.getTime() > 60 * 60 * 1000;
+      !lastSync || Number.isNaN(lastSync.getTime()) || now - lastSync.getTime() > STALE_SYNC_THRESHOLD_MS;
     if (!isStale) return;
 
     // Throttle automatic retries when sync fails or takes long.
-    if (now - autoSyncAttemptRef.current < 10 * 60 * 1000) return;
+    if (now - autoSyncAttemptRef.current < AUTO_SYNC_RETRY_THROTTLE_MS) return;
     autoSyncAttemptRef.current = now;
-    triggerSync().catch(() => {});
-  }, [syncStatus, syncBusy, triggerSync]);
+    triggerSync({ silent: true }).catch(() => {});
+  }, [backendAutoSyncEnabled, syncStatus, syncBusy, triggerSync]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || AUTO_RESET_IDLE_MS <= 0) return undefined;
+
+    const clearTimer = () => {
+      if (autoResetTimerRef.current) {
+        window.clearTimeout(autoResetTimerRef.current);
+        autoResetTimerRef.current = null;
+      }
+    };
+
+    const scheduleTimer = () => {
+      clearTimer();
+      autoResetTimerRef.current = window.setTimeout(() => {
+        if (filtersAreDefault) {
+          scheduleTimer();
+          return;
+        }
+        if (vacationEditMode || isLayoutEditing || hotkeysOpen || sidePanelOpen || filtersOpen) {
+          scheduleTimer();
+          return;
+        }
+        if (isTextEntryTarget(document.activeElement)) {
+          scheduleTimer();
+          return;
+        }
+        resetFilters(false);
+        flashToast("Auto-reset: terug naar standaardweergave", "success");
+        scheduleTimer();
+      }, AUTO_RESET_IDLE_MS);
+    };
+
+    const onActivity = () => scheduleTimer();
+    scheduleTimer();
+    window.addEventListener("pointerdown", onActivity, { passive: true });
+    window.addEventListener("keydown", onActivity);
+    window.addEventListener("wheel", onActivity, { passive: true });
+    window.addEventListener("touchstart", onActivity, { passive: true });
+
+    return () => {
+      clearTimer();
+      window.removeEventListener("pointerdown", onActivity);
+      window.removeEventListener("keydown", onActivity);
+      window.removeEventListener("wheel", onActivity);
+      window.removeEventListener("touchstart", onActivity);
+    };
+  }, [filtersAreDefault, vacationEditMode, isLayoutEditing, hotkeysOpen, sidePanelOpen, filtersOpen, resetFilters, flashToast]);
 
   useEffect(() => {
     if (!vacationEditMode) return;
@@ -1163,6 +1270,10 @@ export default function Home() {
     fetch(`${API}/metrics/time_to_first_response_weekly?` + params.toString())
       .then((r) => r.json())
       .then((data) => (Array.isArray(data) ? setFirstResponseWeekly(data) : setFirstResponseWeekly([])));
+
+    fetch(`${API}/metrics/ttfr_overdue_weekly?` + params.toString())
+      .then((r) => r.json())
+      .then((data) => (Array.isArray(data) ? setTtfrOverdueWeekly(data) : setTtfrOverdueWeekly([])));
 
     if (!p90Period.hasData) {
       setP90([]);
@@ -1635,6 +1746,21 @@ export default function Home() {
     const topPartnerLast = summarizeTopPartners(partnerMapLast);
     const topPartnerPrev = summarizeTopPartners(partnerMapPrev);
 
+    const ttfrRows = Array.isArray(ttfrOverdueWeekly) ? ttfrOverdueWeekly : [];
+    const ttfrOverdueByWeek = new Map();
+    ttfrRows.forEach((row) => {
+      const weekIso = String(row?.week || "").slice(0, 10);
+      if (!weekIso || !completeWeekSet.has(weekIso)) return;
+      ttfrOverdueByWeek.set(weekIso, (ttfrOverdueByWeek.get(weekIso) || 0) + (Number(row?.tickets) || 0));
+    });
+    const ttfrOverdueTotal = Array.from(ttfrOverdueByWeek.values()).reduce((sum, n) => sum + (Number(n) || 0), 0);
+    const ttfrOverdueLatest = weekLastIso ? Number(ttfrOverdueByWeek.get(weekLastIso) || 0) : 0;
+    const ttfrOverduePrevious = weekPrevIso ? Number(ttfrOverdueByWeek.get(weekPrevIso) || 0) : null;
+    const ttfrOverdueWowPct =
+      ttfrOverduePrevious && ttfrOverduePrevious > 0
+        ? ((ttfrOverdueLatest - ttfrOverduePrevious) / ttfrOverduePrevious) * 100
+        : null;
+
     return {
       totalTickets,
       latestTickets,
@@ -1650,10 +1776,13 @@ export default function Home() {
       topPartnerTickets: topPartnerLast.tickets,
       topPartnerPrevLabel: topPartnerPrev.label,
       topPartnerPrevTickets: topPartnerPrev.tickets,
+      ttfrOverdueTotal,
+      ttfrOverdueLatest,
+      ttfrOverdueWowPct,
       periodLabel: fullWeekInfo.periodLabel,
       completeWeeksCount: fullWeekInfo.count,
     };
-  }, [series, weeks, onderwerpVolume, organizationVolume, fullWeekInfo]);
+  }, [series, weeks, onderwerpVolume, organizationVolume, fullWeekInfo, ttfrOverdueWeekly]);
 
   const topOnderwerpRows = useMemo(() => {
     if (!fullWeekInfo.count) return [];
@@ -2052,6 +2181,20 @@ export default function Home() {
     fontWeight: 700,
     lineHeight: 1.1,
     color: "var(--text-main)",
+  };
+  const skeletonCardStyle = {
+    border: "1px solid var(--border)",
+    borderRadius: 10,
+    background: "var(--surface)",
+    padding: "10px 12px",
+    minHeight: 92,
+  };
+  const skeletonBarStyle = {
+    height: 12,
+    borderRadius: 8,
+    background: "linear-gradient(100deg, var(--surface-muted) 25%, var(--surface) 40%, var(--surface-muted) 65%)",
+    backgroundSize: "220% 100%",
+    animation: "dashSkeletonWave 1.35s ease-in-out infinite",
   };
   const kpiSubStyle = {
     fontSize: 12,
@@ -3240,6 +3383,12 @@ export default function Home() {
         value: num(kpiStats.avgPerWeek, 1),
         sub: `${num(kpiStats.completeWeeksCount)} volledige weken`,
       },
+      ttfrOverdue: {
+        label: "TTFR verlopen (volledige weken)",
+        value: num(kpiStats.ttfrOverdueTotal),
+        sub: `Laatste week: ${num(kpiStats.ttfrOverdueLatest)} · WoW: ${pct(kpiStats.ttfrOverdueWowPct)}`,
+        badge: "SLA",
+      },
       topType: {
         label: "Top request type (volledige weken)",
         value: kpiStats.topTypeLabel,
@@ -3387,6 +3536,7 @@ export default function Home() {
   return (
     <div style={pageStyle}>
       <Head>
+        <title>Dashboard Servicedesk Planningsagenda</title>
         <link rel="icon" href={faviconHref} />
       </Head>
       <Toast message={syncMessage} kind={syncMessageKind} onClose={() => setSyncMessage("")} />
@@ -3838,7 +3988,17 @@ export default function Home() {
         </>
       ) : null}
 
-      {(() => {
+      {showStartupSkeleton ? (
+        <div style={kpiGridStyle}>
+          {Array.from({ length: 6 }).map((_, idx) => (
+            <div key={`kpi-skeleton-${idx}`} style={skeletonCardStyle}>
+              <div style={{ ...skeletonBarStyle, width: "62%", marginBottom: 12 }} />
+              <div style={{ ...skeletonBarStyle, width: "40%", height: 24, marginBottom: 10 }} />
+              <div style={{ ...skeletonBarStyle, width: "78%", height: 10 }} />
+            </div>
+          ))}
+        </div>
+      ) : (() => {
         const renderedKpis = renderKpiRowWithHint(visibleKpiKeys);
         const hintActive = renderedKpis.includes("__KPI_DROP_HINT__");
         return (
@@ -3929,6 +4089,20 @@ export default function Home() {
         );
       })()}
 
+      {showStartupSkeleton ? (
+        <div style={cardRowsWrapStyle}>
+          {Array.from({ length: 2 }).map((_, rowIdx) => (
+            <div key={`row-skeleton-${rowIdx}`} style={{ ...cardRowStyle, gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
+              {Array.from({ length: 3 }).map((__, colIdx) => (
+                <div key={`card-skeleton-${rowIdx}-${colIdx}`} style={{ ...chartShellStyle, padding: 12 }}>
+                  <div style={{ ...skeletonBarStyle, width: "45%", marginBottom: 10 }} />
+                  <div style={{ ...skeletonBarStyle, width: "100%", height: 140 }} />
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      ) : (
       <div style={cardRowsWrapStyle}>
         {visibleCardRows.map((row, rowIndex) => {
           const renderedRow = renderCardRowWithHint(row, rowIndex);
@@ -4068,6 +4242,7 @@ export default function Home() {
           );
         })}
       </div>
+      )}
       {isLayoutEditing ? (
         <div style={foldNoticeStyle}>{'Layout-modus actief: sleep KPI/cards binnen hun categorie en klik daarna op "Opslaan layout".'}</div>
       ) : null}
@@ -4668,6 +4843,14 @@ export default function Home() {
           to {
             opacity: 1;
             transform: translateY(0) scale(1);
+          }
+        }
+        @keyframes dashSkeletonWave {
+          0% {
+            background-position: 220% 0;
+          }
+          100% {
+            background-position: -20% 0;
           }
         }
         @keyframes dropPulse {

@@ -127,6 +127,15 @@ def test_normalizers_and_priority_helpers(monkeypatch):
         {"ongoingCycle": {"breachTime": {"iso8601": "2026-02-25T12:00:00+0200"}}}
     )
     assert dt.isoformat() == "2026-02-25T10:00:00"
+    dt_completed = api.norm_first_response_due_at(
+        {
+            "completedCycles": [
+                {"breachTime": {"iso8601": "2026-02-25T09:00:00+0000"}},
+                {"breachTime": {"iso8601": "2026-02-25T10:30:00+0000"}},
+            ]
+        }
+    )
+    assert dt_completed.isoformat() == "2026-02-25T10:30:00"
     assert api.norm_first_response_due_at({"ongoingCycle": {"breachTime": {}}}) is None
 
     monkeypatch.setattr(api, "ALERT_P1_PRIORITIES", ["kritiek"])
@@ -235,7 +244,7 @@ def test_run_sync_once_branches(monkeypatch):
     monkeypatch.setattr(api, "JIRA_EMAIL", "x")
     monkeypatch.setattr(api, "JIRA_TOKEN", "y")
     monkeypatch.setattr(api, "ensure_schema", lambda: None)
-    monkeypatch.setattr(api, "create_sync_run", lambda mode: 10)
+    monkeypatch.setattr(api, "create_sync_run", lambda mode, trigger_type="manual": 10)
     monkeypatch.setattr(api, "get_last_sync", lambda: None)
 
     upsert_calls = []
@@ -272,7 +281,7 @@ def test_run_sync_once_error_path(monkeypatch):
     monkeypatch.setattr(api, "JIRA_EMAIL", "x")
     monkeypatch.setattr(api, "JIRA_TOKEN", "y")
     monkeypatch.setattr(api, "ensure_schema", lambda: None)
-    monkeypatch.setattr(api, "create_sync_run", lambda mode: 22)
+    monkeypatch.setattr(api, "create_sync_run", lambda mode, trigger_type="manual": 22)
     monkeypatch.setattr(api, "get_last_sync", lambda: None)
     monkeypatch.setattr(api, "jira_search", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
     error_calls = []
@@ -290,11 +299,12 @@ def test_get_sync_status_payload_maps_all_sections(monkeypatch):
     now = datetime(2026, 2, 25, 10, 0, 0, tzinfo=timezone.utc)
     cursor = CursorStub(
         fetchall_values=[
-            [(now, now, "incremental", 4, now), (now, now, "full", 10, now)],
+            [(now, now, "incremental", "manual", True, 4, now, None), (now, now, "full", "automatic", True, 10, now, None)],
+            [(now, now, "incremental", "manual", 4, now), (now, now, "full", "automatic", 10, now)],
         ],
         fetchone_values=[
-            (now, now, "incremental", "err"),
-            (now, now, 10, now),
+            (now, now, "incremental", "manual", "err"),
+            (now, now, "automatic", 10, now),
         ],
     )
     patch_conn(monkeypatch, cursor)
@@ -307,9 +317,13 @@ def test_get_sync_status_payload_maps_all_sections(monkeypatch):
     payload = api.get_sync_status_payload()
     assert payload["running"] is True
     assert payload["last_sync"] == "2026-02-25T10:00:00Z"
+    assert payload["recent_runs"][0]["success"] is True
     assert payload["successful_runs"][0]["upserts"] == 4
+    assert payload["successful_runs"][0]["trigger_type"] == "manual"
     assert payload["last_failed_run"]["message"] == "err"
+    assert payload["last_failed_run"]["trigger_type"] == "manual"
     assert payload["last_full_sync"]["upserts"] == 10
+    assert payload["last_full_sync"]["trigger_type"] == "automatic"
 
 
 def test_meta_alerts_and_issue_endpoints(monkeypatch):
@@ -327,6 +341,7 @@ def test_meta_alerts_and_issue_endpoints(monkeypatch):
                 ("SD-20", now, "P1", "In behandeling"),
             ],
             [("SD-3", now, 2)],
+            [],
             [("SD-4", now, 8)],
             [("SD-10", "Incident", "Koppelingen", now, now, "P1", "Johan", "Open")],
         ]
@@ -342,7 +357,7 @@ def test_meta_alerts_and_issue_endpoints(monkeypatch):
     assert alerts_response.status_code == 200
     alerts_data = alerts_response.json()
     assert [x["issue_key"] for x in alerts_data["priority1"]] == ["SD-1"]
-    assert alerts_data["first_response_due_soon"][0]["minutes_left"] == 2
+    assert alerts_data["first_response_due_warning"][0]["minutes_left"] == 2
     assert alerts_data["first_response_overdue"][0]["minutes_overdue"] == 8
 
     issues_response = client.get(
@@ -360,6 +375,7 @@ def test_alerts_overdue_query_only_uses_open_issues(monkeypatch):
         fetchall_values=[
             [("SD-1", now, "P1", "Nieuwe melding")],
             [("SD-2", now, 2)],
+            [],
             [("SD-3", now, 8)],
         ]
     )
@@ -371,7 +387,32 @@ def test_alerts_overdue_query_only_uses_open_issues(monkeypatch):
 
     overdue_queries = [q for q, _params in cursor.executed if "minutes_overdue" in q]
     assert overdue_queries
-    assert "resolved_at is null" in overdue_queries[0].lower()
+    overdue_sql = overdue_queries[0].lower()
+    assert "resolved_at is null" in overdue_sql
+    assert "lower(coalesce(current_status, '')) = 'nieuwe melding'" in overdue_sql
+    assert "assignee is null" in overdue_sql
+
+
+def test_alerts_warning_and_critical_queries_only_use_nieuwe_melding(monkeypatch):
+    now = datetime(2026, 2, 25, 10, 0, 0)
+    cursor = CursorStub(
+        fetchall_values=[
+            [("SD-1", now, "P1", "Nieuwe melding")],
+            [("SD-2", now, 20)],
+            [("SD-3", now, 4)],
+            [("SD-4", now, 8)],
+        ]
+    )
+    patch_conn(monkeypatch, cursor)
+    monkeypatch.setattr(api, "_jira_existing_issue_keys", lambda keys: set(keys))
+
+    response = client.get("/alerts/live")
+    assert response.status_code == 200
+
+    warning_queries = [q.lower() for q, _params in cursor.executed if "minutes_left" in q.lower()]
+    assert len(warning_queries) >= 2
+    assert "lower(coalesce(current_status, '')) = 'nieuwe melding'" in warning_queries[0]
+    assert "lower(coalesce(current_status, '')) = 'nieuwe melding'" in warning_queries[1]
 
 
 def test_alerts_live_persists_log_events_and_cleans_up(monkeypatch):
@@ -380,6 +421,7 @@ def test_alerts_live_persists_log_events_and_cleans_up(monkeypatch):
         fetchall_values=[
             [("SD-1", now, "P1", "Nieuwe melding")],
             [("SD-2", now, 2)],
+            [],
             [("SD-3", now, 8)],
         ]
     )
@@ -423,6 +465,7 @@ def test_alerts_live_sends_teams_notification_for_new_events(monkeypatch):
         fetchall_values=[
             [("SD-1", now, "P1", "Nieuwe melding")],
             [("SD-2", now, 2)],
+            [],
             [("SD-3", now, 8)],
         ],
         fetchone_values=[(1,), (2,), (3,)],
