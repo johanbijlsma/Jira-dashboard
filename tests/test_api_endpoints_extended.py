@@ -251,6 +251,16 @@ def test_metrics_time_to_first_response_weekly_maps_rows(monkeypatch):
     assert response.json()[0]["avg_hours"] == 2.5
 
 
+def test_metrics_ttfr_overdue_weekly_maps_rows(monkeypatch):
+    cursor = _CursorStub(
+        fetchall_values=[[(datetime(2026, 1, 19, 0, 0), 3)]]
+    )
+    _patch_conn(monkeypatch, cursor)
+    response = client.get("/metrics/ttfr_overdue_weekly?date_from=2026-01-19&date_to=2026-01-26")
+    assert response.status_code == 200
+    assert response.json() == [{"week": "2026-01-19T00:00:00", "tickets": 3}]
+
+
 def test_metrics_volume_by_priority_maps_rows(monkeypatch):
     cursor = _CursorStub(fetchall_values=[[("P1", 3)]])
     _patch_conn(monkeypatch, cursor)

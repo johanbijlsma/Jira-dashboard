@@ -29,10 +29,10 @@ export const CARD_TITLES = {
   vacationServicedesk: "Vakantie Servicedesk",
 };
 
-export const KPI_KEYS = ["totalTickets", "latestTickets", "avgPerWeek", "topType", "topSubject", "topPartner"];
+export const KPI_KEYS = ["totalTickets", "latestTickets", "avgPerWeek", "ttfrOverdue", "topType", "topSubject", "topPartner"];
 export const NON_KPI_CARD_KEYS = ["topOnderwerpen", ...Object.keys(CARD_TITLES)];
 export const MAX_CARDS_PER_ROW = 5;
-export const MAX_KPI_TILES = 6;
+export const MAX_KPI_TILES = 7;
 
 export function createDefaultDashboardLayout() {
   return {

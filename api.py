@@ -42,6 +42,12 @@ ALERT_P1_ACTIVE_STATUSES = [
 ]
 ALERT_TEAMS_WEBHOOK_URL = (os.environ.get("ALERT_TEAMS_WEBHOOK_URL") or "").strip()
 ALERT_TEAMS_TIMEOUT_SECONDS = float(os.environ.get("ALERT_TEAMS_TIMEOUT_SECONDS", "3"))
+AUTO_SYNC_ENABLED = str(os.environ.get("AUTO_SYNC_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
+SYNC_INCREMENTAL_INTERVAL_SECONDS = max(15, int(os.environ.get("SYNC_INCREMENTAL_INTERVAL_SECONDS", "45")))
+SYNC_FULL_INTERVAL_HOURS = max(1, int(os.environ.get("SYNC_FULL_INTERVAL_HOURS", "24")))
+SLA_CRITICAL_MINUTES = max(1, int(os.environ.get("SLA_CRITICAL_MINUTES", "5")))
+SLA_WARNING_MINUTES = max(SLA_CRITICAL_MINUTES + 1, int(os.environ.get("SLA_WARNING_MINUTES", "30")))
+SLA_OVERDUE_MAX_AGE_HOURS = max(1, int(os.environ.get("SLA_OVERDUE_MAX_AGE_HOURS", "24")))
 CORS_ORIGINS_RAW = os.environ.get(
     "BACKEND_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
 )
@@ -61,6 +67,8 @@ _schema_checked = False
 _issue_existence_cache = {}
 _issue_existence_cache_ttl_seconds = 60
 _last_alert_log_cleanup_at = 0.0
+_auto_sync_scheduler_started = False
+_auto_sync_scheduler_lock = threading.Lock()
 DEV_ALERT_ISSUE_KEY = "DEV-ALERT-TEST"
 DEFAULT_SERVICEDESK_TEAM_MEMBERS = ["Johan", "Ashley", "Jarno"]
 DEFAULT_NON_SERVICEDESK_ONDERWERPEN = {
@@ -93,7 +101,7 @@ def conn():
     )
 
 
-def ensure_schema():
+def ensure_schema():  # pragma: no cover
     global _schema_checked
     if _schema_checked:
         return
@@ -133,6 +141,7 @@ def ensure_schema():
               started_at timestamptz not null default now(),
               finished_at timestamptz,
               mode text not null default 'incremental',
+              trigger_type text not null default 'manual',
               success boolean not null default false,
               upserts integer not null default 0,
               set_last_sync timestamptz,
@@ -194,6 +203,7 @@ def ensure_schema():
         cur.execute("alter table sync_runs add column if not exists started_at timestamptz not null default now();")
         cur.execute("alter table sync_runs add column if not exists finished_at timestamptz;")
         cur.execute("alter table sync_runs add column if not exists mode text not null default 'incremental';")
+        cur.execute("alter table sync_runs add column if not exists trigger_type text not null default 'manual';")
         cur.execute("alter table sync_runs add column if not exists success boolean not null default false;")
         cur.execute("alter table sync_runs add column if not exists upserts integer not null default 0;")
         cur.execute("alter table sync_runs add column if not exists set_last_sync timestamptz;")
@@ -430,15 +440,18 @@ def set_last_sync(ts: datetime):
 
 
 
-def create_sync_run(mode: str) -> int:
+def create_sync_run(mode: str, trigger_type: str = "manual") -> int:
+    safe_trigger_type = str(trigger_type or "manual").strip().lower()
+    if safe_trigger_type not in {"manual", "automatic"}:
+        safe_trigger_type = "manual"
     with conn() as c, c.cursor() as cur:
         cur.execute(
             """
-            insert into sync_runs(started_at, mode, success, upserts)
-            values (now(), %s, false, 0)
+            insert into sync_runs(started_at, mode, trigger_type, success, upserts)
+            values (now(), %s, %s, false, 0)
             returning id;
             """,
-            (mode,),
+            (mode, safe_trigger_type),
         )
         row = cur.fetchone()
         c.commit()
@@ -484,7 +497,30 @@ def get_sync_status_payload():
     with conn() as c, c.cursor() as cur:
         cur.execute(
             """
-            select started_at, finished_at, mode, upserts, set_last_sync
+            select started_at, finished_at, mode, trigger_type, success, upserts, set_last_sync, error
+            from sync_runs
+            order by started_at desc
+            limit 10;
+            """
+        )
+        recent_rows = cur.fetchall()
+        recent_runs = [
+            {
+                "started_at": _to_utc_z(r[0]),
+                "finished_at": _to_utc_z(r[1]),
+                "mode": r[2],
+                "trigger_type": r[3] or "manual",
+                "success": bool(r[4]),
+                "upserts": int(r[5] or 0),
+                "set_last_sync": _to_utc_z(r[6]),
+                "error": r[7],
+            }
+            for r in recent_rows
+        ]
+
+        cur.execute(
+            """
+            select started_at, finished_at, mode, trigger_type, upserts, set_last_sync
             from sync_runs
             where success = true
             order by started_at desc
@@ -497,15 +533,16 @@ def get_sync_status_payload():
                 "started_at": _to_utc_z(r[0]),
                 "finished_at": _to_utc_z(r[1]),
                 "mode": r[2],
-                "upserts": int(r[3] or 0),
-                "set_last_sync": _to_utc_z(r[4]),
+                "trigger_type": r[3] or "manual",
+                "upserts": int(r[4] or 0),
+                "set_last_sync": _to_utc_z(r[5]),
             }
             for r in successful_rows
         ]
 
         cur.execute(
             """
-            select started_at, finished_at, mode, error
+            select started_at, finished_at, mode, trigger_type, error
             from sync_runs
             where success = false
               and error is not null
@@ -520,12 +557,13 @@ def get_sync_status_payload():
                 "started_at": _to_utc_z(failed_row[0]),
                 "finished_at": _to_utc_z(failed_row[1]),
                 "mode": failed_row[2],
-                "message": failed_row[3],
+                "trigger_type": failed_row[3] or "manual",
+                "message": failed_row[4],
             }
 
         cur.execute(
             """
-            select started_at, finished_at, upserts, set_last_sync
+            select started_at, finished_at, trigger_type, upserts, set_last_sync
             from sync_runs
             where success = true
               and mode = 'full'
@@ -539,8 +577,9 @@ def get_sync_status_payload():
             last_full_sync = {
                 "started_at": _to_utc_z(full_row[0]),
                 "finished_at": _to_utc_z(full_row[1]),
-                "upserts": int(full_row[2] or 0),
-                "set_last_sync": _to_utc_z(full_row[3]),
+                "trigger_type": full_row[2] or "manual",
+                "upserts": int(full_row[3] or 0),
+                "set_last_sync": _to_utc_z(full_row[4]),
             }
 
     return {
@@ -549,9 +588,15 @@ def get_sync_status_payload():
         "last_error": _sync_last_error,
         "last_result": _sync_last_result,
         "last_sync": _to_utc_z(last),
+        "recent_runs": recent_runs,
         "successful_runs": successful_runs,
         "last_failed_run": last_failed_run,
         "last_full_sync": last_full_sync,
+        "auto_sync": {
+            "enabled": AUTO_SYNC_ENABLED,
+            "incremental_interval_seconds": SYNC_INCREMENTAL_INTERVAL_SECONDS,
+            "full_interval_hours": SYNC_FULL_INTERVAL_HOURS,
+        },
     }
 
 
@@ -665,12 +710,19 @@ def norm_first_response_due_at(v):
     """
     Parse Jira SLA field and return ISO datetime when breach is expected.
     For active SLAs Jira commonly provides ongoingCycle.breachTime.iso8601.
+    For completed/paused cycles fallback to the most recent completed breachTime.
     """
     if not isinstance(v, dict):
         return None
     ongoing = v.get("ongoingCycle") or {}
     breach_time = ongoing.get("breachTime") or {}
     iso = breach_time.get("iso8601")
+    if not iso:
+        completed = v.get("completedCycles") or []
+        if isinstance(completed, list) and completed:
+            # Prefer the last completed cycle returned by Jira.
+            latest = completed[-1] if isinstance(completed[-1], dict) else {}
+            iso = ((latest.get("breachTime") or {}).get("iso8601")) if isinstance(latest, dict) else None
     if not iso:
         return None
     dt = parse_jira_datetime(iso)
@@ -886,7 +938,7 @@ def upsert_issues(issues):
 
 
 
-def run_sync_once(full: bool = False):
+def run_sync_once(full: bool = False, trigger_type: str = "manual"):
     """
     Incremental sync op basis van 'updated' sinds last_sync.
     We gebruiken 5 minuten overlap om edge-cases te voorkomen.
@@ -906,7 +958,7 @@ def run_sync_once(full: bool = False):
         _sync_last_result = None
 
     try:
-        run_id = create_sync_run("full" if full else "incremental")
+        run_id = create_sync_run("full" if full else "incremental", trigger_type=trigger_type)
         last = None if full else get_last_sync()
         now_utc = datetime.now(timezone.utc)
 
@@ -986,6 +1038,46 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _run_auto_sync_scheduler():
+    if not AUTO_SYNC_ENABLED:
+        return
+    incremental_interval = timedelta(seconds=SYNC_INCREMENTAL_INTERVAL_SECONDS)
+    full_interval = timedelta(hours=SYNC_FULL_INTERVAL_HOURS)
+
+    last_incremental_started = datetime.now(timezone.utc) - incremental_interval
+    last_full_started = datetime.now(timezone.utc) - full_interval
+
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            full_due = now - last_full_started >= full_interval
+            incremental_due = now - last_incremental_started >= incremental_interval
+            if full_due or incremental_due:
+                result = run_sync_once(full=full_due, trigger_type="automatic")
+                if result.get("started"):
+                    started_at = datetime.now(timezone.utc)
+                    last_incremental_started = started_at
+                    if full_due:
+                        last_full_started = started_at
+        except Exception:
+            # Background scheduler must keep running even when a sync fails.
+            pass
+        time.sleep(5)
+
+
+@app.on_event("startup")
+def _startup_auto_sync_scheduler():
+    global _auto_sync_scheduler_started
+    if not AUTO_SYNC_ENABLED:
+        return
+    with _auto_sync_scheduler_lock:
+        if _auto_sync_scheduler_started:
+            return
+        thread = threading.Thread(target=_run_auto_sync_scheduler, daemon=True, name="auto-sync-scheduler")
+        thread.start()
+        _auto_sync_scheduler_started = True
 
 
 @app.get("/meta")
@@ -1520,6 +1612,76 @@ def time_to_first_response_weekly(
     ]
 
 
+@app.get("/metrics/ttfr_overdue_weekly")
+def ttfr_overdue_weekly(
+    date_from: str = Query(...),
+    date_to: str = Query(...),
+    request_type: Optional[str] = None,
+    onderwerp: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee: Optional[str] = None,
+    organization: Optional[str] = None,
+    servicedesk_only: bool = False,
+):
+    ensure_schema()
+    q = """
+    select
+      date_trunc('week', first_response_due_at) as week,
+      count(*) as tickets
+    from issues
+    where resolved_at is null
+      and lower(coalesce(current_status, '')) = 'nieuwe melding'
+      and first_response_due_at is not null
+      and first_response_due_at < now()
+      and first_response_due_at >= %s::timestamptz
+      and first_response_due_at < (%s::timestamptz + interval '1 day')
+      and (%s is null or request_type = %s)
+      and (%s is null or onderwerp_logging = %s)
+      and (%s is null or priority = %s)
+      and (%s is null or assignee = %s)
+      and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
+      and (
+        not %s
+        or (
+          assignee is not null
+          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging is not null
+          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+        )
+      )
+    group by 1
+    order by 1;
+    """
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            q,
+            (
+                date_from,
+                date_to,
+                request_type,
+                request_type,
+                onderwerp,
+                onderwerp,
+                priority,
+                priority,
+                assignee,
+                assignee,
+                organization,
+                organization,
+                servicedesk_only,
+            ),
+        )
+        rows = cur.fetchall()
+
+    return [
+        {
+            "week": r[0].isoformat(),
+            "tickets": int(r[1] or 0),
+        }
+        for r in rows
+    ]
+
+
 @app.get("/metrics/volume_by_priority")
 def volume_by_priority(
     date_from: str = Query(...),
@@ -1843,8 +2005,9 @@ def alerts_live(servicedesk_only: bool = True):
     """
     Live alert feed for dashboard badges/cards.
     - priority1: open P1 tickets
-    - first_response_due_soon: status 'Nieuwe melding' and SLA breach within 5 minutes
-    - first_response_overdue: status 'Nieuwe melding' and SLA already breached
+    - first_response_due_warning: status 'Nieuwe melding' and SLA breach within 30 minutes
+    - first_response_due_critical: status 'Nieuwe melding' and SLA breach within 5 minutes
+    - first_response_overdue: not accepted yet ('Nieuwe melding') and SLA already breached
     """
     ensure_schema()
     with conn() as c, c.cursor() as cur:
@@ -1853,13 +2016,15 @@ def alerts_live(servicedesk_only: bool = True):
             select issue_key, created_at, priority, current_status
             from issues
             where created_at >= now() - interval '24 hours'
-              and (
+      and (
         not %s
         or (
-          assignee is not null
-          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-          and onderwerp_logging is not null
+          onderwerp_logging is not null
           and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+          and (
+            assignee is null
+            or assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          )
         )
       )
             order by created_at desc
@@ -1879,23 +2044,55 @@ def alerts_live(servicedesk_only: bool = True):
             where resolved_at is null
               and lower(coalesce(current_status, '')) = 'nieuwe melding'
               and first_response_due_at is not null
-              and first_response_due_at >= now()
-              and first_response_due_at <= now() + interval '5 minutes'
-              and (
+              and first_response_due_at > now() + make_interval(mins => %s)
+              and first_response_due_at <= now() + make_interval(mins => %s)
+      and (
         not %s
         or (
-          assignee is not null
-          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-          and onderwerp_logging is not null
+          onderwerp_logging is not null
           and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+          and (
+            assignee is null
+            or assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          )
         )
       )
             order by first_response_due_at asc
             limit 25;
             """,
-            (servicedesk_only,),
+            (SLA_CRITICAL_MINUTES, SLA_WARNING_MINUTES, servicedesk_only),
         )
-        sla_rows = cur.fetchall()
+        warning_rows = cur.fetchall()
+
+        cur.execute(
+            """
+            select
+              issue_key,
+              first_response_due_at,
+              greatest(0, ceil(extract(epoch from (first_response_due_at - now())) / 60.0))::int as minutes_left
+            from issues
+            where resolved_at is null
+              and lower(coalesce(current_status, '')) = 'nieuwe melding'
+              and first_response_due_at is not null
+              and first_response_due_at >= now()
+              and first_response_due_at <= now() + make_interval(mins => %s)
+      and (
+        not %s
+        or (
+          onderwerp_logging is not null
+          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+          and (
+            assignee is null
+            or assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          )
+        )
+      )
+            order by first_response_due_at asc
+            limit 25;
+            """,
+            (SLA_CRITICAL_MINUTES, servicedesk_only),
+        )
+        critical_rows = cur.fetchall()
 
         cur.execute(
             """
@@ -1908,23 +2105,26 @@ def alerts_live(servicedesk_only: bool = True):
               and lower(coalesce(current_status, '')) = 'nieuwe melding'
               and first_response_due_at is not null
               and first_response_due_at < now()
-              and (
+              and first_response_due_at >= now() - make_interval(hours => %s)
+      and (
         not %s
         or (
-          assignee is not null
-          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-          and onderwerp_logging is not null
+          onderwerp_logging is not null
           and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+          and (
+            assignee is null
+            or assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          )
         )
       )
             order by first_response_due_at asc
             limit 25;
             """,
-            (servicedesk_only,),
+            (SLA_OVERDUE_MAX_AGE_HOURS, servicedesk_only),
         )
         overdue_rows = cur.fetchall()
 
-    all_keys = [r[0] for r in p1_rows] + [r[0] for r in sla_rows] + [r[0] for r in overdue_rows]
+    all_keys = [r[0] for r in p1_rows] + [r[0] for r in warning_rows] + [r[0] for r in critical_rows] + [r[0] for r in overdue_rows]
     existing_keys = _jira_existing_issue_keys(all_keys)
 
     priority_items = [
@@ -1937,13 +2137,22 @@ def alerts_live(servicedesk_only: bool = True):
         for r in p1_rows
         if r[0] in existing_keys
     ]
-    due_soon_items = [
+    due_warning_items = [
         {
             "issue_key": r[0],
             "due_at": r[1].isoformat() if r[1] else None,
             "minutes_left": int(r[2] or 0),
         }
-        for r in sla_rows
+        for r in warning_rows
+        if r[0] in existing_keys
+    ]
+    due_critical_items = [
+        {
+            "issue_key": r[0],
+            "due_at": r[1].isoformat() if r[1] else None,
+            "minutes_left": int(r[2] or 0),
+        }
+        for r in critical_rows
         if r[0] in existing_keys
     ]
     overdue_items = [
@@ -1970,12 +2179,22 @@ def alerts_live(servicedesk_only: bool = True):
     log_events.extend(
         {
             "issue_key": item["issue_key"],
-            "alert_kind": "SLA_SOON",
+            "alert_kind": "SLA_WARNING",
             "status": None,
             "meta": f"{int(item.get('minutes_left') or 0)} min",
             "servicedesk_only": servicedesk_only,
         }
-        for item in due_soon_items
+        for item in due_warning_items
+    )
+    log_events.extend(
+        {
+            "issue_key": item["issue_key"],
+            "alert_kind": "SLA_CRITICAL",
+            "status": None,
+            "meta": f"{int(item.get('minutes_left') or 0)} min",
+            "servicedesk_only": servicedesk_only,
+        }
+        for item in due_critical_items
     )
     log_events.extend(
         {
@@ -1992,11 +2211,14 @@ def alerts_live(servicedesk_only: bool = True):
         _maybe_cleanup_alert_logs(cur)
         inserted_events = _persist_alert_log_events(cur, log_events)
         c.commit()
-    _send_teams_alert_notification(inserted_events)
+    teams_events = [e for e in inserted_events if e.get("alert_kind") in {"P1", "SLA_CRITICAL"}]
+    _send_teams_alert_notification(teams_events)
 
     return {
         "priority1": priority_items,
-        "first_response_due_soon": due_soon_items,
+        "first_response_due_soon": due_warning_items,
+        "first_response_due_warning": due_warning_items,
+        "first_response_due_critical": due_critical_items,
         "first_response_overdue": overdue_items,
     }
 
@@ -2285,12 +2507,12 @@ def status():
 @app.post("/sync")
 def sync(background_tasks: BackgroundTasks):
     # in background zodat je UI niet blokkeert
-    background_tasks.add_task(run_sync_once)
+    background_tasks.add_task(run_sync_once, False, "manual")
     return {"queued": True}
 
 
 @app.post("/sync/full")
 def sync_full(background_tasks: BackgroundTasks):
     # full sync: negeer last_sync en haal alles opnieuw op
-    background_tasks.add_task(run_sync_once, True)
+    background_tasks.add_task(run_sync_once, True, "manual")
     return {"queued": True, "mode": "full"}
