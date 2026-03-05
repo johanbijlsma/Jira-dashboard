@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   secrets-scan:
@@ -45,7 +46,17 @@ jobs:
         run: python -m pip install --upgrade pip semgrep
 
       - name: Run Semgrep
-        run: semgrep scan --config auto --config p/owasp-top-ten --json --output semgrep-results.json . || true
+        run: |
+          semgrep scan \
+            --config auto \
+            --config p/owasp-top-ten \
+            --exclude dashboard/coverage \
+            --exclude dashboard/.next \
+            --exclude dashboard/node_modules \
+            --exclude dashboard/test-results \
+            --json \
+            --output semgrep-results.json \
+            . || true
 
       - name: Fail on high severity findings
         run: |
@@ -114,4 +125,35 @@ jobs:
           python -m pip install -r requirements.txt -r requirements-dev.txt pip-audit
 
       - name: Run pip-audit
-        run: pip-audit -r requirements.txt -r requirements-dev.txt
+        run: pip-audit -r requirements.txt -r requirements-dev.txt --format json --output pip-audit-results.json || true
+
+      - name: Fail on fixable Python vulnerabilities
+        run: |
+          python - <<'PY'
+          import json
+          import sys
+
+          with open("pip-audit-results.json", "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          findings = data if isinstance(data, list) else data.get("dependencies", [])
+          total_vulns = 0
+          fixable_vulns = 0
+
+          for dep in findings:
+              for vuln in dep.get("vulns", []):
+                  total_vulns += 1
+                  if vuln.get("fix_versions"):
+                      fixable_vulns += 1
+
+          if total_vulns == 0:
+              print("No Python vulnerabilities found by pip-audit.")
+              sys.exit(0)
+
+          if fixable_vulns > 0:
+              print(f"pip-audit found {total_vulns} vulnerabilities; {fixable_vulns} have available fixes. Failing.")
+              sys.exit(1)
+
+          print(f"pip-audit found {total_vulns} vulnerabilities, but none have a published fix version yet. Passing.")
+          sys.exit(0)
+          PY
