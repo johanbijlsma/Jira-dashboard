@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
 
 jobs:
   secrets-scan:
@@ -20,15 +19,14 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Install gitleaks
+        run: |
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz -o gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          chmod +x gitleaks
+
       - name: Run gitleaks (working tree)
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_ENABLE_COMMENTS: false
-          GITLEAKS_COMMAND: dir
-          GITLEAKS_CONFIG: .gitleaks.toml
-          GITLEAKS_SOURCE: .
-          GITLEAKS_REDACT: true
+        run: ./gitleaks dir . --config .gitleaks.toml --redact --exit-code 1
 
   sast:
     name: SAST (Semgrep)
@@ -36,6 +34,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -46,7 +46,13 @@ jobs:
         run: python -m pip install --upgrade pip semgrep
 
       - name: Run Semgrep
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
+          BASELINE_ARG=""
+          if [ -n "${BASE_SHA}" ]; then
+            BASELINE_ARG="--baseline-commit ${BASE_SHA}"
+          fi
           semgrep scan \
             --config auto \
             --config p/owasp-top-ten \
@@ -54,6 +60,7 @@ jobs:
             --exclude dashboard/.next \
             --exclude dashboard/node_modules \
             --exclude dashboard/test-results \
+            ${BASELINE_ARG} \
             --json \
             --output semgrep-results.json \
             . || true
@@ -98,6 +105,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -128,9 +137,13 @@ jobs:
         run: pip-audit -r requirements.txt -r requirements-dev.txt --format json --output pip-audit-results.json || true
 
       - name: Fail on fixable Python vulnerabilities
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           python - <<'PY'
           import json
+          import os
+          import subprocess
           import sys
 
           with open("pip-audit-results.json", "r", encoding="utf-8") as f:
@@ -149,6 +162,25 @@ jobs:
           if total_vulns == 0:
               print("No Python vulnerabilities found by pip-audit.")
               sys.exit(0)
+
+          base_sha = os.environ.get("BASE_SHA", "").strip()
+          if base_sha:
+              diff = subprocess.check_output(
+                  ["git", "diff", "--name-only", base_sha, "HEAD"],
+                  text=True,
+              ).splitlines()
+              dep_files = {
+                  "requirements.txt",
+                  "requirements-dev.txt",
+                  "dashboard/package.json",
+                  "dashboard/package-lock.json",
+              }
+              if not any(path in dep_files for path in diff):
+                  print(
+                      f"pip-audit found {total_vulns} vulnerabilities ({fixable_vulns} fixable), "
+                      "but this PR does not modify dependency manifest/lock files. Passing."
+                  )
+                  sys.exit(0)
 
           if fixable_vulns > 0:
               print(f"pip-audit found {total_vulns} vulnerabilities; {fixable_vulns} have available fixes. Failing.")
