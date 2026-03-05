@@ -1,0 +1,11 @@
+title = "Jira-dashboard gitleaks config"
+
+[allowlist]
+description = "Allow known placeholders and docs examples"
+regexes = [
+  '''(?i)example|dummy|sample|placeholder|changeme|test[_-]?key''',
+]
+paths = [
+  '''(^|/)\.env\.example$''',
+  '''(^|/)docs/.*''',
+]
