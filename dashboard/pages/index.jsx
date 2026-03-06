@@ -10,7 +10,7 @@ import {
   PointElement,
   Tooltip,
 } from "chart.js";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { parseNlDateToIso } from "../lib/date";
 import { buildUpcomingWarningText, businessDaysUntil } from "../lib/vacation-banner";
 import Link from "next/link";
@@ -87,6 +87,72 @@ function alertFaviconDataUri(color, ring = false) {
     : `<circle cx='32' cy='32' r='26' fill='${color}' opacity='0.95'/>`;
   const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='12' fill='#0f172a'/>${ringSvg}</svg>`;
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+function alertKindLabel(kind) {
+  if (kind === "P1") return "P1";
+  if (kind === "SLA_OVERDUE") return "SLA verlopen";
+  if (kind === "LOGBOOK_EVENT") return "Logboek";
+  return "SLA bijna";
+}
+
+function alertKindPillStyle(kind) {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    padding: "2px 8px",
+    borderRadius: 999,
+    fontWeight: 700,
+    fontSize: 12,
+    border: "1px solid",
+    borderColor:
+      kind === "P1"
+        ? "rgba(127, 29, 29, 0.42)"
+        : kind === "LOGBOOK_EVENT"
+          ? "rgba(71, 85, 105, 0.42)"
+        : kind === "SLA_OVERDUE"
+          ? "rgba(126, 34, 206, 0.42)"
+          : "rgba(180, 83, 9, 0.42)",
+    background:
+      kind === "P1"
+        ? "color-mix(in srgb, #ef4444 18%, var(--surface))"
+        : kind === "LOGBOOK_EVENT"
+          ? "color-mix(in srgb, #64748b 14%, var(--surface))"
+        : kind === "SLA_OVERDUE"
+          ? "color-mix(in srgb, #a855f7 16%, var(--surface))"
+          : "color-mix(in srgb, #f59e0b 16%, var(--surface))",
+    color:
+      kind === "P1"
+        ? "#b91c1c"
+        : kind === "LOGBOOK_EVENT"
+          ? "#334155"
+        : kind === "SLA_OVERDUE"
+          ? "#7e22ce"
+          : "#b45309",
+  };
+}
+
+function formatAlertLogbookClearMessage(detectedAt, reason) {
+  const dt = detectedAt ? new Date(detectedAt) : null;
+  if (!dt || Number.isNaN(dt.getTime())) return "Het Alerts logboek is geleegd.";
+  const datePart = new Intl.DateTimeFormat("nl-NL", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    timeZone: "Europe/Amsterdam",
+  })
+    .format(dt)
+    .replaceAll("/", "-");
+  const timePart = new Intl.DateTimeFormat("nl-NL", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Europe/Amsterdam",
+  }).format(dt);
+  if (reason === "AUTO_CLEANUP") {
+    return `Het Alerts logboek is geleegd op ${datePart} om ${timePart} (geautomatiseerd).`;
+  }
+  return `Het Alerts logboek is geleegd op ${datePart} om ${timePart}.`;
 }
 
 export default function Home() {
@@ -187,6 +253,9 @@ export default function Home() {
   const [drillOffset, setDrillOffset] = useState(0);
   const [drillHasNext, setDrillHasNext] = useState(false);
   const [alertLogEntries, setAlertLogEntries] = useState([]);
+  const [hasNewAlertLogEntry, setHasNewAlertLogEntry] = useState(false);
+  const [clearAlertLogsBusy, setClearAlertLogsBusy] = useState(false);
+  const [expandedAlertGroups, setExpandedAlertGroups] = useState({});
   const [faviconPulseOn, setFaviconPulseOn] = useState(false);
   const drillPanelRef = useRef(null);
   const drillCloseRef = useRef(null);
@@ -204,6 +273,9 @@ export default function Home() {
   const autoSyncAttemptRef = useRef(0);
   const autoResetTimerRef = useRef(null);
   const seenLiveAlertKeysRef = useRef(new Set());
+  const alertLogLatestMarkerRef = useRef("");
+  const alertLogBootstrappedRef = useRef(false);
+  const sidePanelModeRef = useRef("");
   const dragStateRef = useRef(null);
   const [layoutSavedSnapshot, setLayoutSavedSnapshot] = useState("");
   const [isLayoutEditing, setIsLayoutEditing] = useState(false);
@@ -287,6 +359,32 @@ export default function Home() {
       label: `${fmtDate(from)} t/m ${fmtDate(to)} (${completed.length} volledige weken)`,
     };
   }, [dateFrom, dateTo]);
+  const alertLogGroups = useMemo(() => {
+    const grouped = new Map();
+    for (const entry of alertLogEntries) {
+      const key = `${entry.kind || ""}:${entry.issue_key || ""}`;
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          key,
+          issue_key: entry.issue_key,
+          kind: entry.kind,
+          status: entry.status,
+          latest_detected_at: entry.detected_at,
+          latest_meta: entry.meta,
+          count: 0,
+          entries: [],
+        });
+      }
+      const group = grouped.get(key);
+      group.count += 1;
+      group.entries.push(entry);
+    }
+    return Array.from(grouped.values());
+  }, [alertLogEntries]);
+  const hasClearableAlertEntries = useMemo(
+    () => alertLogEntries.some((entry) => entry.kind !== "LOGBOOK_EVENT"),
+    [alertLogEntries]
+  );
 
   const closeDrilldown = useCallback(() => {
     setSidePanelMode("");
@@ -307,6 +405,11 @@ export default function Home() {
     }
     closeDrilldown();
   }, [closeDrilldown, sidePanelMode]);
+
+  const openAlertLogPanel = useCallback(() => {
+    setHasNewAlertLogEntry(false);
+    setSidePanelMode("alerts");
+  }, []);
 
   const flashToast = useCallback((message, kind = "success", ms = 3000) => {
     setSyncMessage(message);
@@ -508,7 +611,7 @@ export default function Home() {
   const refreshAlertLogs = useCallback(async () => {
     const params = new URLSearchParams();
     params.set("limit", String(ALERT_LOG_LIMIT));
-    if (servicedeskOnly) params.set("servicedesk_only", "true");
+    params.set("servicedesk_only", servicedeskOnly ? "true" : "false");
     const r = await fetch(`${API}/alerts/logs?${params.toString()}`);
     const data = await r.json();
     const normalized = Array.isArray(data)
@@ -521,12 +624,20 @@ export default function Home() {
           meta: String(entry?.meta || ""),
         }))
       : [];
+    const latestMarker = normalized[0] ? `${normalized[0].id}:${normalized[0].detected_at || ""}` : "";
+    const prevMarker = alertLogLatestMarkerRef.current;
+    if (!alertLogBootstrappedRef.current) {
+      alertLogBootstrappedRef.current = true;
+    } else if (latestMarker && latestMarker !== prevMarker && sidePanelModeRef.current !== "alerts") {
+      setHasNewAlertLogEntry(true);
+    }
+    alertLogLatestMarkerRef.current = latestMarker;
     setAlertLogEntries(normalized);
   }, [servicedeskOnly, ALERT_LOG_LIMIT]);
 
   const refreshLiveAlerts = useCallback(async () => {
     const params = new URLSearchParams();
-    if (servicedeskOnly) params.set("servicedesk_only", "true");
+    params.set("servicedesk_only", servicedeskOnly ? "true" : "false");
     const r = await fetch(`${API}/alerts/live?${params.toString()}`);
     const data = await r.json();
     const warningItems = Array.isArray(data?.first_response_due_warning)
@@ -585,6 +696,35 @@ export default function Home() {
     }
     await refreshAlertLogs();
   }, [flashToast, servicedeskOnly, refreshAlertLogs]);
+
+  const toggleAlertGroup = useCallback((groupKey) => {
+    setExpandedAlertGroups((prev) => ({
+      ...prev,
+      [groupKey]: !prev[groupKey],
+    }));
+  }, []);
+
+  const clearAlertLogs = useCallback(async () => {
+    setClearAlertLogsBusy(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("servicedesk_only", servicedeskOnly ? "true" : "false");
+      const response = await fetch(`${API}/alerts/logs/clear?${params.toString()}`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err?.detail || "Alertlog legen mislukt.");
+      }
+      setExpandedAlertGroups({});
+      await refreshAlertLogs();
+      flashToast("Alertlog geleegd");
+    } catch (err) {
+      flashToast(err?.message || "Alertlog legen mislukt.", "error");
+    } finally {
+      setClearAlertLogsBusy(false);
+    }
+  }, [flashToast, refreshAlertLogs, servicedeskOnly]);
 
   const refreshVacations = useCallback(async () => {
     const [allRes, upcomingRes, todayRes] = await Promise.all([
@@ -939,6 +1079,19 @@ export default function Home() {
       .then(setSyncStatus)
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    sidePanelModeRef.current = sidePanelMode;
+    if (sidePanelMode === "alerts") {
+      setHasNewAlertLogEntry(false);
+    }
+  }, [sidePanelMode]);
+
+  useEffect(() => {
+    alertLogLatestMarkerRef.current = "";
+    alertLogBootstrappedRef.current = false;
+    setHasNewAlertLogEntry(false);
+  }, [servicedeskOnly]);
 
   useEffect(() => {
     refreshLiveAlerts().catch(() => {});
@@ -2433,8 +2586,10 @@ export default function Home() {
   const cardTitleHintStyle = {
     fontSize: 12,
     fontWeight: 600,
-    color: "var(--accent)",
-    opacity: 0.9,
+    color: "var(--text-muted)",
+    opacity: 0.75,
+    display: "inline-flex",
+    alignItems: "center",
   };
   const vacationActionButtonStyle = {
     ...buttonBaseStyle,
@@ -3600,8 +3755,8 @@ export default function Home() {
           <div style={headerPrimaryButtonsStyle}>
             <button
               type="button"
-              onClick={() => setSidePanelMode("alerts")}
-              style={{ ...layoutPrimaryButtonStyle, width: 36, padding: 0, justifyContent: "center" }}
+              onClick={openAlertLogPanel}
+              style={{ ...layoutPrimaryButtonStyle, width: 36, padding: 0, justifyContent: "center", position: "relative" }}
               title="Alerts logboek openen"
               aria-label="Alerts logboek openen"
             >
@@ -3614,13 +3769,46 @@ export default function Home() {
                   strokeLinejoin="round"
                 />
               </svg>
+              {hasNewAlertLogEntry ? (
+                <span
+                  aria-hidden="true"
+                  style={{
+                    position: "absolute",
+                    top: 6,
+                    right: 6,
+                    width: 8,
+                    height: 8,
+                    borderRadius: 999,
+                    background: "#dc2626",
+                    boxShadow: "0 0 0 1px var(--surface)",
+                  }}
+                />
+              ) : null}
             </button>
             {isLayoutEditing ? (
               <button type="button" onClick={cancelLayoutEditing} style={filterOpenButtonStyle}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path
+                    d="M18 6L6 18M6 6l12 12"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
                 Annuleren
               </button>
             ) : (
               <button type="button" onClick={startLayoutEditing} style={filterOpenButtonStyle}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path
+                    d="M3 17.25V21h3.75L19.81 7.94l-3.75-3.75L3 17.25zM14.06 5.94l3.75 3.75"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
                 Layout aanpassen
               </button>
             )}
@@ -4176,11 +4364,23 @@ export default function Home() {
                       className="card-expand-title"
                       style={cardTitleButtonStyle}
                       onClick={() => setExpandedCard(cardKey)}
+                      title="Vergroot kaart"
+                      aria-label={`${cardTitleByKey(cardKey)} vergroten`}
                     >
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                         <span style={chartTitleStyle}>{cardTitleByKey(cardKey)}</span>
                       </span>
-                      <span style={cardTitleHintStyle}>Vergroot</span>
+                      <span style={cardTitleHintStyle} aria-hidden="true">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                          <path
+                            d="M4 10V4h6M20 14v6h-6M14 4h6v6M10 20H4v-6"
+                            stroke="currentColor"
+                            strokeWidth="1.8"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </span>
                     </button>
                   )}
                   {isLayoutEditing ? (
@@ -4329,6 +4529,15 @@ export default function Home() {
             <h3 style={hiddenOverlayTitleStyle}>Verborgen kaarten</h3>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <button type="button" onClick={toggleTvMode} style={filterOpenButtonStyle}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path
+                    d="M3 5h18v12H3zM8 19h8"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
                 {isTvMode ? "TV-modus uit" : "TV-modus aan"}
               </button>
               <button type="button" onClick={resetLayoutAndClose} style={filterOpenButtonStyle}>
@@ -4338,6 +4547,15 @@ export default function Home() {
                 Opnieuw beginnen
               </button>
               <button type="button" onClick={saveDashboardLayout} style={layoutPrimaryButtonStyle} disabled={!layoutDirty}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path
+                    d="M5 3h11l3 3v15H5zM8 3v6h8V3M8 21v-7h8v7"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
                 Opslaan layout
               </button>
             </div>
@@ -4480,7 +4698,7 @@ export default function Home() {
               <>
                 <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Alerts</div>
                 <div style={{ fontSize: 16 }}>
-                  Alerts logboek — <b>{alertLogEntries.length}</b> gebeurtenissen
+                  Alerts logboek — <b>{alertLogGroups.length}</b> groepen / <b>{alertLogEntries.length}</b> gebeurtenissen
                 </div>
               </>
             ) : (
@@ -4527,6 +4745,39 @@ export default function Home() {
               <span style={{ color: "var(--text-muted)" }}>
                 Meest recente alerts bovenaan
               </span>
+              <button
+                onClick={() => {
+                  if (typeof window !== "undefined") {
+                    const ok = window.confirm("Weet je zeker dat je dit alertlogboek wilt legen?");
+                    if (!ok) return;
+                  }
+                  clearAlertLogs();
+                }}
+                disabled={clearAlertLogsBusy || !hasClearableAlertEntries}
+                style={{
+                  marginLeft: "auto",
+                  background: clearAlertLogsBusy ? "var(--surface-muted)" : "#fff5f5",
+                  color: "#991b1b",
+                  border: "1px solid color-mix(in srgb, #b91c1c 40%, var(--border))",
+                  borderRadius: 8,
+                  padding: "6px 10px",
+                  cursor: clearAlertLogsBusy || !hasClearableAlertEntries ? "not-allowed" : "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path
+                    d="M4 7h16M9 7V5h6v2m-8 0l1 12h8l1-12M10 11v5m4-5v5"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                {clearAlertLogsBusy ? "Legen..." : "Logboek legen"}
+              </button>
             </div>
           </div>
         ) : (
@@ -4594,58 +4845,91 @@ export default function Home() {
                       <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Tijd</th>
                       <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Soort</th>
                       <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Issue</th>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Status</th>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Info</th>
+                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Laatste info</th>
+                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Aantal</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {alertLogEntries.map((entry) => (
-                      <tr key={entry.id}>
-                        <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
-                          {fmtDateTime(entry.detected_at)}
-                        </td>
-                        <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
-                          <span
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              padding: "2px 8px",
-                              borderRadius: 999,
-                              fontWeight: 700,
-                              fontSize: 12,
-                              border: "1px solid",
-                              borderColor:
-                                entry.kind === "P1"
-                                  ? "rgba(127, 29, 29, 0.42)"
-                                  : entry.kind === "SLA_OVERDUE"
-                                    ? "rgba(126, 34, 206, 0.42)"
-                                    : "rgba(180, 83, 9, 0.42)",
-                              background:
-                                entry.kind === "P1"
-                                  ? "color-mix(in srgb, #ef4444 18%, var(--surface))"
-                                  : entry.kind === "SLA_OVERDUE"
-                                    ? "color-mix(in srgb, #a855f7 16%, var(--surface))"
-                                    : "color-mix(in srgb, #f59e0b 16%, var(--surface))",
-                              color:
-                                entry.kind === "P1"
-                                  ? "#b91c1c"
-                                  : entry.kind === "SLA_OVERDUE"
-                                    ? "#7e22ce"
-                                    : "#b45309",
-                            }}
-                          >
-                            {entry.kind === "P1" ? "P1" : entry.kind === "SLA_OVERDUE" ? "SLA verlopen" : "SLA bijna"}
-                          </span>
-                        </td>
-                        <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
-                          <a href={`${JIRA_BASE}/browse/${entry.issue_key}`} target="_blank" rel="noreferrer">
-                            {entry.issue_key}
-                          </a>
-                        </td>
-                        <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>{entry.status || "—"}</td>
-                        <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>{entry.meta || "—"}</td>
-                      </tr>
-                    ))}
+                    {alertLogGroups.map((group) => {
+                      const expanded = !!expandedAlertGroups[group.key];
+                      return (
+                        <Fragment key={group.key}>
+                          <tr>
+                            <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                              {fmtDateTime(group.latest_detected_at)}
+                            </td>
+                            <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                              <span style={alertKindPillStyle(group.kind)}>{alertKindLabel(group.kind)}</span>
+                            </td>
+                            <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                              {group.kind === "LOGBOOK_EVENT" ? (
+                                "—"
+                              ) : (
+                                <a href={`${JIRA_BASE}/browse/${group.issue_key}`} target="_blank" rel="noreferrer">
+                                  {group.issue_key}
+                                </a>
+                              )}
+                            </td>
+                            <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                              {group.kind === "LOGBOOK_EVENT"
+                                ? formatAlertLogbookClearMessage(group.latest_detected_at, group.status)
+                                : (group.latest_meta || "—")}
+                            </td>
+                            <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                              {group.count > 1 ? (
+                                <button
+                                  onClick={() => toggleAlertGroup(group.key)}
+                                  aria-label={expanded ? "Inklappen" : "Uitklappen"}
+                                  title={expanded ? "Inklappen" : "Uitklappen"}
+                                  style={{
+                                    border: "1px solid var(--border)",
+                                    borderRadius: 6,
+                                    background: "var(--surface)",
+                                    padding: "4px 8px",
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  {expanded ? "▲" : "▼"} ({group.count}x)
+                                </button>
+                              ) : (
+                                ""
+                              )}
+                            </td>
+                          </tr>
+                          {expanded ? (
+                            <tr>
+                              <td colSpan={5} style={{ padding: "0 8px 10px 8px", background: "var(--surface-muted)" }}>
+                                <div style={{ padding: "10px 12px", border: "1px solid var(--border)", borderRadius: 8, marginTop: 6 }}>
+                                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>
+                                    Detailhistorie ({group.count} gebeurtenissen)
+                                  </div>
+                                  <div style={{ overflowX: "auto" }}>
+                                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                                      <thead>
+                                        <tr>
+                                          <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "6px" }}>Tijd</th>
+                                          <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "6px" }}>Info</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {group.entries.map((entry) => (
+                                          <tr key={entry.id}>
+                                            <td style={{ borderBottom: "1px solid var(--border)", padding: "6px" }}>
+                                              {fmtDateTime(entry.detected_at)}
+                                            </td>
+                                            <td style={{ borderBottom: "1px solid var(--border)", padding: "6px" }}>{entry.meta || "—"}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          ) : null}
+                        </Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
