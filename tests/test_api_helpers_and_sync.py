@@ -17,6 +17,10 @@ class CursorStub:
 
     def execute(self, query, params=None):
         self.executed.append((query, params))
+        if "delete from alert_logs" in query.lower():
+            self.rowcount = 1
+        else:
+            self.rowcount = 0
 
     def fetchall(self):
         if self.fetchall_values:
@@ -127,15 +131,14 @@ def test_normalizers_and_priority_helpers(monkeypatch):
         {"ongoingCycle": {"breachTime": {"iso8601": "2026-02-25T12:00:00+0200"}}}
     )
     assert dt.isoformat() == "2026-02-25T10:00:00"
-    dt_completed = api.norm_first_response_due_at(
+    assert api.norm_first_response_due_at(
         {
             "completedCycles": [
                 {"breachTime": {"iso8601": "2026-02-25T09:00:00+0000"}},
                 {"breachTime": {"iso8601": "2026-02-25T10:30:00+0000"}},
             ]
         }
-    )
-    assert dt_completed.isoformat() == "2026-02-25T10:30:00"
+    ) is None
     assert api.norm_first_response_due_at({"ongoingCycle": {"breachTime": {}}}) is None
 
     monkeypatch.setattr(api, "ALERT_P1_PRIORITIES", ["kritiek"])
@@ -457,6 +460,31 @@ def test_alerts_logs_endpoint_maps_rows(monkeypatch):
     assert data[0]["issue_key"] == "SD-1"
     assert data[0]["kind"] == "P1"
     assert data[0]["servicedesk_only"] is True
+
+
+def test_alerts_logs_clear_endpoint_deletes_scope(monkeypatch):
+    cursor = CursorStub()
+    patch_conn(monkeypatch, cursor)
+
+    response = client.post("/alerts/logs/clear?servicedesk_only=true")
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["servicedesk_only"] is True
+    assert any("delete from alert_logs" in q.lower() for q, _ in cursor.executed)
+    assert any("insert into alert_logs" in q.lower() for q, _ in cursor.executed)
+
+
+def test_alert_log_cleanup_adds_logbook_event_when_rows_removed(monkeypatch):
+    cursor = CursorStub()
+    monkeypatch.setattr(api, "_last_alert_log_cleanup_at", 0.0)
+    monkeypatch.setattr(api.time, "time", lambda: 999999.0)
+
+    api._maybe_cleanup_alert_logs(cursor)
+
+    inserts = [params for q, params in cursor.executed if "insert into alert_logs" in q.lower()]
+    assert len(inserts) == 2
+    assert inserts[0][1] == "LOGBOOK_EVENT"
+    assert inserts[0][2] == "AUTO_CLEANUP"
 
 
 def test_alerts_live_sends_teams_notification_for_new_events(monkeypatch):

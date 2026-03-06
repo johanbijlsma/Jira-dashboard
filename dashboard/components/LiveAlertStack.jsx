@@ -11,7 +11,7 @@ export default function LiveAlertStack({ alerts }) {
 
   const shellStyle = {
     position: "fixed",
-    top: 16,
+    top: 52,
     right: 16,
     zIndex: 1004,
     width: "min(420px, calc(100vw - 32px))",
@@ -102,7 +102,7 @@ export default function LiveAlertStack({ alerts }) {
         >
           <div style={titleRowStyle}>
             <span style={{ fontSize: 11, border: "1px solid rgba(255,237,213,0.45)", borderRadius: 999, padding: "2px 8px" }}>
-              SLA W
+              SLA
             </span>
             <span>First response waarschuwing (&lt;30m)</span>
             <strong style={{ marginLeft: "auto", fontSize: 12 }}>{slaWarningItems.length}</strong>

@@ -710,19 +710,13 @@ def norm_first_response_due_at(v):
     """
     Parse Jira SLA field and return ISO datetime when breach is expected.
     For active SLAs Jira commonly provides ongoingCycle.breachTime.iso8601.
-    For completed/paused cycles fallback to the most recent completed breachTime.
+    Completed/paused cycles should not drive live TTFR alerts.
     """
     if not isinstance(v, dict):
         return None
     ongoing = v.get("ongoingCycle") or {}
     breach_time = ongoing.get("breachTime") or {}
     iso = breach_time.get("iso8601")
-    if not iso:
-        completed = v.get("completedCycles") or []
-        if isinstance(completed, list) and completed:
-            # Prefer the last completed cycle returned by Jira.
-            latest = completed[-1] if isinstance(completed[-1], dict) else {}
-            iso = ((latest.get("breachTime") or {}).get("iso8601")) if isinstance(latest, dict) else None
     if not iso:
         return None
     dt = parse_jira_datetime(iso)
@@ -760,7 +754,32 @@ def _maybe_cleanup_alert_logs(cur):
     if now_ts - _last_alert_log_cleanup_at < 3600:
         return
     cur.execute("delete from alert_logs where detected_at < now() - interval '30 days';")
+    deleted_count = int(getattr(cur, "rowcount", 0) or 0)
+    if deleted_count > 0:
+        _insert_alert_logbook_event(cur, servicedesk_only=True, reason="AUTO_CLEANUP", removed_count=deleted_count)
+        _insert_alert_logbook_event(cur, servicedesk_only=False, reason="AUTO_CLEANUP", removed_count=deleted_count)
     _last_alert_log_cleanup_at = now_ts
+
+
+def _insert_alert_logbook_event(cur, servicedesk_only: bool, reason: str, removed_count: Optional[int] = None):
+    # Use a unique synthetic key so each clear/cleanup action stays visible in the logbook.
+    event_key = f"LOGBOOK-EVENT-{reason}-{int(time.time() * 1000)}"
+    extra = f" ({int(removed_count)} verwijderd)" if removed_count is not None else ""
+    cur.execute(
+        """
+        insert into alert_logs(issue_key, alert_kind, status, meta, status_key, meta_key, servicedesk_only, detected_at, logged_on)
+        values (%s, %s, %s, %s, %s, %s, %s, now(), current_date);
+        """,
+        (
+            event_key,
+            "LOGBOOK_EVENT",
+            reason,
+            f"Het Alerts logboek is geleegd.{extra}",
+            reason,
+            reason,
+            bool(servicedesk_only),
+        ),
+    )
 
 
 def _persist_alert_log_events(cur, events):
@@ -2253,6 +2272,22 @@ def alerts_logs(limit: int = 200, servicedesk_only: bool = True):
         }
         for r in rows
     ]
+
+
+@app.post("/alerts/logs/clear")
+def alerts_logs_clear(servicedesk_only: bool = True):
+    ensure_schema()
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            delete from alert_logs
+            where servicedesk_only = %s;
+            """,
+            (servicedesk_only,),
+        )
+        _insert_alert_logbook_event(cur, servicedesk_only=servicedesk_only, reason="MANUAL_CLEAR")
+        c.commit()
+    return {"ok": True, "servicedesk_only": bool(servicedesk_only)}
 
 
 @app.post("/dev/alerts/trigger")
