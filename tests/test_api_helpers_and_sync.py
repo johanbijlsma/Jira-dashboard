@@ -67,6 +67,44 @@ def test_normalize_text_list_deduplicates_and_trims():
     assert api._normalize_text_list(["  A ", "", "A", None, "B"]) == ["A", "B"]
 
 
+def test_ensure_schema_filters_non_servicedesk_onderwerpen_case_insensitive(monkeypatch):
+    cursor = CursorStub()
+    monkeypatch.setattr(api, "conn", lambda: ConnStub(cursor))
+    monkeypatch.setattr(api, "_schema_checked", False)
+
+    api.ensure_schema()
+
+    onderwerp_seed_updates = [
+        params
+        for query, params in cursor.executed
+        if "lower(onderwerp_logging) <> all" in query
+    ]
+    assert onderwerp_seed_updates
+    assert set(onderwerp_seed_updates[0][1]) == api.DEFAULT_NON_SERVICEDESK_ONDERWERPEN_LOWER
+
+    config_cleanup_updates = [
+        params
+        for query, params in cursor.executed
+        if "unnest(servicedesk_onderwerpen) with ordinality" in query
+    ]
+    assert config_cleanup_updates
+    assert set(config_cleanup_updates[0][0]) == api.DEFAULT_NON_SERVICEDESK_ONDERWERPEN_LOWER
+    assert set(config_cleanup_updates[0][1]) == api.DEFAULT_NON_SERVICEDESK_ONDERWERPEN_LOWER
+    assert cursor.executed
+    monkeypatch.setattr(api, "_schema_checked", False)
+
+
+def test_allowed_servicedesk_onderwerpen_trims_whitespace(monkeypatch):
+    cursor = CursorStub(fetchall_values=[[("Performance",), ("Vraag",)]])
+
+    onderwerpen = api._allowed_servicedesk_onderwerpen(cursor)
+
+    assert onderwerpen == ["Performance", "Vraag"]
+    query, params = cursor.executed[0]
+    assert "btrim(onderwerp_logging)" in query
+    assert params == (list(api.DEFAULT_NON_SERVICEDESK_ONDERWERPEN_LOWER),)
+
+
 def test_parse_iso_date_or_raise_success_and_error():
     assert api._parse_iso_date_or_raise("2026-02-25", "start_date").isoformat() == "2026-02-25"
     with pytest.raises(ValueError, match="Ongeldige datum"):
@@ -394,6 +432,27 @@ def test_alerts_overdue_query_only_uses_open_issues(monkeypatch):
     assert "resolved_at is null" in overdue_sql
     assert "lower(coalesce(current_status, '')) = 'nieuwe melding'" in overdue_sql
     assert "assignee is null" in overdue_sql
+
+
+def test_alerts_live_forces_servicedesk_scope(monkeypatch):
+    now = datetime(2026, 2, 25, 10, 0, 0)
+    cursor = CursorStub(
+        fetchall_values=[
+            [("SD-1", now, "P1", "Nieuwe melding")],
+            [("SD-2", now, 2)],
+            [],
+            [("SD-3", now, 8)],
+        ]
+    )
+    patch_conn(monkeypatch, cursor)
+    monkeypatch.setattr(api, "_jira_existing_issue_keys", lambda keys: set(keys))
+
+    response = client.get("/alerts/live?servicedesk_only=false")
+
+    assert response.status_code == 200
+    select_params = [params for query, params in cursor.executed if "from issues" in query.lower()]
+    assert select_params
+    assert all(params and all(value is True for value in params if isinstance(value, bool)) for params in select_params)
 
 
 def test_alerts_warning_and_critical_queries_only_use_nieuwe_melding(monkeypatch):

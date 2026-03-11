@@ -89,12 +89,15 @@ def test_update_servicedesk_config_rejects_empty_onderwerpen(monkeypatch):
 def test_update_servicedesk_config_success(monkeypatch):
     cursor = _CursorStub()
     _patch_conn(monkeypatch, cursor)
+    monkeypatch.setattr(api, "_allowed_servicedesk_onderwerpen", lambda cur: ["Onderwerp A", "Onderwerp B"])
     monkeypatch.setattr(
         api,
         "get_servicedesk_config",
         lambda: {
             "team_members": ["Johan"],
             "onderwerpen": ["Onderwerp A"],
+            "onderwerpen_baseline": ["Onderwerp A", "Onderwerp B"],
+            "onderwerpen_customized": True,
             "updated_at": "2026-02-25T10:00:00Z",
             "team_member_avatars": {},
         },
@@ -196,6 +199,8 @@ def test_servicedesk_config_endpoint(monkeypatch):
         lambda: {
             "team_members": ["Johan"],
             "onderwerpen": ["Koppelingen"],
+            "onderwerpen_baseline": ["Performance"],
+            "onderwerpen_customized": True,
             "updated_at": "2026-02-25T10:00:00Z",
             "team_member_avatars": {"Johan": "http://avatar"},
         },
@@ -203,6 +208,50 @@ def test_servicedesk_config_endpoint(monkeypatch):
     response = client.get("/config/servicedesk")
     assert response.status_code == 200
     assert response.json()["team_member_avatars"]["Johan"] == "http://avatar"
+    assert response.json()["onderwerpen_baseline"] == ["Performance"]
+    assert response.json()["onderwerpen_customized"] is True
+
+
+def test_get_servicedesk_config_uses_baseline_when_not_customized(monkeypatch):
+    cursor = _CursorStub(
+        fetchone_values=[
+            (["Johan"], ["UWV-koppeling"], False, datetime(2026, 2, 25, 10, 0, 0)),
+        ],
+        fetchall_values=[
+            [("Johan", "http://avatar")],
+        ],
+    )
+    monkeypatch.setattr(api, "ensure_schema", lambda: None)
+    monkeypatch.setattr(api, "conn", lambda: _ConnStub(cursor))
+    monkeypatch.setattr(api, "_allowed_servicedesk_onderwerpen", lambda cur: ["Performance", "Vraag"])
+
+    data = api.get_servicedesk_config()
+
+    assert data["onderwerpen"] == ["Performance", "Vraag"]
+    assert data["onderwerpen_baseline"] == ["Performance", "Vraag"]
+    assert data["onderwerpen_customized"] is False
+    assert not any("update dashboard_config" in query.lower() for query, _ in cursor.executed)
+
+
+def test_get_servicedesk_config_uses_saved_selection_when_customized(monkeypatch):
+    cursor = _CursorStub(
+        fetchone_values=[
+            (["Johan"], ["Performance"], True, datetime(2026, 2, 25, 10, 0, 0)),
+        ],
+        fetchall_values=[
+            [("Johan", "http://avatar")],
+        ],
+    )
+    monkeypatch.setattr(api, "ensure_schema", lambda: None)
+    monkeypatch.setattr(api, "conn", lambda: _ConnStub(cursor))
+    monkeypatch.setattr(api, "_allowed_servicedesk_onderwerpen", lambda cur: ["Performance", "Vraag"])
+
+    data = api.get_servicedesk_config()
+
+    assert data["onderwerpen"] == ["Performance"]
+    assert data["onderwerpen_baseline"] == ["Performance", "Vraag"]
+    assert data["onderwerpen_customized"] is True
+    assert not any("update dashboard_config" in query.lower() for query, _ in cursor.executed)
 
 
 def test_metrics_inflow_vs_closed_maps_rows(monkeypatch):
@@ -217,6 +266,25 @@ def test_metrics_inflow_vs_closed_maps_rows(monkeypatch):
         "incoming_count": 8,
         "closed_count": 5,
     }
+
+
+def test_meta_trims_onderwerpen(monkeypatch):
+    cursor = _CursorStub(
+        fetchall_values=[
+            [("Incident",)],
+            [("Performance",), ("Vraag",)],
+            [("P1",)],
+            [("Johan",)],
+            [("Org A",)],
+        ]
+    )
+    _patch_conn(monkeypatch, cursor)
+
+    response = client.get("/meta")
+
+    assert response.status_code == 200
+    assert response.json()["onderwerpen"] == ["Performance", "Vraag"]
+    assert "btrim(onderwerp_logging)" in cursor.executed[1][0]
 
 
 def test_metrics_leadtime_p90_maps_rows(monkeypatch):
