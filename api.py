@@ -3,11 +3,13 @@ import time
 import threading
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 import requests
 import psycopg2
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -73,14 +75,13 @@ DEV_ALERT_ISSUE_KEY = "DEV-ALERT-TEST"
 DEFAULT_SERVICEDESK_TEAM_MEMBERS = ["Johan", "Ashley", "Jarno"]
 DEFAULT_NON_SERVICEDESK_ONDERWERPEN = {
     "Koppelingen",
-    "datadump",
     "Rest-endpoints",
-    "migratie",
     "SSO-koppeling",
     "UWV-koppeling",
     "Datadump",
     "Migratie",
 }
+DEFAULT_NON_SERVICEDESK_ONDERWERPEN_LOWER = {value.lower() for value in DEFAULT_NON_SERVICEDESK_ONDERWERPEN}
 
 # Prefer POSTGRES_* (from docker/.env). Fall back to DB_* for backward compatibility.
 PG_HOST = os.environ.get("POSTGRES_HOST") or os.environ.get("DB_HOST") or "localhost"
@@ -88,6 +89,7 @@ PG_PORT = int(os.environ.get("POSTGRES_PORT") or os.environ.get("DB_PORT") or 54
 PG_DB = os.environ.get("POSTGRES_DB") or os.environ.get("DB_NAME") or "jsm_analytics"
 PG_USER = os.environ.get("POSTGRES_USER") or os.environ.get("DB_USER") or "jsm"
 PG_PASSWORD = os.environ.get("POSTGRES_PASSWORD") or os.environ.get("DB_PASSWORD") or "jsm_password"
+REPORT_TIMEZONE = ZoneInfo("Europe/Amsterdam")
 
 
 def conn():
@@ -99,6 +101,416 @@ def conn():
         user=PG_USER,
         password=PG_PASSWORD,
     )
+
+
+def _previous_full_week_range(now_utc: Optional[datetime] = None):
+    now_dt = now_utc or datetime.now(timezone.utc)
+    local_today = now_dt.astimezone(REPORT_TIMEZONE).date()
+    current_week_start = local_today - timedelta(days=local_today.weekday())  # Monday
+    previous_week_start = current_week_start - timedelta(days=7)
+    previous_week_end = current_week_start - timedelta(days=1)
+    return previous_week_start, previous_week_end
+
+
+def _safe_ratio_pct(numerator: int, denominator: int) -> Optional[float]:
+    if not denominator:
+        return None
+    return round((float(numerator) / float(denominator)) * 100.0, 1)
+
+
+def _pdf_escape(text: str) -> str:
+    s = str(text or "")
+    s = s.encode("latin-1", "replace").decode("latin-1")
+    s = s.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    return s
+
+
+def _build_text_pdf(lines: List[str]) -> bytes:
+    page_width = 595
+    page_height = 842
+    margin_top = 48
+    margin_left = 42
+    line_height = 14
+    max_lines = max(1, int((page_height - margin_top * 2) // line_height))
+    clean_lines = [str(line or "") for line in lines]
+    pages = [
+        clean_lines[i: i + max_lines]
+        for i in range(0, len(clean_lines), max_lines)
+    ] or [["Geen data beschikbaar."]]
+
+    objects: List[str] = []
+
+    def add_obj(body: str) -> int:
+        objects.append(body)
+        return len(objects)
+
+    catalog_id = add_obj("<< /Type /Catalog /Pages 0 0 R >>")
+    pages_id = add_obj("<< /Type /Pages /Kids [] /Count 0 >>")
+    font_id = add_obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+
+    page_ids = []
+    for page_lines in pages:
+        stream_lines = ["BT", "/F1 11 Tf", "14 TL"]
+        y = page_height - margin_top
+        for line in page_lines:
+            stream_lines.append(f"1 0 0 1 {margin_left} {y:.2f} Tm ({_pdf_escape(line)}) Tj")
+            y -= line_height
+        stream_lines.append("ET")
+        stream_text = "\n".join(stream_lines)
+        stream_id = add_obj(f"<< /Length {len(stream_text.encode('latin-1', 'replace'))} >>\nstream\n{stream_text}\nendstream")
+        page_id = add_obj(
+            f"<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 {page_width} {page_height}] "
+            f"/Resources << /Font << /F1 {font_id} 0 R >> >> /Contents {stream_id} 0 R >>"
+        )
+        page_ids.append(page_id)
+
+    kids = " ".join(f"{pid} 0 R" for pid in page_ids)
+    objects[pages_id - 1] = f"<< /Type /Pages /Kids [{kids}] /Count {len(page_ids)} >>"
+    objects[catalog_id - 1] = f"<< /Type /Catalog /Pages {pages_id} 0 R >>"
+
+    pdf = bytearray()
+    pdf.extend(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for idx, obj in enumerate(objects, start=1):
+        offsets.append(len(pdf))
+        pdf.extend(f"{idx} 0 obj\n{obj}\nendobj\n".encode("latin-1", "replace"))
+
+    xref_start = len(pdf)
+    pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode("latin-1"))
+    pdf.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        pdf.extend(f"{offset:010d} 00000 n \n".encode("latin-1"))
+    pdf.extend(
+        (
+            f"trailer\n<< /Size {len(objects) + 1} /Root {catalog_id} 0 R >>\n"
+            f"startxref\n{xref_start}\n%%EOF\n"
+        ).encode("latin-1")
+    )
+    return bytes(pdf)
+
+
+def _weekly_insights_payload(servicedesk_only: bool = True) -> Dict[str, Any]:
+    ensure_schema()
+    week_start, week_end = _previous_full_week_range()
+    date_from = week_start.isoformat()
+    date_to = week_end.isoformat()
+
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            with incoming as (
+              select count(*) as count
+              from issues
+              where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
+                and (
+                  not %s
+                  or (
+                    assignee is not null
+                    and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+                    and onderwerp_logging is not null
+                    and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+                  )
+                )
+            ),
+            closed as (
+              select count(*) as count
+              from issues
+              where resolved_at is not null
+                and resolved_at >= %s::timestamptz and resolved_at < (%s::timestamptz + interval '1 day')
+                and (
+                  not %s
+                  or (
+                    assignee is not null
+                    and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+                    and onderwerp_logging is not null
+                    and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+                  )
+                )
+            )
+            select
+              coalesce((select count from incoming), 0) as incoming_count,
+              coalesce((select count from closed), 0) as closed_count;
+            """,
+            (date_from, date_to, servicedesk_only, date_from, date_to, servicedesk_only),
+        )
+        totals_row = cur.fetchone() or (0, 0)
+        incoming_count = int(totals_row[0] or 0)
+        closed_count = int(totals_row[1] or 0)
+
+        cur.execute(
+            """
+            select request_type, count(*) as tickets
+            from issues
+            where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
+              and request_type is not null and request_type <> ''
+              and (
+                not %s
+                or (
+                  assignee is not null
+                  and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+                  and onderwerp_logging is not null
+                  and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+                )
+              )
+            group by 1
+            order by 2 desc, 1
+            limit 5;
+            """,
+            (date_from, date_to, servicedesk_only),
+        )
+        request_type_rows = cur.fetchall()
+
+        cur.execute(
+            """
+            select onderwerp_logging as onderwerp, count(*) as tickets
+            from issues
+            where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
+              and onderwerp_logging is not null and onderwerp_logging <> ''
+              and (
+                not %s
+                or (
+                  assignee is not null
+                  and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+                  and onderwerp_logging is not null
+                  and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+                )
+              )
+            group by 1
+            order by 2 desc, 1
+            limit 5;
+            """,
+            (date_from, date_to, servicedesk_only),
+        )
+        onderwerp_rows = cur.fetchall()
+
+        cur.execute(
+            """
+            select priority, count(*) as tickets
+            from issues
+            where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
+              and priority is not null and priority <> ''
+              and (
+                not %s
+                or (
+                  assignee is not null
+                  and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+                  and onderwerp_logging is not null
+                  and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+                )
+              )
+            group by 1
+            order by 2 desc, 1
+            limit 5;
+            """,
+            (date_from, date_to, servicedesk_only),
+        )
+        priority_rows = cur.fetchall()
+
+        cur.execute(
+            """
+            select assignee, count(*) as tickets
+            from issues
+            where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
+              and assignee is not null and assignee <> ''
+              and (
+                not %s
+                or (
+                  assignee is not null
+                  and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+                  and onderwerp_logging is not null
+                  and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+                )
+              )
+            group by 1
+            order by 2 desc, 1
+            limit 5;
+            """,
+            (date_from, date_to, servicedesk_only),
+        )
+        assignee_rows = cur.fetchall()
+
+        cur.execute(
+            """
+            select org.org_name as organization, count(*) as tickets
+            from issues i
+            cross join lateral unnest(i.organizations) as org(org_name)
+            where i.created_at >= %s::timestamptz and i.created_at < (%s::timestamptz + interval '1 day')
+              and org.org_name is not null and org.org_name <> ''
+              and (
+                not %s
+                or (
+                  i.assignee is not null
+                  and i.assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+                  and i.onderwerp_logging is not null
+                  and i.onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+                )
+              )
+            group by 1
+            order by 2 desc, 1
+            limit 5;
+            """,
+            (date_from, date_to, servicedesk_only),
+        )
+        organization_rows = cur.fetchall()
+
+        cur.execute(
+            """
+            select
+              avg(extract(epoch from (updated_at - created_at))/3600.0) as avg_hours,
+              percentile_cont(0.50) within group (order by extract(epoch from (updated_at - created_at))/3600.0) as p50_hours,
+              count(*) as n
+            from issues
+            where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
+              and updated_at is not null
+              and updated_at >= created_at
+              and (
+                not %s
+                or (
+                  assignee is not null
+                  and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+                  and onderwerp_logging is not null
+                  and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+                )
+              );
+            """,
+            (date_from, date_to, servicedesk_only),
+        )
+        first_response_row = cur.fetchone() or (None, None, 0)
+
+        cur.execute(
+            """
+            select
+              avg(extract(epoch from (resolved_at - created_at))/3600.0) as avg_hours,
+              percentile_cont(0.50) within group (order by extract(epoch from (resolved_at - created_at))/3600.0) as p50_hours,
+              count(*) as n
+            from issues
+            where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
+              and resolved_at is not null
+              and resolved_at >= created_at
+              and (
+                not %s
+                or (
+                  assignee is not null
+                  and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+                  and onderwerp_logging is not null
+                  and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+                )
+              );
+            """,
+            (date_from, date_to, servicedesk_only),
+        )
+        resolution_row = cur.fetchone() or (None, None, 0)
+
+        cur.execute(
+            """
+            select alert_kind, count(*) as events
+            from alert_logs
+            where detected_at >= %s::timestamptz and detected_at < (%s::timestamptz + interval '1 day')
+              and servicedesk_only = %s
+            group by 1
+            order by 2 desc, 1;
+            """,
+            (date_from, date_to, servicedesk_only),
+        )
+        alert_kind_rows = cur.fetchall()
+
+    response_scope = "alle tickets"
+    if servicedesk_only:
+        response_scope = "alleen servicedesk"
+
+    alert_by_kind = [{"kind": r[0], "events": int(r[1] or 0)} for r in alert_kind_rows]
+    alert_total = sum(item["events"] for item in alert_by_kind)
+
+    payload = {
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "week": {
+            "start_date": date_from,
+            "end_date": date_to,
+            "label": f"{date_from} t/m {date_to}",
+        },
+        "scope": response_scope,
+        "summary": {
+            "incoming_tickets": incoming_count,
+            "closed_tickets": closed_count,
+            "close_rate_pct": _safe_ratio_pct(closed_count, incoming_count),
+            "open_delta": incoming_count - closed_count,
+        },
+        "service_levels": {
+            "first_response_avg_hours": float(first_response_row[0]) if first_response_row[0] is not None else None,
+            "first_response_p50_hours": float(first_response_row[1]) if first_response_row[1] is not None else None,
+            "first_response_n": int(first_response_row[2] or 0),
+            "resolution_avg_hours": float(resolution_row[0]) if resolution_row[0] is not None else None,
+            "resolution_p50_hours": float(resolution_row[1]) if resolution_row[1] is not None else None,
+            "resolution_n": int(resolution_row[2] or 0),
+        },
+        "alerts": {
+            "total_events": alert_total,
+            "by_kind": alert_by_kind,
+        },
+        "breakdowns": {
+            "request_types": [{"name": r[0], "tickets": int(r[1] or 0)} for r in request_type_rows],
+            "onderwerpen": [{"name": r[0], "tickets": int(r[1] or 0)} for r in onderwerp_rows],
+            "priorities": [{"name": r[0], "tickets": int(r[1] or 0)} for r in priority_rows],
+            "assignees": [{"name": r[0], "tickets": int(r[1] or 0)} for r in assignee_rows],
+            "organizations": [{"name": r[0], "tickets": int(r[1] or 0)} for r in organization_rows],
+        },
+    }
+    return payload
+
+
+def _weekly_insights_pdf_lines(payload: Dict[str, Any]) -> List[str]:
+    summary = payload.get("summary") or {}
+    service_levels = payload.get("service_levels") or {}
+    alerts = payload.get("alerts") or {}
+    breakdowns = payload.get("breakdowns") or {}
+
+    def _format_hours(v):
+        if v is None:
+            return "n.v.t."
+        return f"{float(v):.1f} uur"
+
+    lines = [
+        "Weekly insights rapport",
+        "",
+        f"Periode: {payload.get('week', {}).get('label', '-')}",
+        f"Scope: {payload.get('scope', '-')}",
+        f"Gegenereerd op: {payload.get('generated_at', '-')}",
+        "",
+        "Samenvatting",
+        f"- Binnengekomen tickets: {int(summary.get('incoming_tickets') or 0)}",
+        f"- Afgesloten tickets: {int(summary.get('closed_tickets') or 0)}",
+        f"- Sluitratio: {summary.get('close_rate_pct') if summary.get('close_rate_pct') is not None else 'n.v.t.'}%",
+        f"- Open delta (in - uit): {int(summary.get('open_delta') or 0)}",
+        "",
+        "Service levels",
+        f"- First response gemiddeld: {_format_hours(service_levels.get('first_response_avg_hours'))}",
+        f"- First response mediaan: {_format_hours(service_levels.get('first_response_p50_hours'))}",
+        f"- First response steekproef: {int(service_levels.get('first_response_n') or 0)}",
+        f"- Resolution gemiddeld: {_format_hours(service_levels.get('resolution_avg_hours'))}",
+        f"- Resolution mediaan: {_format_hours(service_levels.get('resolution_p50_hours'))}",
+        f"- Resolution steekproef: {int(service_levels.get('resolution_n') or 0)}",
+        "",
+        "Alerts",
+        f"- Totaal events: {int(alerts.get('total_events') or 0)}",
+    ]
+    for row in (alerts.get("by_kind") or []):
+        lines.append(f"  - {row.get('kind')}: {int(row.get('events') or 0)}")
+
+    def add_breakdown(title: str, rows: List[Dict[str, Any]]):
+        lines.append("")
+        lines.append(title)
+        if not rows:
+            lines.append("- Geen data")
+            return
+        for row in rows:
+            lines.append(f"- {row.get('name')}: {int(row.get('tickets') or 0)}")
+
+    add_breakdown("Top request types", breakdowns.get("request_types") or [])
+    add_breakdown("Top onderwerpen", breakdowns.get("onderwerpen") or [])
+    add_breakdown("Top priorities", breakdowns.get("priorities") or [])
+    add_breakdown("Top assignees", breakdowns.get("assignees") or [])
+    add_breakdown("Top organizations", breakdowns.get("organizations") or [])
+    return lines
 
 
 def ensure_schema():  # pragma: no cover
@@ -155,6 +567,7 @@ def ensure_schema():  # pragma: no cover
               id integer primary key,
               servicedesk_team_members text[] not null default '{}',
               servicedesk_onderwerpen text[] not null default '{}',
+              servicedesk_onderwerpen_customized boolean not null default false,
               updated_at timestamptz not null default now()
             );
             """
@@ -220,6 +633,7 @@ def ensure_schema():  # pragma: no cover
         cur.execute("create index if not exists vacations_end_date_idx on vacations(end_date);")
         cur.execute("alter table dashboard_config add column if not exists servicedesk_team_members text[] not null default '{}';")
         cur.execute("alter table dashboard_config add column if not exists servicedesk_onderwerpen text[] not null default '{}';")
+        cur.execute("alter table dashboard_config add column if not exists servicedesk_onderwerpen_customized boolean not null default false;")
         cur.execute("alter table dashboard_config add column if not exists updated_at timestamptz not null default now();")
         cur.execute("alter table alert_logs add column if not exists issue_key text;")
         cur.execute("alter table alert_logs add column if not exists alert_kind text;")
@@ -283,10 +697,11 @@ def ensure_schema():  # pragma: no cover
                     from issues
                     where onderwerp_logging is not null
                       and onderwerp_logging <> ''
-                      and onderwerp_logging <> all(%s::text[])
+                      and lower(onderwerp_logging) <> all(%s::text[])
                     order by 1
                   ) t
                 ),
+                servicedesk_onderwerpen_customized = false,
                 updated_at = now()
             where id = 1
               and coalesce(array_length(servicedesk_team_members, 1), 0) = 0
@@ -294,7 +709,31 @@ def ensure_schema():  # pragma: no cover
             """,
             (
                 [name.lower() for name in DEFAULT_SERVICEDESK_TEAM_MEMBERS],
-                list(DEFAULT_NON_SERVICEDESK_ONDERWERPEN),
+                list(DEFAULT_NON_SERVICEDESK_ONDERWERPEN_LOWER),
+            ),
+        )
+        cur.execute(
+            """
+            update dashboard_config
+            set servicedesk_onderwerpen = (
+                  select coalesce(array_agg(item.onderwerp order by item.ord), array[]::text[])
+                  from (
+                    select onderwerp, ord
+                    from unnest(servicedesk_onderwerpen) with ordinality as item(onderwerp, ord)
+                    where lower(onderwerp) <> all(%s::text[])
+                  ) item
+                ),
+                updated_at = now()
+            where id = 1
+              and exists (
+                select 1
+                from unnest(servicedesk_onderwerpen) as onderwerp
+                where lower(onderwerp) = any(%s::text[])
+              );
+            """,
+            (
+                list(DEFAULT_NON_SERVICEDESK_ONDERWERPEN_LOWER),
+                list(DEFAULT_NON_SERVICEDESK_ONDERWERPEN_LOWER),
             ),
         )
         c.commit()
@@ -323,17 +762,39 @@ def _normalize_text_list(values):
     return list(dict.fromkeys(out))
 
 
+def _allowed_servicedesk_onderwerpen(cur):
+    cur.execute(
+        """
+        select distinct btrim(onderwerp_logging) as onderwerp_logging
+        from issues
+        where onderwerp_logging is not null
+          and btrim(onderwerp_logging) <> ''
+          and lower(btrim(onderwerp_logging)) <> all(%s::text[])
+        order by 1;
+        """,
+        (list(DEFAULT_NON_SERVICEDESK_ONDERWERPEN_LOWER),),
+    )
+    return [r[0] for r in cur.fetchall() if r and r[0]]
+
+
+def _same_text_set(a, b):
+    left = set(_normalize_text_list(a))
+    right = set(_normalize_text_list(b))
+    return left == right
+
+
 def get_servicedesk_config():
     ensure_schema()
     with conn() as c, c.cursor() as cur:
         cur.execute(
             """
-            select servicedesk_team_members, servicedesk_onderwerpen, updated_at
+            select servicedesk_team_members, servicedesk_onderwerpen, servicedesk_onderwerpen_customized, updated_at
             from dashboard_config
             where id = 1;
             """
         )
         row = cur.fetchone()
+        allowed_onderwerpen = _allowed_servicedesk_onderwerpen(cur)
         cur.execute(
             """
             select assignee, assignee_avatar_url
@@ -356,13 +817,24 @@ def get_servicedesk_config():
         )
         avatar_rows = cur.fetchall()
     if not row:
-        return {"team_members": [], "onderwerpen": [], "updated_at": None, "team_member_avatars": {}}
+        return {
+            "team_members": [],
+            "onderwerpen": [],
+            "onderwerpen_baseline": allowed_onderwerpen,
+            "onderwerpen_customized": False,
+            "updated_at": None,
+            "team_member_avatars": {},
+        }
     team_members = list(row[0] or [])
+    stored_onderwerpen = list(row[1] or [])
+    onderwerpen_customized = bool(row[2])
     avatar_map = {str(name): str(url) for name, url in avatar_rows if name and url}
     return {
         "team_members": team_members,
-        "onderwerpen": list(row[1] or []),
-        "updated_at": row[2].isoformat() if row[2] else None,
+        "onderwerpen": stored_onderwerpen if onderwerpen_customized else allowed_onderwerpen,
+        "onderwerpen_baseline": allowed_onderwerpen,
+        "onderwerpen_customized": onderwerpen_customized,
+        "updated_at": row[3].isoformat() if row[3] else None,
         "team_member_avatars": {name: avatar_map.get(name) for name in team_members if avatar_map.get(name)},
     }
 
@@ -1105,7 +1577,15 @@ def meta():
     with conn() as c, c.cursor() as cur:
         cur.execute("select distinct request_type from issues where request_type is not null order by 1;")
         request_types = [r[0] for r in cur.fetchall()]
-        cur.execute("select distinct onderwerp_logging from issues where onderwerp_logging is not null order by 1;")
+        cur.execute(
+            """
+            select distinct btrim(onderwerp_logging)
+            from issues
+            where onderwerp_logging is not null
+              and btrim(onderwerp_logging) <> ''
+            order by 1;
+            """
+        )
         onderwerpen = [r[0] for r in cur.fetchall()]
         cur.execute("select distinct priority from issues where priority is not null order by 1;")
         priorities = [r[0] for r in cur.fetchall()]
@@ -1148,15 +1628,19 @@ def update_servicedesk_config(payload: ServicedeskConfigPayload):
     if not onderwerpen:
         raise HTTPException(status_code=400, detail="Selecteer minimaal 1 servicedesk onderwerp.")
     with conn() as c, c.cursor() as cur:
+        allowed_onderwerpen = _allowed_servicedesk_onderwerpen(cur)
+        onderwerpen_customized = not _same_text_set(onderwerpen, allowed_onderwerpen)
+        onderwerpen_to_save = onderwerpen if onderwerpen_customized else allowed_onderwerpen
         cur.execute(
             """
             update dashboard_config
             set servicedesk_team_members = %s,
                 servicedesk_onderwerpen = %s,
+                servicedesk_onderwerpen_customized = %s,
                 updated_at = now()
             where id = 1;
             """,
-            (team_members, onderwerpen),
+            (team_members, onderwerpen_to_save, onderwerpen_customized),
         )
         c.commit()
     return get_servicedesk_config()
@@ -2029,6 +2513,7 @@ def alerts_live(servicedesk_only: bool = True):
     - first_response_overdue: not accepted yet ('Nieuwe melding') and SLA already breached
     """
     ensure_schema()
+    servicedesk_only = True
     with conn() as c, c.cursor() as cur:
         cur.execute(
             """

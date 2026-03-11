@@ -188,6 +188,7 @@ export default function Home() {
   const [servicedeskConfig, setServicedeskConfig] = useState({
     team_members: [],
     onderwerpen: [],
+    onderwerpen_customized: false,
     updated_at: null,
     team_member_avatars: {},
   });
@@ -472,13 +473,40 @@ export default function Home() {
     );
   }, []);
 
+  const normalizedOnderwerpenSelection = useCallback((values) => {
+    const available = Array.isArray(meta?.onderwerpen) ? meta.onderwerpen : [];
+    if (!available.length) return Array.isArray(values) ? values : [];
+    const availableMap = new Map(
+      available.map((item) => {
+        const text = String(item);
+        return [text.toLowerCase(), text];
+      })
+    );
+    return Array.from(
+      new Set(
+        (Array.isArray(values) ? values : [])
+          .map((item) => availableMap.get(String(item).toLowerCase()) || null)
+          .filter(Boolean)
+      )
+    );
+  }, [meta]);
+
   const cancelTeamConfig = useCallback(() => {
     setTeamMembersDraft(Array.isArray(servicedeskConfig?.team_members) ? servicedeskConfig.team_members : []);
   }, [servicedeskConfig]);
 
   const cancelOnderwerpConfig = useCallback(() => {
-    setOnderwerpenDraft(Array.isArray(servicedeskConfig?.onderwerpen) ? servicedeskConfig.onderwerpen : []);
-  }, [servicedeskConfig]);
+    setOnderwerpenDraft(normalizedOnderwerpenSelection(servicedeskConfig?.onderwerpen));
+  }, [normalizedOnderwerpenSelection, servicedeskConfig]);
+
+  const zichtbareOnderwerpenDraft = useMemo(
+    () => normalizedOnderwerpenSelection(onderwerpenDraft),
+    [normalizedOnderwerpenSelection, onderwerpenDraft]
+  );
+  const onderwerpFilterOpties = useMemo(() => {
+    const servicedeskOnderwerpen = normalizedOnderwerpenSelection(servicedeskConfig?.onderwerpen);
+    return servicedeskOnderwerpen.length ? servicedeskOnderwerpen : normalizedOnderwerpenSelection(meta?.onderwerpen);
+  }, [meta, normalizedOnderwerpenSelection, servicedeskConfig]);
 
   const teamConfigDirty = useMemo(() => {
     const base = Array.isArray(servicedeskConfig?.team_members) ? servicedeskConfig.team_members : [];
@@ -486,16 +514,20 @@ export default function Home() {
   }, [teamMembersDraft, servicedeskConfig]);
 
   const onderwerpConfigDirty = useMemo(() => {
-    const base = Array.isArray(servicedeskConfig?.onderwerpen) ? servicedeskConfig.onderwerpen : [];
-    return !sameStringSet(onderwerpenDraft, base);
-  }, [onderwerpenDraft, servicedeskConfig]);
+    const base = normalizedOnderwerpenSelection(servicedeskConfig?.onderwerpen);
+    return !sameStringSet(zichtbareOnderwerpenDraft, base);
+  }, [normalizedOnderwerpenSelection, zichtbareOnderwerpenDraft, servicedeskConfig]);
 
   const onderwerpResetAvailable = useMemo(() => {
-    const baseline = Array.isArray(servicedeskOnderwerpenBaseline) ? servicedeskOnderwerpenBaseline : [];
-    const saved = Array.isArray(servicedeskConfig?.onderwerpen) ? servicedeskConfig.onderwerpen : [];
-    if (!baseline.length) return false;
-    return !sameStringSet(saved, baseline);
-  }, [servicedeskOnderwerpenBaseline, servicedeskConfig]);
+    return Boolean(servicedeskConfig?.onderwerpen_customized);
+  }, [servicedeskConfig]);
+
+  useEffect(() => {
+    if (!onderwerp) return;
+    if (!onderwerpFilterOpties.includes(onderwerp)) {
+      setOnderwerp("");
+    }
+  }, [onderwerp, onderwerpFilterOpties]);
 
   const saveTeamConfig = useCallback(async () => {
     if (!teamMembersDraft.length) {
@@ -519,17 +551,18 @@ export default function Home() {
       const updated = await res.json();
       setServicedeskConfig(updated);
       setTeamMembersDraft(Array.isArray(updated?.team_members) ? updated.team_members : []);
-      setOnderwerpenDraft(Array.isArray(updated?.onderwerpen) ? updated.onderwerpen : []);
+      setOnderwerpenDraft(normalizedOnderwerpenSelection(updated?.onderwerpen));
       flashToast("Servicedesk teamleden opgeslagen.");
     } catch (err) {
       flashToast(err?.message || "Opslaan van teamleden mislukt.", "error");
     } finally {
       setTeamConfigSaving(false);
     }
-  }, [teamMembersDraft, onderwerpenDraft, flashToast]);
+  }, [flashToast, normalizedOnderwerpenSelection, teamMembersDraft, onderwerpenDraft]);
 
   const saveOnderwerpConfig = useCallback(async () => {
-    if (!onderwerpenDraft.length) {
+    const normalizedOnderwerpen = normalizedOnderwerpenSelection(onderwerpenDraft);
+    if (!normalizedOnderwerpen.length) {
       flashToast("Selecteer minimaal 1 servicedesk onderwerp.", "error");
       return;
     }
@@ -540,7 +573,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           team_members: teamMembersDraft,
-          onderwerpen: onderwerpenDraft,
+          onderwerpen: normalizedOnderwerpen,
         }),
       });
       if (!res.ok) {
@@ -550,14 +583,43 @@ export default function Home() {
       const updated = await res.json();
       setServicedeskConfig(updated);
       setTeamMembersDraft(Array.isArray(updated?.team_members) ? updated.team_members : []);
-      setOnderwerpenDraft(Array.isArray(updated?.onderwerpen) ? updated.onderwerpen : []);
+      setOnderwerpenDraft(normalizedOnderwerpenSelection(updated?.onderwerpen));
       flashToast("Servicedesk onderwerpen opgeslagen.");
     } catch (err) {
       flashToast(err?.message || "Opslaan van onderwerpen mislukt.", "error");
     } finally {
       setOnderwerpConfigSaving(false);
     }
-  }, [teamMembersDraft, onderwerpenDraft, flashToast]);
+  }, [flashToast, normalizedOnderwerpenSelection, onderwerpenDraft, teamMembersDraft]);
+
+  const resetOnderwerpConfig = useCallback(async () => {
+    const baseline = normalizedOnderwerpenSelection(servicedeskOnderwerpenBaseline);
+    if (!baseline.length) return;
+    setOnderwerpConfigSaving(true);
+    try {
+      const res = await fetch(`${API}/config/servicedesk`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          team_members: teamMembersDraft,
+          onderwerpen: baseline,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.detail || "Herstellen van onderwerpen mislukt.");
+      }
+      const updated = await res.json();
+      setServicedeskConfig(updated);
+      setTeamMembersDraft(Array.isArray(updated?.team_members) ? updated.team_members : []);
+      setOnderwerpenDraft(normalizedOnderwerpenSelection(updated?.onderwerpen));
+      flashToast("Servicedesk onderwerpen hersteld.");
+    } catch (err) {
+      flashToast(err?.message || "Herstellen van onderwerpen mislukt.", "error");
+    } finally {
+      setOnderwerpConfigSaving(false);
+    }
+  }, [flashToast, normalizedOnderwerpenSelection, servicedeskOnderwerpenBaseline, teamMembersDraft]);
 
   const saveDashboardLayout = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -611,7 +673,7 @@ export default function Home() {
   const refreshAlertLogs = useCallback(async () => {
     const params = new URLSearchParams();
     params.set("limit", String(ALERT_LOG_LIMIT));
-    params.set("servicedesk_only", servicedeskOnly ? "true" : "false");
+    params.set("servicedesk_only", "true");
     const r = await fetch(`${API}/alerts/logs?${params.toString()}`);
     const data = await r.json();
     const normalized = Array.isArray(data)
@@ -633,11 +695,11 @@ export default function Home() {
     }
     alertLogLatestMarkerRef.current = latestMarker;
     setAlertLogEntries(normalized);
-  }, [servicedeskOnly, ALERT_LOG_LIMIT]);
+  }, [ALERT_LOG_LIMIT]);
 
   const refreshLiveAlerts = useCallback(async () => {
     const params = new URLSearchParams();
-    params.set("servicedesk_only", servicedeskOnly ? "true" : "false");
+    params.set("servicedesk_only", "true");
     const r = await fetch(`${API}/alerts/live?${params.toString()}`);
     const data = await r.json();
     const warningItems = Array.isArray(data?.first_response_due_warning)
@@ -695,7 +757,7 @@ export default function Home() {
       );
     }
     await refreshAlertLogs();
-  }, [flashToast, servicedeskOnly, refreshAlertLogs]);
+  }, [flashToast, refreshAlertLogs]);
 
   const toggleAlertGroup = useCallback((groupKey) => {
     setExpandedAlertGroups((prev) => ({
@@ -708,7 +770,7 @@ export default function Home() {
     setClearAlertLogsBusy(true);
     try {
       const params = new URLSearchParams();
-      params.set("servicedesk_only", servicedeskOnly ? "true" : "false");
+      params.set("servicedesk_only", "true");
       const response = await fetch(`${API}/alerts/logs/clear?${params.toString()}`, {
         method: "POST",
       });
@@ -724,7 +786,7 @@ export default function Home() {
     } finally {
       setClearAlertLogsBusy(false);
     }
-  }, [flashToast, refreshAlertLogs, servicedeskOnly]);
+  }, [flashToast, refreshAlertLogs]);
 
   const refreshVacations = useCallback(async () => {
     const [allRes, upcomingRes, todayRes] = await Promise.all([
@@ -749,6 +811,8 @@ export default function Home() {
     const normalized = {
       team_members: Array.isArray(data?.team_members) ? data.team_members : [],
       onderwerpen: Array.isArray(data?.onderwerpen) ? data.onderwerpen : [],
+      onderwerpen_baseline: Array.isArray(data?.onderwerpen_baseline) ? data.onderwerpen_baseline : [],
+      onderwerpen_customized: Boolean(data?.onderwerpen_customized),
       updated_at: data?.updated_at || null,
       team_member_avatars:
         data?.team_member_avatars && typeof data.team_member_avatars === "object"
@@ -756,7 +820,7 @@ export default function Home() {
           : {},
     };
     setServicedeskConfig(normalized);
-    setServicedeskOnderwerpenBaseline((prev) => (Array.isArray(prev) && prev.length ? prev : normalized.onderwerpen));
+    setServicedeskOnderwerpenBaseline(normalized.onderwerpen_baseline);
     setTeamMembersDraft(normalized.team_members);
     setOnderwerpenDraft(normalized.onderwerpen);
   }, []);
@@ -1497,7 +1561,7 @@ export default function Home() {
 
   const onderwerpSeries = useMemo(() => {
     const data = Array.isArray(onderwerpVolume) ? onderwerpVolume : [];
-    const subjects = onderwerp ? [onderwerp] : meta.onderwerpen;
+    const subjects = onderwerp ? [onderwerp] : onderwerpFilterOpties;
     const base = subjects.map((o) => ({
       label: o,
       data: weeksOnderwerp.map((w) => {
@@ -1512,7 +1576,7 @@ export default function Home() {
       .sort((a, b) => b.total - a.total)
       .slice(0, 5)
       .map(({ total, ...rest }) => rest);
-  }, [weeksOnderwerp, onderwerpVolume, meta.onderwerpen, onderwerp]);
+  }, [weeksOnderwerp, onderwerpVolume, onderwerp, onderwerpFilterOpties]);
 
   const typeColor = useCallback((label) => {
     const key = String(label || "").toLowerCase();
@@ -4008,7 +4072,7 @@ export default function Home() {
             style={inputBaseStyle}
           >
             <option value="">(alle)</option>
-            {meta.onderwerpen.map((o) => (
+            {onderwerpFilterOpties.map((o) => (
               <option key={o} value={o}>
                 {o}
               </option>
@@ -4130,7 +4194,7 @@ export default function Home() {
                 <label key={`cfg-onderwerp-${name}`} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 24 }}>
                   <input
                     type="checkbox"
-                    checked={onderwerpenDraft.includes(name)}
+                    checked={zichtbareOnderwerpenDraft.includes(name)}
                     onChange={() => toggleOnderwerpDraft(name)}
                   />
                   <span>{name}</span>
@@ -4157,7 +4221,7 @@ export default function Home() {
               {onderwerpResetAvailable ? (
                 <button
                   type="button"
-                  onClick={() => setOnderwerpenDraft(Array.isArray(servicedeskOnderwerpenBaseline) ? servicedeskOnderwerpenBaseline : [])}
+                  onClick={resetOnderwerpConfig}
                   disabled={onderwerpConfigSaving}
                   style={filterOpenButtonStyle}
                 >
