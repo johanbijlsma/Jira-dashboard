@@ -258,6 +258,7 @@ def test_upsert_issues_executes_insert(monkeypatch):
     issue = {
         "key": "SD-1",
         "fields": {
+            "summary": "Voorbeeldtitel",
             api.REQUEST_TYPE_FIELD: {"requestType": {"name": "Vraag"}},
             api.ONDERWERP_FIELD: {"value": "Koppelingen"},
             api.ORGANIZATION_FIELD: [{"name": "Org A"}],
@@ -274,11 +275,12 @@ def test_upsert_issues_executes_insert(monkeypatch):
     assert len(cursor.executed) == 1
     params = cursor.executed[0][1]
     assert params[0] == "SD-1"
-    assert params[1] == "Vraag"
-    assert params[2] == "Koppelingen"
-    assert params[3] == ["Org A"]
-    assert params[8] == "Johan"
-    assert params[9] == "http://img"
+    assert params[1] == "Voorbeeldtitel"
+    assert params[2] == "Vraag"
+    assert params[3] == "Koppelingen"
+    assert params[4] == ["Org A"]
+    assert params[9] == "Johan"
+    assert params[10] == "http://img"
 
 
 def test_run_sync_once_branches(monkeypatch):
@@ -377,13 +379,13 @@ def test_meta_alerts_and_issue_endpoints(monkeypatch):
             [("Johan",)],
             [("Org A",)],
             [
-                ("SD-1", now, "P1", "Nieuwe melding"),
-                ("SD-2", now, "Normaal", "Nieuwe melding"),
-                ("SD-20", now, "P1", "In behandeling"),
+                ("SD-1", now, "P1", "Nieuwe melding", "P1 titel"),
+                ("SD-2", now, "Normaal", "Nieuwe melding", "Geen alert"),
+                ("SD-20", now, "P1", "In behandeling", "Niet nieuw"),
             ],
-            [("SD-3", now, 2)],
+            [("SD-3", now, 2, "Waarschuwing titel")],
             [],
-            [("SD-4", now, 8)],
+            [("SD-4", now, 8, "Overdue titel")],
             [("SD-10", "Incident", "Koppelingen", now, now, "P1", "Johan", "Open")],
         ]
     )
@@ -398,7 +400,9 @@ def test_meta_alerts_and_issue_endpoints(monkeypatch):
     assert alerts_response.status_code == 200
     alerts_data = alerts_response.json()
     assert [x["issue_key"] for x in alerts_data["priority1"]] == ["SD-1"]
+    assert alerts_data["priority1"][0]["issue_summary"] == "P1 titel"
     assert alerts_data["first_response_due_warning"][0]["minutes_left"] == 2
+    assert alerts_data["first_response_due_warning"][0]["issue_summary"] == "Waarschuwing titel"
     assert alerts_data["first_response_overdue"][0]["minutes_overdue"] == 8
 
     issues_response = client.get(
@@ -414,10 +418,10 @@ def test_alerts_overdue_query_only_uses_open_issues(monkeypatch):
     now = datetime(2026, 2, 25, 10, 0, 0)
     cursor = CursorStub(
         fetchall_values=[
-            [("SD-1", now, "P1", "Nieuwe melding")],
-            [("SD-2", now, 2)],
+            [("SD-1", now, "P1", "Nieuwe melding", "P1 titel")],
+            [("SD-2", now, 2, "Waarschuwing titel")],
             [],
-            [("SD-3", now, 8)],
+            [("SD-3", now, 8, "Overdue titel")],
         ]
     )
     patch_conn(monkeypatch, cursor)
@@ -438,10 +442,10 @@ def test_alerts_live_forces_servicedesk_scope(monkeypatch):
     now = datetime(2026, 2, 25, 10, 0, 0)
     cursor = CursorStub(
         fetchall_values=[
-            [("SD-1", now, "P1", "Nieuwe melding")],
-            [("SD-2", now, 2)],
+            [("SD-1", now, "P1", "Nieuwe melding", "P1 titel")],
+            [("SD-2", now, 2, "Waarschuwing titel")],
             [],
-            [("SD-3", now, 8)],
+            [("SD-3", now, 8, "Overdue titel")],
         ]
     )
     patch_conn(monkeypatch, cursor)
@@ -459,10 +463,10 @@ def test_alerts_warning_and_critical_queries_only_use_nieuwe_melding(monkeypatch
     now = datetime(2026, 2, 25, 10, 0, 0)
     cursor = CursorStub(
         fetchall_values=[
-            [("SD-1", now, "P1", "Nieuwe melding")],
-            [("SD-2", now, 20)],
-            [("SD-3", now, 4)],
-            [("SD-4", now, 8)],
+            [("SD-1", now, "P1", "Nieuwe melding", "P1 titel")],
+            [("SD-2", now, 20, "Waarschuwing titel")],
+            [("SD-3", now, 4, "Kritiek titel")],
+            [("SD-4", now, 8, "Overdue titel")],
         ]
     )
     patch_conn(monkeypatch, cursor)
@@ -481,10 +485,10 @@ def test_alerts_live_persists_log_events_and_cleans_up(monkeypatch):
     now = datetime(2026, 2, 25, 10, 0, 0)
     cursor = CursorStub(
         fetchall_values=[
-            [("SD-1", now, "P1", "Nieuwe melding")],
-            [("SD-2", now, 2)],
+            [("SD-1", now, "P1", "Nieuwe melding", "P1 titel")],
+            [("SD-2", now, 2, "Waarschuwing titel")],
             [],
-            [("SD-3", now, 8)],
+            [("SD-3", now, 8, "Overdue titel")],
         ]
     )
     patch_conn(monkeypatch, cursor)
@@ -550,10 +554,10 @@ def test_alerts_live_sends_teams_notification_for_new_events(monkeypatch):
     now = datetime(2026, 2, 25, 10, 0, 0)
     cursor = CursorStub(
         fetchall_values=[
-            [("SD-1", now, "P1", "Nieuwe melding")],
-            [("SD-2", now, 2)],
+            [("SD-1", now, "P1", "Nieuwe melding", "P1 titel")],
+            [("SD-2", now, 2, "Waarschuwing titel")],
             [],
-            [("SD-3", now, 8)],
+            [("SD-3", now, 8, "Overdue titel")],
         ],
         fetchone_values=[(1,), (2,), (3,)],
     )
@@ -574,7 +578,43 @@ def test_alerts_live_sends_teams_notification_for_new_events(monkeypatch):
     assert response.status_code == 200
     assert len(sent) == 1
     assert sent[0][0] == "https://example.invalid/webhook"
-    assert "Nieuwe dashboard alerts" in sent[0][1]["text"]
+    assert "DASHBOARD ALERTS" in sent[0][1]["text"]
+    assert "@everyone" in sent[0][1]["text"]
+    assert "P1 titel" in sent[0][1]["text"]
+    assert "https://planningsagenda.atlassian.net/browse/SD-1" in sent[0][1]["text"]
+
+
+def test_send_teams_alert_notification_handles_missing_title(monkeypatch):
+    monkeypatch.setattr(api, "ALERT_TEAMS_WEBHOOK_URL", "https://example.invalid/webhook")
+    sent = []
+
+    def fake_post(url, json, timeout):
+        class _Resp:
+            status_code = 200
+            text = "ok"
+
+        sent.append((url, json, timeout))
+        return _Resp()
+
+    monkeypatch.setattr(api.requests, "post", fake_post)
+
+    result = api._send_teams_alert_notification(
+        [
+            {
+                "issue_key": "SD-123",
+                "alert_kind": "SLA_CRITICAL",
+                "meta": "5 min",
+                "issue_summary": None,
+                "issue_url": "https://planningsagenda.atlassian.net/browse/SD-123",
+                "servicedesk_only": True,
+            }
+        ]
+    )
+
+    assert result["ok"] is True
+    assert "SLA VERLOOPT" in sent[0][1]["text"]
+    assert "SD-123" in sent[0][1]["text"]
+    assert "https://planningsagenda.atlassian.net/browse/SD-123" in sent[0][1]["text"]
 
 
 def test_dev_alert_trigger_and_clear(monkeypatch):

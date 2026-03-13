@@ -524,6 +524,7 @@ def ensure_schema():  # pragma: no cover
             """
             create table if not exists issues (
               issue_key text primary key,
+              issue_summary text,
               request_type text,
               onderwerp_logging text,
               organizations text[],
@@ -603,6 +604,7 @@ def ensure_schema():  # pragma: no cover
         )
         cur.execute("insert into sync_state(id, last_sync) values (1, null) on conflict (id) do nothing;")
         cur.execute("alter table issues add column if not exists request_type text;")
+        cur.execute("alter table issues add column if not exists issue_summary text;")
         cur.execute("alter table issues add column if not exists onderwerp_logging text;")
         cur.execute("alter table issues add column if not exists organizations text[];")
         cur.execute("alter table issues add column if not exists created_at timestamptz;")
@@ -1292,20 +1294,26 @@ def _send_teams_alert_notification(events):
         top = events[:8]
         lines = []
         for e in top:
-            kind = e.get("alert_kind") or "ALERT"
+            kind = str(e.get("alert_kind") or "ALERT")
             issue_key = e.get("issue_key") or "?"
+            issue_summary = str(e.get("issue_summary") or "").strip()
+            issue_url = str(e.get("issue_url") or f"{JIRA_BASE}/browse/{issue_key}")
             status = e.get("status")
             meta = e.get("meta")
-            parts = [f"**{kind}**", issue_key]
+            kind_label = "SLA VERLOOPT" if kind == "SLA_CRITICAL" else kind
+            parts = ["DASHBOARD ALERTS", "🚨", "@everyone", kind_label, issue_key]
+            if issue_summary:
+                parts.append(issue_summary)
             if status:
-                parts.append(f"status: {status}")
+                parts.append(str(status))
             if meta:
                 parts.append(str(meta))
-            lines.append(" - ".join(parts))
+            parts.append(issue_url)
+            lines.append(" | ".join(parts))
         if len(events) > len(top):
             lines.append(f"... +{len(events) - len(top)} extra")
         payload = {
-            "text": "Nieuwe dashboard alerts:\n" + "\n".join(lines),
+            "text": "\n".join(lines),
         }
         response = requests.post(ALERT_TEAMS_WEBHOOK_URL, json=payload, timeout=ALERT_TEAMS_TIMEOUT_SECONDS)
         status_code = getattr(response, "status_code", None)
@@ -1380,6 +1388,7 @@ def upsert_issues(issues):
             issue_key = it["key"]
 
             request_type = norm_request_type(f.get(REQUEST_TYPE_FIELD))
+            issue_summary = str(f.get("summary") or "").strip() or None
             onderwerp = norm_dropdown(f.get(ONDERWERP_FIELD))
 
             created_at = f.get("created")
@@ -1395,9 +1404,10 @@ def upsert_issues(issues):
 
             cur.execute(
                 """
-                insert into issues(issue_key, request_type, onderwerp_logging, organizations, created_at, resolved_at, updated_at, priority, assignee, assignee_avatar_url, current_status, first_response_due_at)
-                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                insert into issues(issue_key, issue_summary, request_type, onderwerp_logging, organizations, created_at, resolved_at, updated_at, priority, assignee, assignee_avatar_url, current_status, first_response_due_at)
+                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 on conflict (issue_key) do update set
+                  issue_summary=excluded.issue_summary,
                   request_type=excluded.request_type,
                   onderwerp_logging=excluded.onderwerp_logging,
                   organizations=excluded.organizations,
@@ -1412,6 +1422,7 @@ def upsert_issues(issues):
                 """,
                 (
                     issue_key,
+                    issue_summary,
                     request_type,
                     onderwerp,
                     organizations if organizations else None,
@@ -2518,6 +2529,7 @@ def alerts_live(servicedesk_only: bool = True):
         cur.execute(
             """
             select issue_key, created_at, priority, current_status
+                 , issue_summary
             from issues
             where created_at >= now() - interval '24 hours'
       and (
@@ -2543,7 +2555,8 @@ def alerts_live(servicedesk_only: bool = True):
             select
               issue_key,
               first_response_due_at,
-              greatest(0, ceil(extract(epoch from (first_response_due_at - now())) / 60.0))::int as minutes_left
+              greatest(0, ceil(extract(epoch from (first_response_due_at - now())) / 60.0))::int as minutes_left,
+              issue_summary
             from issues
             where resolved_at is null
               and lower(coalesce(current_status, '')) = 'nieuwe melding'
@@ -2573,7 +2586,8 @@ def alerts_live(servicedesk_only: bool = True):
             select
               issue_key,
               first_response_due_at,
-              greatest(0, ceil(extract(epoch from (first_response_due_at - now())) / 60.0))::int as minutes_left
+              greatest(0, ceil(extract(epoch from (first_response_due_at - now())) / 60.0))::int as minutes_left,
+              issue_summary
             from issues
             where resolved_at is null
               and lower(coalesce(current_status, '')) = 'nieuwe melding'
@@ -2603,7 +2617,8 @@ def alerts_live(servicedesk_only: bool = True):
             select
               issue_key,
               first_response_due_at,
-              ceil(extract(epoch from (now() - first_response_due_at)) / 60.0)::int as minutes_overdue
+              ceil(extract(epoch from (now() - first_response_due_at)) / 60.0)::int as minutes_overdue,
+              issue_summary
             from issues
             where resolved_at is null
               and lower(coalesce(current_status, '')) = 'nieuwe melding'
@@ -2637,6 +2652,7 @@ def alerts_live(servicedesk_only: bool = True):
             "created_at": r[1].isoformat() if r[1] else None,
             "priority": r[2],
             "status": r[3],
+            "issue_summary": r[4],
         }
         for r in p1_rows
         if r[0] in existing_keys
@@ -2646,6 +2662,7 @@ def alerts_live(servicedesk_only: bool = True):
             "issue_key": r[0],
             "due_at": r[1].isoformat() if r[1] else None,
             "minutes_left": int(r[2] or 0),
+            "issue_summary": r[3],
         }
         for r in warning_rows
         if r[0] in existing_keys
@@ -2655,6 +2672,7 @@ def alerts_live(servicedesk_only: bool = True):
             "issue_key": r[0],
             "due_at": r[1].isoformat() if r[1] else None,
             "minutes_left": int(r[2] or 0),
+            "issue_summary": r[3],
         }
         for r in critical_rows
         if r[0] in existing_keys
@@ -2664,6 +2682,7 @@ def alerts_live(servicedesk_only: bool = True):
             "issue_key": r[0],
             "due_at": r[1].isoformat() if r[1] else None,
             "minutes_overdue": int(r[2] or 0),
+            "issue_summary": r[3],
         }
         for r in overdue_rows
         if r[0] in existing_keys
@@ -2676,6 +2695,8 @@ def alerts_live(servicedesk_only: bool = True):
             "alert_kind": "P1",
             "status": item.get("status"),
             "meta": item.get("priority"),
+            "issue_summary": item.get("issue_summary"),
+            "issue_url": f"{JIRA_BASE}/browse/{item['issue_key']}",
             "servicedesk_only": servicedesk_only,
         }
         for item in priority_items
@@ -2686,6 +2707,8 @@ def alerts_live(servicedesk_only: bool = True):
             "alert_kind": "SLA_WARNING",
             "status": None,
             "meta": f"{int(item.get('minutes_left') or 0)} min",
+            "issue_summary": item.get("issue_summary"),
+            "issue_url": f"{JIRA_BASE}/browse/{item['issue_key']}",
             "servicedesk_only": servicedesk_only,
         }
         for item in due_warning_items
@@ -2696,6 +2719,8 @@ def alerts_live(servicedesk_only: bool = True):
             "alert_kind": "SLA_CRITICAL",
             "status": None,
             "meta": f"{int(item.get('minutes_left') or 0)} min",
+            "issue_summary": item.get("issue_summary"),
+            "issue_url": f"{JIRA_BASE}/browse/{item['issue_key']}",
             "servicedesk_only": servicedesk_only,
         }
         for item in due_critical_items
@@ -2706,6 +2731,8 @@ def alerts_live(servicedesk_only: bool = True):
             "alert_kind": "SLA_OVERDUE",
             "status": None,
             "meta": f"{int(item.get('minutes_overdue') or 0)} min te laat",
+            "issue_summary": item.get("issue_summary"),
+            "issue_url": f"{JIRA_BASE}/browse/{item['issue_key']}",
             "servicedesk_only": servicedesk_only,
         }
         for item in overdue_items
@@ -2811,6 +2838,7 @@ def dev_alert_trigger(servicedesk_only: bool = True):
             """
             insert into issues(
               issue_key,
+              issue_summary,
               request_type,
               onderwerp_logging,
               organizations,
@@ -2823,8 +2851,9 @@ def dev_alert_trigger(servicedesk_only: bool = True):
               current_status,
               first_response_due_at
             )
-            values (%s, %s, %s, %s, now(), null, now(), %s, %s, null, %s, now() + interval '3 minutes')
+            values (%s, %s, %s, %s, %s, now(), null, now(), %s, %s, null, %s, now() + interval '3 minutes')
             on conflict (issue_key) do update set
+              issue_summary=excluded.issue_summary,
               request_type=excluded.request_type,
               onderwerp_logging=excluded.onderwerp_logging,
               organizations=excluded.organizations,
@@ -2839,6 +2868,7 @@ def dev_alert_trigger(servicedesk_only: bool = True):
             """,
             (
                 issue_key,
+                "Dev alert testmelding",
                 "Dev Alert",
                 onderwerp,
                 ["Dev"],
@@ -2893,6 +2923,8 @@ def dev_alert_notify_test():
                 "alert_kind": "P1",
                 "status": "Nieuwe melding",
                 "meta": "Priority 1",
+                "issue_summary": "Dev alert testmelding",
+                "issue_url": f"{JIRA_BASE}/browse/{DEV_ALERT_ISSUE_KEY}-NOTIFY",
                 "servicedesk_only": True,
             }
         ]
