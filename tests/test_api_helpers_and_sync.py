@@ -578,10 +578,17 @@ def test_alerts_live_sends_teams_notification_for_new_events(monkeypatch):
     assert response.status_code == 200
     assert len(sent) == 1
     assert sent[0][0] == "https://example.invalid/webhook"
-    assert "DASHBOARD ALERTS" in sent[0][1]["text"]
-    assert "@everyone" in sent[0][1]["text"]
-    assert "P1 titel" in sent[0][1]["text"]
-    assert "https://planningsagenda.atlassian.net/browse/SD-1" in sent[0][1]["text"]
+    payload = sent[0][1]
+    assert payload["type"] == "message"
+    attachment = payload["attachments"][0]
+    assert attachment["contentType"] == "application/vnd.microsoft.card.adaptive"
+    content = attachment["content"]
+    assert content["body"][0]["text"] == "DASHBOARD ALERTS"
+    assert content["body"][1]["text"] == "🚨 everyone"
+    assert content["body"][2]["items"][0]["text"] == "P1"
+    assert content["body"][2]["items"][1]["text"] == "SD-1"
+    assert content["body"][2]["items"][2]["text"] == "P1 titel"
+    assert content["actions"][0]["url"] == "https://planningsagenda.atlassian.net/browse/SD-1"
 
 
 def test_send_teams_alert_notification_handles_missing_title(monkeypatch):
@@ -612,9 +619,12 @@ def test_send_teams_alert_notification_handles_missing_title(monkeypatch):
     )
 
     assert result["ok"] is True
-    assert "SLA VERLOOPT" in sent[0][1]["text"]
-    assert "SD-123" in sent[0][1]["text"]
-    assert "https://planningsagenda.atlassian.net/browse/SD-123" in sent[0][1]["text"]
+    payload = sent[0][1]
+    content = payload["attachments"][0]["content"]
+    assert content["body"][2]["items"][0]["text"] == "SLA VERLOOPT"
+    assert content["body"][2]["items"][1]["text"] == "SD-123"
+    assert content["body"][2]["items"][2]["text"] == "Geen titel beschikbaar"
+    assert content["actions"][0]["url"] == "https://planningsagenda.atlassian.net/browse/SD-123"
 
 
 def test_dev_alert_trigger_and_clear(monkeypatch):
