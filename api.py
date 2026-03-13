@@ -1285,35 +1285,103 @@ def _persist_alert_log_events(cur, events):
     return inserted_events
 
 
+def _teams_alert_kind_label(kind: Any) -> str:
+    normalized = str(kind or "ALERT").strip().upper()
+    if normalized in {"SLA_CRITICAL", "SLA_OVERDUE", "SLA_WARNING"}:
+        return "SLA VERLOOPT"
+    return normalized or "ALERT"
+
+
+def _teams_alert_card(event: Dict[str, Any]) -> Dict[str, Any]:
+    issue_key = str(event.get("issue_key") or "?")
+    issue_summary = str(event.get("issue_summary") or "").strip() or "Geen titel beschikbaar"
+    issue_url = str(event.get("issue_url") or f"{JIRA_BASE}/browse/{issue_key}")
+    status_text = str(event.get("status") or "").strip() or "-"
+    meta_text = str(event.get("meta") or "").strip() or "-"
+    alert_label = _teams_alert_kind_label(event.get("alert_kind"))
+    return {
+        "$schema": "https://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.4",
+        "msteams": {"width": "Full"},
+        "body": [
+            {
+                "type": "TextBlock",
+                "text": "DASHBOARD ALERTS",
+                "weight": "Bolder",
+                "size": "Large",
+                "color": "Attention",
+                "wrap": True,
+            },
+            {
+                "type": "TextBlock",
+                "text": "🚨 everyone",
+                "spacing": "Small",
+                "wrap": True,
+            },
+            {
+                "type": "Container",
+                "spacing": "Medium",
+                "style": "attention",
+                "bleed": True,
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": alert_label,
+                        "weight": "Bolder",
+                        "size": "Medium",
+                        "wrap": True,
+                    },
+                    {
+                        "type": "TextBlock",
+                        "text": issue_key,
+                        "weight": "Bolder",
+                        "size": "ExtraLarge",
+                        "wrap": True,
+                        "spacing": "Small",
+                    },
+                    {
+                        "type": "TextBlock",
+                        "text": issue_summary,
+                        "wrap": True,
+                        "spacing": "Small",
+                    },
+                ],
+            },
+            {
+                "type": "FactSet",
+                "spacing": "Medium",
+                "facts": [
+                    {"title": "Status", "value": status_text},
+                    {"title": "Urgentie", "value": meta_text},
+                ],
+            },
+        ],
+        "actions": [
+            {
+                "type": "Action.OpenUrl",
+                "title": "Open in Jira",
+                "url": issue_url,
+            }
+        ],
+    }
+
+
 def _send_teams_alert_notification(events):
     result = {"attempted": False, "ok": False, "status_code": None, "error": None}
     if not ALERT_TEAMS_WEBHOOK_URL or not events:
         return result
     try:
         result["attempted"] = True
-        top = events[:8]
-        lines = []
-        for e in top:
-            kind = str(e.get("alert_kind") or "ALERT")
-            issue_key = e.get("issue_key") or "?"
-            issue_summary = str(e.get("issue_summary") or "").strip()
-            issue_url = str(e.get("issue_url") or f"{JIRA_BASE}/browse/{issue_key}")
-            status = e.get("status")
-            meta = e.get("meta")
-            kind_label = "SLA VERLOOPT" if kind == "SLA_CRITICAL" else kind
-            parts = ["DASHBOARD ALERTS", "🚨", "@everyone", kind_label, issue_key]
-            if issue_summary:
-                parts.append(issue_summary)
-            if status:
-                parts.append(str(status))
-            if meta:
-                parts.append(str(meta))
-            parts.append(issue_url)
-            lines.append(" | ".join(parts))
-        if len(events) > len(top):
-            lines.append(f"... +{len(events) - len(top)} extra")
         payload = {
-            "text": "\n".join(lines),
+            "type": "message",
+            "attachments": [
+                {
+                    "contentType": "application/vnd.microsoft.card.adaptive",
+                    "contentUrl": None,
+                    "content": _teams_alert_card(events[0]),
+                }
+            ],
         }
         response = requests.post(ALERT_TEAMS_WEBHOOK_URL, json=payload, timeout=ALERT_TEAMS_TIMEOUT_SECONDS)
         status_code = getattr(response, "status_code", None)
