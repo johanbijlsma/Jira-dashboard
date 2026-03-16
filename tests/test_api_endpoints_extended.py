@@ -1,6 +1,7 @@
 from datetime import date, datetime
 
 from fastapi.testclient import TestClient
+import psycopg2
 
 import api
 
@@ -64,6 +65,19 @@ def test_status_alias_uses_same_payload_provider(monkeypatch):
     response = client.get("/status")
     assert response.status_code == 200
     assert response.json() == payload
+
+
+def test_status_returns_503_when_database_is_unavailable(monkeypatch):
+    def _raise_db_error():
+        raise psycopg2.OperationalError("connection refused")
+
+    monkeypatch.setattr(api, "get_sync_status_payload", _raise_db_error)
+
+    response = client.get("/status")
+
+    assert response.status_code == 503
+    assert response.json()["error"] == "database_unavailable"
+    assert "connection refused" in response.json()["message"]
 
 
 def test_update_servicedesk_config_rejects_empty_team(monkeypatch):
@@ -230,7 +244,6 @@ def test_get_servicedesk_config_uses_baseline_when_not_customized(monkeypatch):
     assert data["onderwerpen"] == ["Performance", "Vraag"]
     assert data["onderwerpen_baseline"] == ["Performance", "Vraag"]
     assert data["onderwerpen_customized"] is False
-    assert not any("update dashboard_config" in query.lower() for query, _ in cursor.executed)
 
 
 def test_get_servicedesk_config_uses_saved_selection_when_customized(monkeypatch):
@@ -251,7 +264,16 @@ def test_get_servicedesk_config_uses_saved_selection_when_customized(monkeypatch
     assert data["onderwerpen"] == ["Performance"]
     assert data["onderwerpen_baseline"] == ["Performance", "Vraag"]
     assert data["onderwerpen_customized"] is True
-    assert not any("update dashboard_config" in query.lower() for query, _ in cursor.executed)
+
+
+def test_seed_servicedesk_config_defaults_updates_dashboard_config(monkeypatch):
+    cursor = _CursorStub()
+
+    api._seed_servicedesk_config_defaults(cursor)
+
+    executed_queries = [query.lower() for query, _ in cursor.executed]
+    assert any("insert into dashboard_config" in query for query in executed_queries)
+    assert sum("update dashboard_config" in query for query in executed_queries) == 2
 
 
 def test_metrics_inflow_vs_closed_maps_rows(monkeypatch):

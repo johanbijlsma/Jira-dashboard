@@ -1,5 +1,7 @@
 .env
 .env.*
+local-native.env
+.venv/
 node_modules/
 .next/
 __pycache__/

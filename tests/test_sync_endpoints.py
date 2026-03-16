@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+import psycopg2
 
 import api
 
@@ -29,6 +30,19 @@ def test_sync_status_exposes_runtime_state(monkeypatch):
     assert data["last_run"] == "2026-02-17T10:31:00Z"
     assert data["last_result"] == {"upserts": 12}
     assert data["last_sync"] == "2026-02-17T10:30:00Z"
+
+
+def test_sync_status_returns_503_when_database_is_unavailable(monkeypatch):
+    def _raise_db_error():
+        raise psycopg2.OperationalError("connection refused")
+
+    monkeypatch.setattr(api, "get_sync_status_payload", _raise_db_error)
+
+    response = client.get("/sync/status")
+
+    assert response.status_code == 503
+    assert response.json()["error"] == "database_unavailable"
+    assert "connection refused" in response.json()["message"]
 
 
 def test_sync_endpoint_queues_background_task(monkeypatch):
