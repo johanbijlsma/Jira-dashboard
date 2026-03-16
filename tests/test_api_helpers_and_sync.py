@@ -168,7 +168,7 @@ def test_normalizers_and_priority_helpers(monkeypatch):
     dt = api.norm_first_response_due_at(
         {"ongoingCycle": {"breachTime": {"iso8601": "2026-02-25T12:00:00+0200"}}}
     )
-    assert dt.isoformat() == "2026-02-25T10:00:00"
+    assert dt.isoformat() == "2026-02-25T10:00:00+00:00"
     assert api.norm_first_response_due_at(
         {
             "completedCycles": [
@@ -272,8 +272,9 @@ def test_upsert_issues_executes_insert(monkeypatch):
         },
     }
     api.upsert_issues([issue])
-    assert len(cursor.executed) == 1
-    params = cursor.executed[0][1]
+    insert_queries = [(query, params) for query, params in cursor.executed if "insert into issues" in query.lower()]
+    assert len(insert_queries) == 1
+    params = insert_queries[0][1]
     assert params[0] == "SD-1"
     assert params[1] == "Voorbeeldtitel"
     assert params[2] == "Vraag"

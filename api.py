@@ -662,84 +662,88 @@ def ensure_schema():  # pragma: no cover
             );
             """
         )
-        cur.execute("insert into dashboard_config(id) values (1) on conflict (id) do nothing;")
-        cur.execute(
-            """
-            update dashboard_config
-            set servicedesk_team_members = coalesce(
-                  (
-                    select array_agg(x)
-                    from (
-                      select distinct assignee as x
-                      from issues
-                      where assignee is not null
-                        and assignee <> ''
-                        and lower(assignee) = any(%s::text[])
-                      order by 1
-                    ) t
-                  ),
-                  (
-                    select array_agg(x)
-                    from (
-                      select assignee as x
-                      from issues
-                      where assignee is not null
-                        and assignee <> ''
-                      group by assignee
-                      order by count(*) desc, assignee asc
-                      limit 5
-                    ) t2
-                  ),
-                  array[]::text[]
-                ),
-                servicedesk_onderwerpen = (
-                  select coalesce(array_agg(x), array[]::text[])
-                  from (
-                    select distinct onderwerp_logging as x
-                    from issues
-                    where onderwerp_logging is not null
-                      and onderwerp_logging <> ''
-                      and lower(onderwerp_logging) <> all(%s::text[])
-                    order by 1
-                  ) t
-                ),
-                servicedesk_onderwerpen_customized = false,
-                updated_at = now()
-            where id = 1
-              and coalesce(array_length(servicedesk_team_members, 1), 0) = 0
-              and coalesce(array_length(servicedesk_onderwerpen, 1), 0) = 0;
-            """,
-            (
-                [name.lower() for name in DEFAULT_SERVICEDESK_TEAM_MEMBERS],
-                list(DEFAULT_NON_SERVICEDESK_ONDERWERPEN_LOWER),
-            ),
-        )
-        cur.execute(
-            """
-            update dashboard_config
-            set servicedesk_onderwerpen = (
-                  select coalesce(array_agg(item.onderwerp order by item.ord), array[]::text[])
-                  from (
-                    select onderwerp, ord
-                    from unnest(servicedesk_onderwerpen) with ordinality as item(onderwerp, ord)
-                    where lower(onderwerp) <> all(%s::text[])
-                  ) item
-                ),
-                updated_at = now()
-            where id = 1
-              and exists (
-                select 1
-                from unnest(servicedesk_onderwerpen) as onderwerp
-                where lower(onderwerp) = any(%s::text[])
-              );
-            """,
-            (
-                list(DEFAULT_NON_SERVICEDESK_ONDERWERPEN_LOWER),
-                list(DEFAULT_NON_SERVICEDESK_ONDERWERPEN_LOWER),
-            ),
-        )
+        _seed_servicedesk_config_defaults(cur)
         c.commit()
     _schema_checked = True
+
+
+def _seed_servicedesk_config_defaults(cur):
+    cur.execute("insert into dashboard_config(id) values (1) on conflict (id) do nothing;")
+    cur.execute(
+        """
+        update dashboard_config
+        set servicedesk_team_members = coalesce(
+              (
+                select array_agg(x)
+                from (
+                  select distinct assignee as x
+                  from issues
+                  where assignee is not null
+                    and assignee <> ''
+                    and lower(assignee) = any(%s::text[])
+                  order by 1
+                ) t
+              ),
+              (
+                select array_agg(x)
+                from (
+                  select assignee as x
+                  from issues
+                  where assignee is not null
+                    and assignee <> ''
+                  group by assignee
+                  order by count(*) desc, assignee asc
+                  limit 5
+                ) t2
+              ),
+              array[]::text[]
+            ),
+            servicedesk_onderwerpen = (
+              select coalesce(array_agg(x), array[]::text[])
+              from (
+                select distinct onderwerp_logging as x
+                from issues
+                where onderwerp_logging is not null
+                  and onderwerp_logging <> ''
+                  and lower(onderwerp_logging) <> all(%s::text[])
+                order by 1
+              ) t
+            ),
+            servicedesk_onderwerpen_customized = false,
+            updated_at = now()
+        where id = 1
+          and coalesce(array_length(servicedesk_team_members, 1), 0) = 0
+          and coalesce(array_length(servicedesk_onderwerpen, 1), 0) = 0;
+        """,
+        (
+            [name.lower() for name in DEFAULT_SERVICEDESK_TEAM_MEMBERS],
+            list(DEFAULT_NON_SERVICEDESK_ONDERWERPEN_LOWER),
+        ),
+    )
+    cur.execute(
+        """
+        update dashboard_config
+        set servicedesk_onderwerpen = (
+              select coalesce(array_agg(item.onderwerp order by item.ord), array[]::text[])
+              from (
+                select onderwerp, ord
+                from unnest(servicedesk_onderwerpen) with ordinality as item(onderwerp, ord)
+                where lower(onderwerp) <> all(%s::text[])
+              ) item
+            ),
+            updated_at = now()
+        where id = 1
+          and exists (
+            select 1
+            from unnest(servicedesk_onderwerpen) as onderwerp
+            where lower(onderwerp) = any(%s::text[])
+          );
+        """,
+        (
+            list(DEFAULT_NON_SERVICEDESK_ONDERWERPEN_LOWER),
+            list(DEFAULT_NON_SERVICEDESK_ONDERWERPEN_LOWER),
+        ),
+    )
 
 
 class VacationPayload(BaseModel):
@@ -788,6 +792,7 @@ def _same_text_set(a, b):
 def get_servicedesk_config():
     ensure_schema()
     with conn() as c, c.cursor() as cur:
+        _seed_servicedesk_config_defaults(cur)
         cur.execute(
             """
             select servicedesk_team_members, servicedesk_onderwerpen, servicedesk_onderwerpen_customized, updated_at
@@ -1196,7 +1201,7 @@ def norm_first_response_due_at(v):
     dt = parse_jira_datetime(iso)
     if dt is None:
         return None
-    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt.astimezone(timezone.utc)
 
 
 def is_priority1_priority(value: Optional[str]) -> bool:
@@ -1504,6 +1509,7 @@ def upsert_issues(issues):
                     first_response_due_at,
                 ),
             )
+        _seed_servicedesk_config_defaults(cur)
         c.commit()
 
 
