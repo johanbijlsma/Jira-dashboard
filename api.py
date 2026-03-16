@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import requests
 import psycopg2
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -83,7 +83,7 @@ DEFAULT_NON_SERVICEDESK_ONDERWERPEN = {
 }
 DEFAULT_NON_SERVICEDESK_ONDERWERPEN_LOWER = {value.lower() for value in DEFAULT_NON_SERVICEDESK_ONDERWERPEN}
 
-# Prefer POSTGRES_* (from docker/.env). Fall back to DB_* for backward compatibility.
+# Prefer POSTGRES_* and fall back to DB_* for backward compatibility.
 PG_HOST = os.environ.get("POSTGRES_HOST") or os.environ.get("DB_HOST") or "localhost"
 PG_PORT = int(os.environ.get("POSTGRES_PORT") or os.environ.get("DB_PORT") or 5432)
 PG_DB = os.environ.get("POSTGRES_DB") or os.environ.get("DB_NAME") or "jsm_analytics"
@@ -3116,12 +3116,42 @@ def delete_vacation(vacation_id: int):
 
 @app.get("/sync/status")
 def sync_status():
-    return get_sync_status_payload()
+    try:
+        return get_sync_status_payload()
+    except psycopg2.Error as exc:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "ok": False,
+                "error": "database_unavailable",
+                "message": str(exc),
+                "database": {
+                    "host": PG_HOST,
+                    "port": PG_PORT,
+                    "name": PG_DB,
+                },
+            },
+        )
 
 
 @app.get("/status")
 def status():
-    return get_sync_status_payload()
+    try:
+        return get_sync_status_payload()
+    except psycopg2.Error as exc:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "ok": False,
+                "error": "database_unavailable",
+                "message": str(exc),
+                "database": {
+                    "host": PG_HOST,
+                    "port": PG_PORT,
+                    "name": PG_DB,
+                },
+            },
+        )
 
 
 @app.post("/sync")

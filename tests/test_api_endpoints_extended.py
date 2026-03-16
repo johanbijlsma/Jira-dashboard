@@ -1,6 +1,7 @@
 from datetime import date, datetime
 
 from fastapi.testclient import TestClient
+import psycopg2
 
 import api
 
@@ -64,6 +65,19 @@ def test_status_alias_uses_same_payload_provider(monkeypatch):
     response = client.get("/status")
     assert response.status_code == 200
     assert response.json() == payload
+
+
+def test_status_returns_503_when_database_is_unavailable(monkeypatch):
+    def _raise_db_error():
+        raise psycopg2.OperationalError("connection refused")
+
+    monkeypatch.setattr(api, "get_sync_status_payload", _raise_db_error)
+
+    response = client.get("/status")
+
+    assert response.status_code == 503
+    assert response.json()["error"] == "database_unavailable"
+    assert "connection refused" in response.json()["message"]
 
 
 def test_update_servicedesk_config_rejects_empty_team(monkeypatch):
