@@ -214,7 +214,7 @@ def test_jira_search_with_retry(monkeypatch):
     ]
 
     def fake_post(_url, json, timeout):
-        calls.append((json["jql"], json.get("nextPageToken"), timeout))
+        calls.append(json)
         return responses.pop(0)
 
     monkeypatch.setattr(api._jira, "post", fake_post)
@@ -223,6 +223,7 @@ def test_jira_search_with_retry(monkeypatch):
     result = api.jira_search("project = SD")
     assert result["issues"][0]["key"] == "SD-1"
     assert len(calls) == 2
+    assert "summary" in calls[0]["fields"]
 
 
 def test_jira_existing_issue_keys_paths(monkeypatch):
@@ -384,9 +385,9 @@ def test_meta_alerts_and_issue_endpoints(monkeypatch):
                 ("SD-2", now, "Normaal", "Nieuwe melding", "Geen alert"),
                 ("SD-20", now, "P1", "In behandeling", "Niet nieuw"),
             ],
-            [("SD-3", now, 2, "Waarschuwing titel")],
+            [("SD-3", now, 2, "Waarschuwing titel", "Nieuwe melding")],
             [],
-            [("SD-4", now, 8, "Overdue titel")],
+            [("SD-4", now, 8, "Overdue titel", "Nieuwe melding")],
             [("SD-10", "Incident", "Koppelingen", now, now, "P1", "Johan", "Open")],
         ]
     )
@@ -404,7 +405,9 @@ def test_meta_alerts_and_issue_endpoints(monkeypatch):
     assert alerts_data["priority1"][0]["issue_summary"] == "P1 titel"
     assert alerts_data["first_response_due_warning"][0]["minutes_left"] == 2
     assert alerts_data["first_response_due_warning"][0]["issue_summary"] == "Waarschuwing titel"
+    assert alerts_data["first_response_due_warning"][0]["status"] == "Nieuwe melding"
     assert alerts_data["first_response_overdue"][0]["minutes_overdue"] == 8
+    assert alerts_data["first_response_overdue"][0]["status"] == "Nieuwe melding"
 
     issues_response = client.get(
         "/issues?date_from=2026-01-01&date_to=2026-02-28&date_field=resolved&limit=5&offset=0"
@@ -420,9 +423,9 @@ def test_alerts_overdue_query_only_uses_open_issues(monkeypatch):
     cursor = CursorStub(
         fetchall_values=[
             [("SD-1", now, "P1", "Nieuwe melding", "P1 titel")],
-            [("SD-2", now, 2, "Waarschuwing titel")],
+            [("SD-2", now, 2, "Waarschuwing titel", "Nieuwe melding")],
             [],
-            [("SD-3", now, 8, "Overdue titel")],
+            [("SD-3", now, 8, "Overdue titel", "Nieuwe melding")],
         ]
     )
     patch_conn(monkeypatch, cursor)
@@ -444,9 +447,9 @@ def test_alerts_live_forces_servicedesk_scope(monkeypatch):
     cursor = CursorStub(
         fetchall_values=[
             [("SD-1", now, "P1", "Nieuwe melding", "P1 titel")],
-            [("SD-2", now, 2, "Waarschuwing titel")],
+            [("SD-2", now, 2, "Waarschuwing titel", "Nieuwe melding")],
             [],
-            [("SD-3", now, 8, "Overdue titel")],
+            [("SD-3", now, 8, "Overdue titel", "Nieuwe melding")],
         ]
     )
     patch_conn(monkeypatch, cursor)
@@ -465,9 +468,9 @@ def test_alerts_warning_and_critical_queries_only_use_nieuwe_melding(monkeypatch
     cursor = CursorStub(
         fetchall_values=[
             [("SD-1", now, "P1", "Nieuwe melding", "P1 titel")],
-            [("SD-2", now, 20, "Waarschuwing titel")],
-            [("SD-3", now, 4, "Kritiek titel")],
-            [("SD-4", now, 8, "Overdue titel")],
+            [("SD-2", now, 20, "Waarschuwing titel", "Nieuwe melding")],
+            [("SD-3", now, 4, "Kritiek titel", "Nieuwe melding")],
+            [("SD-4", now, 8, "Overdue titel", "Nieuwe melding")],
         ]
     )
     patch_conn(monkeypatch, cursor)
@@ -487,9 +490,9 @@ def test_alerts_live_persists_log_events_and_cleans_up(monkeypatch):
     cursor = CursorStub(
         fetchall_values=[
             [("SD-1", now, "P1", "Nieuwe melding", "P1 titel")],
-            [("SD-2", now, 2, "Waarschuwing titel")],
+            [("SD-2", now, 2, "Waarschuwing titel", "Nieuwe melding")],
             [],
-            [("SD-3", now, 8, "Overdue titel")],
+            [("SD-3", now, 8, "Overdue titel", "Nieuwe melding")],
         ]
     )
     patch_conn(monkeypatch, cursor)
@@ -556,9 +559,9 @@ def test_alerts_live_sends_teams_notification_for_new_events(monkeypatch):
     cursor = CursorStub(
         fetchall_values=[
             [("SD-1", now, "P1", "Nieuwe melding", "P1 titel")],
-            [("SD-2", now, 2, "Waarschuwing titel")],
+            [("SD-2", now, 2, "Waarschuwing titel", "Nieuwe melding")],
             [],
-            [("SD-3", now, 8, "Overdue titel")],
+            [("SD-3", now, 8, "Overdue titel", "Nieuwe melding")],
         ],
         fetchone_values=[(1,), (2,), (3,)],
     )
@@ -611,6 +614,7 @@ def test_send_teams_alert_notification_handles_missing_title(monkeypatch):
             {
                 "issue_key": "SD-123",
                 "alert_kind": "SLA_CRITICAL",
+                "status": "Nieuwe melding",
                 "meta": "5 min",
                 "issue_summary": None,
                 "issue_url": "https://planningsagenda.atlassian.net/browse/SD-123",
@@ -625,6 +629,7 @@ def test_send_teams_alert_notification_handles_missing_title(monkeypatch):
     assert content["body"][2]["items"][0]["text"] == "SLA VERLOOPT"
     assert content["body"][2]["items"][1]["text"] == "SD-123"
     assert content["body"][2]["items"][2]["text"] == "Geen titel beschikbaar"
+    assert content["body"][3]["facts"][0]["value"] == "Nieuwe melding"
     assert content["actions"][0]["url"] == "https://planningsagenda.atlassian.net/browse/SD-123"
 
 

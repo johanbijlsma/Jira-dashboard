@@ -1085,6 +1085,7 @@ def jira_search(jql: str, max_results: int = 100, next_page_token: Optional[str]
         "maxResults": max_results,
         "fields": [
             "key",
+            "summary",
             "created",
             "updated",
             "resolutiondate",
@@ -2630,7 +2631,8 @@ def alerts_live(servicedesk_only: bool = True):
               issue_key,
               first_response_due_at,
               greatest(0, ceil(extract(epoch from (first_response_due_at - now())) / 60.0))::int as minutes_left,
-              issue_summary
+              issue_summary,
+              current_status
             from issues
             where resolved_at is null
               and lower(coalesce(current_status, '')) = 'nieuwe melding'
@@ -2661,7 +2663,8 @@ def alerts_live(servicedesk_only: bool = True):
               issue_key,
               first_response_due_at,
               greatest(0, ceil(extract(epoch from (first_response_due_at - now())) / 60.0))::int as minutes_left,
-              issue_summary
+              issue_summary,
+              current_status
             from issues
             where resolved_at is null
               and lower(coalesce(current_status, '')) = 'nieuwe melding'
@@ -2692,7 +2695,8 @@ def alerts_live(servicedesk_only: bool = True):
               issue_key,
               first_response_due_at,
               ceil(extract(epoch from (now() - first_response_due_at)) / 60.0)::int as minutes_overdue,
-              issue_summary
+              issue_summary,
+              current_status
             from issues
             where resolved_at is null
               and lower(coalesce(current_status, '')) = 'nieuwe melding'
@@ -2737,6 +2741,7 @@ def alerts_live(servicedesk_only: bool = True):
             "due_at": r[1].isoformat() if r[1] else None,
             "minutes_left": int(r[2] or 0),
             "issue_summary": r[3],
+            "status": r[4],
         }
         for r in warning_rows
         if r[0] in existing_keys
@@ -2747,6 +2752,7 @@ def alerts_live(servicedesk_only: bool = True):
             "due_at": r[1].isoformat() if r[1] else None,
             "minutes_left": int(r[2] or 0),
             "issue_summary": r[3],
+            "status": r[4],
         }
         for r in critical_rows
         if r[0] in existing_keys
@@ -2757,6 +2763,7 @@ def alerts_live(servicedesk_only: bool = True):
             "due_at": r[1].isoformat() if r[1] else None,
             "minutes_overdue": int(r[2] or 0),
             "issue_summary": r[3],
+            "status": r[4],
         }
         for r in overdue_rows
         if r[0] in existing_keys
@@ -2779,7 +2786,7 @@ def alerts_live(servicedesk_only: bool = True):
         {
             "issue_key": item["issue_key"],
             "alert_kind": "SLA_WARNING",
-            "status": None,
+            "status": item.get("status"),
             "meta": f"{int(item.get('minutes_left') or 0)} min",
             "issue_summary": item.get("issue_summary"),
             "issue_url": f"{JIRA_BASE}/browse/{item['issue_key']}",
@@ -2791,7 +2798,7 @@ def alerts_live(servicedesk_only: bool = True):
         {
             "issue_key": item["issue_key"],
             "alert_kind": "SLA_CRITICAL",
-            "status": None,
+            "status": item.get("status"),
             "meta": f"{int(item.get('minutes_left') or 0)} min",
             "issue_summary": item.get("issue_summary"),
             "issue_url": f"{JIRA_BASE}/browse/{item['issue_key']}",
@@ -2803,7 +2810,7 @@ def alerts_live(servicedesk_only: bool = True):
         {
             "issue_key": item["issue_key"],
             "alert_kind": "SLA_OVERDUE",
-            "status": None,
+            "status": item.get("status"),
             "meta": f"{int(item.get('minutes_overdue') or 0)} min te laat",
             "issue_summary": item.get("issue_summary"),
             "issue_url": f"{JIRA_BASE}/browse/{item['issue_key']}",
