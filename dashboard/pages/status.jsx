@@ -447,7 +447,7 @@ export default function StatusPage() {
         </section>
       </div>
 
-      <style jsx global>{`
+      <style>{`
         :root {
           color-scheme: light dark;
           --page-bg: #f1f5f9;

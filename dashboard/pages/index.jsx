@@ -42,6 +42,12 @@ import {
   weekStartIsoFromDate,
 } from "../lib/dashboard-utils";
 import { legendNoopHandler, setupChartDefaults } from "../lib/chart-setup";
+import { useAlertLogs } from "../lib/use-alert-logs";
+import { useDashboardData } from "../lib/use-dashboard-data";
+import { useLiveAlerts } from "../lib/use-live-alerts";
+import { useServicedeskConfig } from "../lib/use-servicedesk-config";
+import { useSyncStatus } from "../lib/use-sync-status";
+import { useVacationsData } from "../lib/use-vacations-data";
 import {
   hideCardLayout,
   hideKpiLayout,
@@ -183,45 +189,12 @@ export default function Home() {
   const [assignee, setAssignee] = useState("");
   const [organization, setOrganization] = useState("");
   const [servicedeskOnly, setServicedeskOnly] = useState(DEFAULT_SERVICEDESK_ONLY);
-
-  const [meta, setMeta] = useState({ request_types: [], onderwerpen: [], priorities: [], assignees: [], organizations: [] });
-  const [servicedeskConfig, setServicedeskConfig] = useState({
-    team_members: [],
-    onderwerpen: [],
-    onderwerpen_customized: false,
-    updated_at: null,
-    team_member_avatars: {},
-  });
-  const [servicedeskOnderwerpenBaseline, setServicedeskOnderwerpenBaseline] = useState([]);
-  const [teamMembersDraft, setTeamMembersDraft] = useState([]);
-  const [onderwerpenDraft, setOnderwerpenDraft] = useState([]);
   const [teamConfigSaving, setTeamConfigSaving] = useState(false);
   const [onderwerpConfigSaving, setOnderwerpConfigSaving] = useState(false);
-  const [volume, setVolume] = useState([]);
-  const [onderwerpVolume, setOnderwerpVolume] = useState([]);
-  const [priorityVolume, setPriorityVolume] = useState([]);
-  const [assigneeVolume, setAssigneeVolume] = useState([]);
-  const [organizationVolume, setOrganizationVolume] = useState([]);
-  const [p90, setP90] = useState([]);
-  const [inflowVsClosedWeekly, setInflowVsClosedWeekly] = useState([]);
-  const [incidentResolutionWeekly, setIncidentResolutionWeekly] = useState([]);
-  const [firstResponseWeekly, setFirstResponseWeekly] = useState([]);
-  const [ttfrOverdueWeekly, setTtfrOverdueWeekly] = useState([]);
 
-  const [syncStatus, setSyncStatus] = useState(null);
   const [syncLoading, setSyncLoading] = useState(false);
   const [syncMessage, setSyncMessage] = useState("");
   const [syncMessageKind, setSyncMessageKind] = useState("success"); // "success" | "error"
-  const [liveAlerts, setLiveAlerts] = useState({
-    priority1: [],
-    first_response_due_warning: [],
-    first_response_due_critical: [],
-    first_response_overdue: [],
-  });
-  const [upcomingVacations, setUpcomingVacations] = useState([]);
-  const [upcomingVacationTotal, setUpcomingVacationTotal] = useState(0);
-  const [allVacations, setAllVacations] = useState([]);
-  const [todayVacations, setTodayVacations] = useState([]);
   const [vacationEditMode, setVacationEditMode] = useState(false);
   const [vacationSaving, setVacationSaving] = useState(false);
   const [vacationHoverId, setVacationHoverId] = useState(null);
@@ -253,8 +226,6 @@ export default function Home() {
   const [drillLoading, setDrillLoading] = useState(false);
   const [drillOffset, setDrillOffset] = useState(0);
   const [drillHasNext, setDrillHasNext] = useState(false);
-  const [alertLogEntries, setAlertLogEntries] = useState([]);
-  const [hasNewAlertLogEntry, setHasNewAlertLogEntry] = useState(false);
   const [clearAlertLogsBusy, setClearAlertLogsBusy] = useState(false);
   const [expandedAlertGroups, setExpandedAlertGroups] = useState({});
   const [faviconPulseOn, setFaviconPulseOn] = useState(false);
@@ -274,9 +245,6 @@ export default function Home() {
   const autoSyncAttemptRef = useRef(0);
   const autoResetTimerRef = useRef(null);
   const seenLiveAlertKeysRef = useRef(new Set());
-  const alertLogLatestMarkerRef = useRef("");
-  const alertLogBootstrappedRef = useRef(false);
-  const sidePanelModeRef = useRef("");
   const dragStateRef = useRef(null);
   const [layoutSavedSnapshot, setLayoutSavedSnapshot] = useState("");
   const [isLayoutEditing, setIsLayoutEditing] = useState(false);
@@ -304,6 +272,7 @@ export default function Home() {
       servicedeskOnly === DEFAULT_SERVICEDESK_ONLY,
     [requestType, onderwerp, priority, assignee, organization, servicedeskOnly]
   );
+  const { syncStatus, refreshSyncStatus } = useSyncStatus();
   const syncBusy = syncLoading || !!syncStatus?.running;
   const backendAutoSyncEnabled = !!syncStatus?.auto_sync?.enabled;
   const syncStatusInlineText = useMemo(() => {
@@ -316,6 +285,16 @@ export default function Home() {
     const err = syncStatus.last_error ? ` · fout: ${syncStatus.last_error}` : "";
     return `${base}${upserts}${err}`;
   }, [syncStatus]);
+  const {
+    servicedeskConfig,
+    servicedeskOnderwerpenBaseline,
+    teamMembersDraft,
+    onderwerpenDraft,
+    setTeamMembersDraft,
+    setOnderwerpenDraft,
+    refreshServicedeskConfig,
+    applyServicedeskConfig,
+  } = useServicedeskConfig();
   const servicedeskTeamMembers = useMemo(() => {
     const values = Array.isArray(servicedeskConfig?.team_members) ? servicedeskConfig.team_members : [];
     return values.length ? values : VACATION_TEAM_MEMBERS;
@@ -360,6 +339,48 @@ export default function Home() {
       label: `${fmtDate(from)} t/m ${fmtDate(to)} (${completed.length} volledige weken)`,
     };
   }, [dateFrom, dateTo]);
+
+  const {
+    meta,
+    volume,
+    onderwerpVolume,
+    priorityVolume,
+    assigneeVolume,
+    organizationVolume,
+    p90,
+    inflowVsClosedWeekly,
+    incidentResolutionWeekly,
+    firstResponseWeekly,
+    ttfrOverdueWeekly,
+    refreshDashboard,
+  } = useDashboardData({
+    dateFrom,
+    dateTo,
+    requestType,
+    onderwerp,
+    priority,
+    assignee,
+    organization,
+    servicedeskOnly,
+    p90Period,
+  });
+  const {
+    upcomingVacations,
+    upcomingVacationTotal,
+    allVacations,
+    todayVacations,
+    refreshVacations,
+  } = useVacationsData();
+  const {
+    alertLogEntries,
+    hasNewAlertLogEntry,
+    refreshAlertLogs,
+    clearHasNewAlertLogEntry,
+  } = useAlertLogs({
+    limit: ALERT_LOG_LIMIT,
+    sidePanelMode,
+    resetKey: servicedeskOnly,
+  });
   const alertLogGroups = useMemo(() => {
     const grouped = new Map();
     for (const entry of alertLogEntries) {
@@ -465,13 +486,13 @@ export default function Home() {
     setTeamMembersDraft((prev) =>
       prev.includes(name) ? prev.filter((x) => x !== name) : [...prev, name]
     );
-  }, []);
+  }, [setTeamMembersDraft]);
 
   const toggleOnderwerpDraft = useCallback((name) => {
     setOnderwerpenDraft((prev) =>
       prev.includes(name) ? prev.filter((x) => x !== name) : [...prev, name]
     );
-  }, []);
+  }, [setOnderwerpenDraft]);
 
   const normalizedOnderwerpenSelection = useCallback((values) => {
     const available = Array.isArray(meta?.onderwerpen) ? meta.onderwerpen : [];
@@ -493,11 +514,11 @@ export default function Home() {
 
   const cancelTeamConfig = useCallback(() => {
     setTeamMembersDraft(Array.isArray(servicedeskConfig?.team_members) ? servicedeskConfig.team_members : []);
-  }, [servicedeskConfig]);
+  }, [servicedeskConfig, setTeamMembersDraft]);
 
   const cancelOnderwerpConfig = useCallback(() => {
     setOnderwerpenDraft(normalizedOnderwerpenSelection(servicedeskConfig?.onderwerpen));
-  }, [normalizedOnderwerpenSelection, servicedeskConfig]);
+  }, [normalizedOnderwerpenSelection, servicedeskConfig, setOnderwerpenDraft]);
 
   const zichtbareOnderwerpenDraft = useMemo(
     () => normalizedOnderwerpenSelection(onderwerpenDraft),
@@ -549,16 +570,14 @@ export default function Home() {
         throw new Error(err?.detail || "Opslaan van teamleden mislukt.");
       }
       const updated = await res.json();
-      setServicedeskConfig(updated);
-      setTeamMembersDraft(Array.isArray(updated?.team_members) ? updated.team_members : []);
-      setOnderwerpenDraft(normalizedOnderwerpenSelection(updated?.onderwerpen));
+      applyServicedeskConfig(updated, normalizedOnderwerpenSelection);
       flashToast("Servicedesk teamleden opgeslagen.");
     } catch (err) {
       flashToast(err?.message || "Opslaan van teamleden mislukt.", "error");
     } finally {
       setTeamConfigSaving(false);
     }
-  }, [flashToast, normalizedOnderwerpenSelection, teamMembersDraft, onderwerpenDraft]);
+  }, [applyServicedeskConfig, flashToast, normalizedOnderwerpenSelection, teamMembersDraft, onderwerpenDraft]);
 
   const saveOnderwerpConfig = useCallback(async () => {
     const normalizedOnderwerpen = normalizedOnderwerpenSelection(onderwerpenDraft);
@@ -581,16 +600,14 @@ export default function Home() {
         throw new Error(err?.detail || "Opslaan van onderwerpen mislukt.");
       }
       const updated = await res.json();
-      setServicedeskConfig(updated);
-      setTeamMembersDraft(Array.isArray(updated?.team_members) ? updated.team_members : []);
-      setOnderwerpenDraft(normalizedOnderwerpenSelection(updated?.onderwerpen));
+      applyServicedeskConfig(updated, normalizedOnderwerpenSelection);
       flashToast("Servicedesk onderwerpen opgeslagen.");
     } catch (err) {
       flashToast(err?.message || "Opslaan van onderwerpen mislukt.", "error");
     } finally {
       setOnderwerpConfigSaving(false);
     }
-  }, [flashToast, normalizedOnderwerpenSelection, onderwerpenDraft, teamMembersDraft]);
+  }, [applyServicedeskConfig, flashToast, normalizedOnderwerpenSelection, onderwerpenDraft, teamMembersDraft]);
 
   const resetOnderwerpConfig = useCallback(async () => {
     const baseline = normalizedOnderwerpenSelection(servicedeskOnderwerpenBaseline);
@@ -610,16 +627,14 @@ export default function Home() {
         throw new Error(err?.detail || "Herstellen van onderwerpen mislukt.");
       }
       const updated = await res.json();
-      setServicedeskConfig(updated);
-      setTeamMembersDraft(Array.isArray(updated?.team_members) ? updated.team_members : []);
-      setOnderwerpenDraft(normalizedOnderwerpenSelection(updated?.onderwerpen));
+      applyServicedeskConfig(updated, normalizedOnderwerpenSelection);
       flashToast("Servicedesk onderwerpen hersteld.");
     } catch (err) {
       flashToast(err?.message || "Herstellen van onderwerpen mislukt.", "error");
     } finally {
       setOnderwerpConfigSaving(false);
     }
-  }, [flashToast, normalizedOnderwerpenSelection, servicedeskOnderwerpenBaseline, teamMembersDraft]);
+  }, [applyServicedeskConfig, flashToast, normalizedOnderwerpenSelection, servicedeskOnderwerpenBaseline, teamMembersDraft]);
 
   const saveDashboardLayout = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -663,76 +678,33 @@ export default function Home() {
     flashToast("Layout hersteld naar beginwaarden");
   }, [flashToast, normalizeDashboardLayout]);
 
-  const refreshSyncStatus = useCallback(async () => {
-    const r = await fetch(`${API}/sync/status`);
-    const s = await r.json();
-    setSyncStatus(s);
-    return s;
-  }, []);
+  const { liveAlerts, refreshLiveAlerts } = useLiveAlerts({
+    onRefresh: async () => {
+      await refreshAlertLogs();
+    },
+  });
 
-  const refreshAlertLogs = useCallback(async () => {
-    const params = new URLSearchParams();
-    params.set("limit", String(ALERT_LOG_LIMIT));
-    params.set("servicedesk_only", "true");
-    const r = await fetch(`${API}/alerts/logs?${params.toString()}`);
-    const data = await r.json();
-    const normalized = Array.isArray(data)
-      ? data.map((entry) => ({
-          id: entry?.id != null ? String(entry.id) : `${entry?.kind || ""}:${entry?.issue_key || ""}:${entry?.detected_at || ""}`,
-          detected_at: entry?.detected_at || null,
-          kind: String(entry?.kind || ""),
-          issue_key: String(entry?.issue_key || ""),
-          status: String(entry?.status || ""),
-          meta: String(entry?.meta || ""),
-        }))
-      : [];
-    const latestMarker = normalized[0] ? `${normalized[0].id}:${normalized[0].detected_at || ""}` : "";
-    const prevMarker = alertLogLatestMarkerRef.current;
-    if (!alertLogBootstrappedRef.current) {
-      alertLogBootstrappedRef.current = true;
-    } else if (latestMarker && latestMarker !== prevMarker && sidePanelModeRef.current !== "alerts") {
-      setHasNewAlertLogEntry(true);
-    }
-    alertLogLatestMarkerRef.current = latestMarker;
-    setAlertLogEntries(normalized);
-  }, [ALERT_LOG_LIMIT]);
-
-  const refreshLiveAlerts = useCallback(async () => {
-    const params = new URLSearchParams();
-    params.set("servicedesk_only", "true");
-    const r = await fetch(`${API}/alerts/live?${params.toString()}`);
-    const data = await r.json();
-    const warningItems = Array.isArray(data?.first_response_due_warning)
-      ? data.first_response_due_warning
-      : (Array.isArray(data?.first_response_due_soon) ? data.first_response_due_soon : []);
-    const normalized = {
-      priority1: Array.isArray(data?.priority1) ? data.priority1 : [],
-      first_response_due_warning: warningItems,
-      first_response_due_critical: Array.isArray(data?.first_response_due_critical) ? data.first_response_due_critical : [],
-      first_response_overdue: Array.isArray(data?.first_response_overdue) ? data.first_response_overdue : [],
-    };
-    setLiveAlerts(normalized);
-
+  useEffect(() => {
     const seen = seenLiveAlertKeysRef.current;
-    const newP1 = normalized.priority1.filter((item) => {
+    const newP1 = liveAlerts.priority1.filter((item) => {
       const key = `p1:${item.issue_key}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
-    const newSlaWarning = normalized.first_response_due_warning.filter((item) => {
+    const newSlaWarning = liveAlerts.first_response_due_warning.filter((item) => {
       const key = `sla-warning:${item.issue_key}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
-    const newSlaCritical = normalized.first_response_due_critical.filter((item) => {
+    const newSlaCritical = liveAlerts.first_response_due_critical.filter((item) => {
       const key = `sla-critical:${item.issue_key}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
-    const newOverdue = normalized.first_response_overdue.filter((item) => {
+    const newOverdue = liveAlerts.first_response_overdue.filter((item) => {
       const key = `sla-overdue:${item.issue_key}`;
       if (seen.has(key)) return false;
       seen.add(key);
@@ -756,8 +728,7 @@ export default function Home() {
         9000
       );
     }
-    await refreshAlertLogs();
-  }, [flashToast, refreshAlertLogs]);
+  }, [flashToast, liveAlerts]);
 
   const toggleAlertGroup = useCallback((groupKey) => {
     setExpandedAlertGroups((prev) => ({
@@ -787,43 +758,6 @@ export default function Home() {
       setClearAlertLogsBusy(false);
     }
   }, [flashToast, refreshAlertLogs]);
-
-  const refreshVacations = useCallback(async () => {
-    const [allRes, upcomingRes, todayRes] = await Promise.all([
-      fetch(`${API}/vacations`),
-      fetch(`${API}/vacations/upcoming?limit=3`),
-      fetch(`${API}/vacations/today`),
-    ]);
-    const [allData, upcomingData, todayData] = await Promise.all([
-      allRes.json(),
-      upcomingRes.json(),
-      todayRes.json(),
-    ]);
-    setAllVacations(Array.isArray(allData) ? allData : []);
-    setUpcomingVacationTotal(Array.isArray(allData) ? allData.length : 0);
-    setUpcomingVacations(Array.isArray(upcomingData) ? upcomingData : []);
-    setTodayVacations(Array.isArray(todayData) ? todayData : []);
-  }, []);
-
-  const refreshServicedeskConfig = useCallback(async () => {
-    const res = await fetch(`${API}/config/servicedesk`);
-    const data = await res.json();
-    const normalized = {
-      team_members: Array.isArray(data?.team_members) ? data.team_members : [],
-      onderwerpen: Array.isArray(data?.onderwerpen) ? data.onderwerpen : [],
-      onderwerpen_baseline: Array.isArray(data?.onderwerpen_baseline) ? data.onderwerpen_baseline : [],
-      onderwerpen_customized: Boolean(data?.onderwerpen_customized),
-      updated_at: data?.updated_at || null,
-      team_member_avatars:
-        data?.team_member_avatars && typeof data.team_member_avatars === "object"
-          ? data.team_member_avatars
-          : {},
-    };
-    setServicedeskConfig(normalized);
-    setServicedeskOnderwerpenBaseline(normalized.onderwerpen_baseline);
-    setTeamMembersDraft(normalized.team_members);
-    setOnderwerpenDraft(normalized.onderwerpen);
-  }, []);
 
   const startVacationCreate = useCallback(() => {
     const todayIso = isoDate(new Date());
@@ -977,71 +911,6 @@ export default function Home() {
     }
   }, [flashToast, refreshVacations, vacationForm.id, cancelVacationEdit]);
 
-  const refreshDashboard = useCallback(async () => {
-    const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
-    if (requestType) params.set("request_type", requestType);
-    if (onderwerp) params.set("onderwerp", onderwerp);
-    if (priority) params.set("priority", priority);
-    if (assignee) params.set("assignee", assignee);
-    if (organization) params.set("organization", organization);
-    if (servicedeskOnly) params.set("servicedesk_only", "true");
-
-    fetch(`${API}/metrics/volume_weekly?` + params.toString())
-      .then((r) => r.json())
-      .then(setVolume);
-
-    fetch(`${API}/metrics/volume_weekly_by_onderwerp?` + params.toString())
-      .then((r) => r.json())
-      .then((data) => (Array.isArray(data) ? setOnderwerpVolume(data) : setOnderwerpVolume([])));
-
-    fetch(`${API}/metrics/volume_by_priority?` + params.toString())
-      .then((r) => r.json())
-      .then((data) => (Array.isArray(data) ? setPriorityVolume(data) : setPriorityVolume([])));
-
-    fetch(`${API}/metrics/volume_by_assignee?` + params.toString())
-      .then((r) => r.json())
-      .then((data) => (Array.isArray(data) ? setAssigneeVolume(data) : setAssigneeVolume([])));
-
-    fetch(`${API}/metrics/volume_weekly_by_organization?` + params.toString())
-      .then((r) => r.json())
-      .then((data) => (Array.isArray(data) ? setOrganizationVolume(data) : setOrganizationVolume([])));
-
-    fetch(`${API}/metrics/inflow_vs_closed_weekly?` + params.toString())
-      .then((r) => r.json())
-      .then((data) => (Array.isArray(data) ? setInflowVsClosedWeekly(data) : setInflowVsClosedWeekly([])));
-
-    const ttrParams = new URLSearchParams(params);
-    ttrParams.delete("request_type");
-    fetch(`${API}/metrics/time_to_resolution_weekly_by_type?` + ttrParams.toString())
-      .then((r) => r.json())
-      .then((data) => (Array.isArray(data) ? setIncidentResolutionWeekly(data) : setIncidentResolutionWeekly([])));
-
-    fetch(`${API}/metrics/time_to_first_response_weekly?` + params.toString())
-      .then((r) => r.json())
-      .then((data) => (Array.isArray(data) ? setFirstResponseWeekly(data) : setFirstResponseWeekly([])));
-
-    fetch(`${API}/metrics/ttfr_overdue_weekly?` + params.toString())
-      .then((r) => r.json())
-      .then((data) => (Array.isArray(data) ? setTtfrOverdueWeekly(data) : setTtfrOverdueWeekly([])));
-
-    if (!p90Period.hasData) {
-      setP90([]);
-    } else {
-      const p = new URLSearchParams({ date_from: p90Period.dateFrom, date_to: p90Period.dateTo });
-      if (onderwerp) p.set("onderwerp", onderwerp);
-      if (priority) p.set("priority", priority);
-      if (assignee) p.set("assignee", assignee);
-      if (organization) p.set("organization", organization);
-      if (servicedeskOnly) p.set("servicedesk_only", "true");
-
-      fetch(`${API}/metrics/leadtime_p90_by_type?` + p.toString())
-        .then((r) => r.json())
-        .then(setP90);
-    }
-
-    fetch(`${API}/meta`).then((r) => r.json()).then(setMeta);
-  }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee, organization, servicedeskOnly, p90Period]);
-
   const triggerSync = useCallback(async ({ silent = false } = {}) => {
     setSyncLoading(true);
     if (!silent) setSyncMessage("");
@@ -1076,10 +945,6 @@ export default function Home() {
       setSyncLoading(false);
     }
   }, [refreshSyncStatus, refreshDashboard]);
-
-  useEffect(() => {
-    fetch(`${API}/meta`).then((r) => r.json()).then(setMeta);
-  }, []);
 
   useEffect(() => {
     if (typeof document !== "undefined") {
@@ -1138,64 +1003,10 @@ export default function Home() {
   }, [normalizeDashboardLayout]);
 
   useEffect(() => {
-    fetch(`${API}/sync/status`)
-      .then((r) => r.json())
-      .then(setSyncStatus)
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    sidePanelModeRef.current = sidePanelMode;
     if (sidePanelMode === "alerts") {
-      setHasNewAlertLogEntry(false);
+      clearHasNewAlertLogEntry();
     }
-  }, [sidePanelMode]);
-
-  useEffect(() => {
-    alertLogLatestMarkerRef.current = "";
-    alertLogBootstrappedRef.current = false;
-    setHasNewAlertLogEntry(false);
-  }, [servicedeskOnly]);
-
-  useEffect(() => {
-    refreshLiveAlerts().catch(() => {});
-  }, [refreshLiveAlerts]);
-
-  useEffect(() => {
-    refreshAlertLogs().catch(() => {});
-  }, [refreshAlertLogs]);
-
-  useEffect(() => {
-    refreshVacations().catch(() => {});
-  }, [refreshVacations]);
-
-  useEffect(() => {
-    refreshServicedeskConfig().catch(() => {});
-  }, [refreshServicedeskConfig]);
-
-  useEffect(() => {
-    const t = setInterval(() => {
-      fetch(`${API}/sync/status`)
-        .then((r) => r.json())
-        .then(setSyncStatus)
-        .catch(() => {});
-    }, 15000);
-    return () => clearInterval(t);
-  }, []);
-
-  useEffect(() => {
-    const t = setInterval(() => {
-      refreshLiveAlerts().catch(() => {});
-    }, 20000);
-    return () => clearInterval(t);
-  }, [refreshLiveAlerts]);
-
-  useEffect(() => {
-    const t = setInterval(() => {
-      refreshAlertLogs().catch(() => {});
-    }, 30000);
-    return () => clearInterval(t);
-  }, [refreshAlertLogs]);
+  }, [sidePanelMode, clearHasNewAlertLogEntry]);
 
   useEffect(() => {
     const hasP1 = Array.isArray(liveAlerts?.priority1) && liveAlerts.priority1.length > 0;
@@ -1223,13 +1034,6 @@ export default function Home() {
     const color = hasP1 || hasSlaCritical || hasOverdue ? "#dc2626" : "#f59e0b";
     return alertFaviconDataUri(color, faviconPulseOn);
   }, [liveAlerts, faviconPulseOn]);
-
-  useEffect(() => {
-    const t = setInterval(() => {
-      refreshVacations().catch(() => {});
-    }, 60000);
-    return () => clearInterval(t);
-  }, [refreshVacations]);
 
   useEffect(() => {
     if (backendAutoSyncEnabled) return undefined;
@@ -1441,75 +1245,6 @@ export default function Home() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [sidePanelOpen]);
-
-  useEffect(() => {
-    const params = new URLSearchParams({
-      date_from: dateFrom,
-      date_to: dateTo,
-    });
-    if (requestType) params.set("request_type", requestType);
-    if (onderwerp) params.set("onderwerp", onderwerp);
-    if (priority) params.set("priority", priority);
-    if (assignee) params.set("assignee", assignee);
-    if (organization) params.set("organization", organization);
-    if (servicedeskOnly) params.set("servicedesk_only", "true");
-
-    fetch(`${API}/metrics/volume_weekly?` + params.toString())
-      .then((r) => r.json())
-      .then(setVolume);
-
-    fetch(`${API}/metrics/volume_weekly_by_onderwerp?` + params.toString())
-      .then((r) => r.json())
-      .then((data) => (Array.isArray(data) ? setOnderwerpVolume(data) : setOnderwerpVolume([])));
-
-    fetch(`${API}/metrics/volume_by_priority?` + params.toString())
-      .then((r) => r.json())
-      .then((data) => (Array.isArray(data) ? setPriorityVolume(data) : setPriorityVolume([])));
-
-    fetch(`${API}/metrics/volume_by_assignee?` + params.toString())
-      .then((r) => r.json())
-      .then((data) => (Array.isArray(data) ? setAssigneeVolume(data) : setAssigneeVolume([])));
-
-    fetch(`${API}/metrics/volume_weekly_by_organization?` + params.toString())
-      .then((r) => r.json())
-      .then((data) => (Array.isArray(data) ? setOrganizationVolume(data) : setOrganizationVolume([])));
-
-    fetch(`${API}/metrics/inflow_vs_closed_weekly?` + params.toString())
-      .then((r) => r.json())
-      .then((data) => (Array.isArray(data) ? setInflowVsClosedWeekly(data) : setInflowVsClosedWeekly([])));
-
-    const ttrParams = new URLSearchParams(params);
-    ttrParams.delete("request_type");
-    fetch(`${API}/metrics/time_to_resolution_weekly_by_type?` + ttrParams.toString())
-      .then((r) => r.json())
-      .then((data) => (Array.isArray(data) ? setIncidentResolutionWeekly(data) : setIncidentResolutionWeekly([])));
-
-    fetch(`${API}/metrics/time_to_first_response_weekly?` + params.toString())
-      .then((r) => r.json())
-      .then((data) => (Array.isArray(data) ? setFirstResponseWeekly(data) : setFirstResponseWeekly([])));
-
-    fetch(`${API}/metrics/ttfr_overdue_weekly?` + params.toString())
-      .then((r) => r.json())
-      .then((data) => (Array.isArray(data) ? setTtfrOverdueWeekly(data) : setTtfrOverdueWeekly([])));
-
-    if (!p90Period.hasData) {
-      setP90([]);
-    } else {
-      const p = new URLSearchParams({
-        date_from: p90Period.dateFrom,
-        date_to: p90Period.dateTo,
-      });
-      if (onderwerp) p.set("onderwerp", onderwerp);
-      if (priority) p.set("priority", priority);
-      if (assignee) p.set("assignee", assignee);
-      if (organization) p.set("organization", organization);
-      if (servicedeskOnly) p.set("servicedesk_only", "true");
-
-      fetch(`${API}/metrics/leadtime_p90_by_type?` + p.toString())
-        .then((r) => r.json())
-        .then(setP90);
-    }
-  }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee, organization, servicedeskOnly, p90Period]);
 
   // Hide a partial first week (when dateFrom is not Monday) to avoid misleading empty first points.
   const weeks = useMemo(() => {
