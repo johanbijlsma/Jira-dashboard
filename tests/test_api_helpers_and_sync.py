@@ -67,6 +67,68 @@ def test_normalize_text_list_deduplicates_and_trims():
     assert api._normalize_text_list(["  A ", "", "A", None, "B"]) == ["A", "B"]
 
 
+def test_issue_metrics_filter_sql_builds_default_conditions():
+    sql, params = api.issue_metrics_filter_sql(
+        request_type="Incident",
+        onderwerp="Email",
+        priority="High",
+        assignee="Alice",
+        organization="Org A",
+        servicedesk_only=True,
+    )
+
+    assert "request_type = %s" in sql
+    assert "onderwerp_logging = %s" in sql
+    assert "priority = %s" in sql
+    assert "assignee = %s" in sql
+    assert "organizations @> array[%s]::text[]" in sql
+    assert "servicedesk_team_members" in sql
+    assert params == (
+        "Incident",
+        "Incident",
+        "Email",
+        "Email",
+        "High",
+        "High",
+        "Alice",
+        "Alice",
+        "Org A",
+        "Org A",
+        True,
+    )
+
+
+def test_issue_metrics_filter_sql_supports_alias_and_custom_org_condition():
+    sql, params = api.issue_metrics_filter_sql(
+        onderwerp="Vraag",
+        priority="Low",
+        assignee="Bob",
+        organization="Org B",
+        servicedesk_only=False,
+        alias="i",
+        include_request_type=False,
+        organization_condition="org.org_name = %s",
+    )
+
+    assert "i.request_type" not in sql
+    assert "i.onderwerp_logging = %s" in sql
+    assert "i.priority = %s" in sql
+    assert "i.assignee = %s" in sql
+    assert "org.org_name = %s" in sql
+    assert "i.assignee = any" in sql
+    assert params == (
+        "Vraag",
+        "Vraag",
+        "Low",
+        "Low",
+        "Bob",
+        "Bob",
+        "Org B",
+        "Org B",
+        False,
+    )
+
+
 def test_ensure_schema_filters_non_servicedesk_onderwerpen_case_insensitive(monkeypatch):
     cursor = CursorStub()
     monkeypatch.setattr(api, "conn", lambda: ConnStub(cursor))
@@ -416,6 +478,46 @@ def test_meta_alerts_and_issue_endpoints(monkeypatch):
     issue = issues_response.json()[0]
     assert issue["issue_key"] == "SD-10"
     assert issue["status"] == "Open"
+
+
+def test_issues_endpoint_uses_shared_filter_params(monkeypatch):
+    now = datetime(2026, 2, 25, 10, 0, 0)
+    cursor = CursorStub(
+        fetchall_values=[
+            [("SD-10", "Incident", "Koppelingen", now, now, "P1", "Johan", "Open")],
+        ]
+    )
+    patch_conn(monkeypatch, cursor)
+
+    response = client.get(
+        "/issues?date_from=2026-01-01&date_to=2026-02-28"
+        "&request_type=Incident&onderwerp=Koppelingen&priority=P1&assignee=Johan"
+        "&organization=Org%20A&servicedesk_only=true&date_field=resolved&limit=5&offset=2"
+    )
+
+    assert response.status_code == 200
+    query, params = cursor.executed[0]
+    assert "resolved_at is not null" in query
+    assert "request_type = %s" in query
+    assert "organizations @> array[%s]::text[]" in query
+    assert "limit %s offset %s" in query
+    assert params == (
+        "2026-01-01",
+        "2026-02-28",
+        "Incident",
+        "Incident",
+        "Koppelingen",
+        "Koppelingen",
+        "P1",
+        "P1",
+        "Johan",
+        "Johan",
+        "Org A",
+        "Org A",
+        True,
+        5,
+        2,
+    )
 
 
 def test_alerts_overdue_query_only_uses_open_issues(monkeypatch):

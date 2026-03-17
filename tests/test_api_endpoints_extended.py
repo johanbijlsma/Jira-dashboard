@@ -191,6 +191,37 @@ def test_metrics_volume_weekly_maps_rows(monkeypatch):
     assert data[0]["tickets"] == 5
 
 
+def test_metrics_volume_weekly_uses_shared_filter_params(monkeypatch):
+    cursor = _CursorStub(fetchall_values=[[]])
+    _patch_conn(monkeypatch, cursor)
+
+    response = client.get(
+        "/metrics/volume_weekly?date_from=2026-01-19&date_to=2026-01-26"
+        "&request_type=Incident&onderwerp=Email&priority=High&assignee=Alice"
+        "&organization=Org%20A&servicedesk_only=true"
+    )
+
+    assert response.status_code == 200
+    query, params = cursor.executed[0]
+    assert "request_type = %s" in query
+    assert "organizations @> array[%s]::text[]" in query
+    assert params == (
+        "2026-01-19",
+        "2026-01-26",
+        "Incident",
+        "Incident",
+        "Email",
+        "Email",
+        "High",
+        "High",
+        "Alice",
+        "Alice",
+        "Org A",
+        "Org A",
+        True,
+    )
+
+
 def test_metrics_ttr_weekly_by_type_maps_rows(monkeypatch):
     cursor = _CursorStub(
         fetchall_values=[[(datetime(2026, 1, 19, 0, 0), "Vraag", 12.5, 10.0, 4)]]
@@ -204,6 +235,35 @@ def test_metrics_ttr_weekly_by_type_maps_rows(monkeypatch):
     assert data[0]["avg_hours"] == 12.5
     assert data[0]["median_hours"] == 10.0
     assert data[0]["n"] == 4
+
+
+def test_metrics_ttr_weekly_by_type_uses_shared_filter_params_without_request_type(monkeypatch):
+    cursor = _CursorStub(fetchall_values=[[]])
+    _patch_conn(monkeypatch, cursor)
+
+    response = client.get(
+        "/metrics/time_to_resolution_weekly_by_type?date_from=2026-01-19&date_to=2026-01-26"
+        "&onderwerp=Email&priority=High&assignee=Alice&organization=Org%20A&servicedesk_only=true"
+    )
+
+    assert response.status_code == 200
+    query, params = cursor.executed[0]
+    assert "request_type = %s" not in query
+    assert "request_type is not null" in query
+    assert "organizations @> array[%s]::text[]" in query
+    assert params == (
+        "2026-01-19",
+        "2026-01-26",
+        "Email",
+        "Email",
+        "High",
+        "High",
+        "Alice",
+        "Alice",
+        "Org A",
+        "Org A",
+        True,
+    )
 
 
 def test_servicedesk_config_endpoint(monkeypatch):
@@ -375,6 +435,39 @@ def test_metrics_volume_weekly_by_onderwerp_maps_rows(monkeypatch):
     response = client.get("/metrics/volume_weekly_by_onderwerp?date_from=2026-01-19&date_to=2026-01-26")
     assert response.status_code == 200
     assert response.json()[0]["onderwerp"] == "Koppelingen"
+
+
+def test_metrics_volume_weekly_by_organization_uses_alias_filter_params(monkeypatch):
+    cursor = _CursorStub(fetchall_values=[[]])
+    _patch_conn(monkeypatch, cursor)
+
+    response = client.get(
+        "/metrics/volume_weekly_by_organization?date_from=2026-01-19&date_to=2026-01-26"
+        "&request_type=Incident&onderwerp=Email&priority=High&assignee=Alice"
+        "&organization=Org%20A&servicedesk_only=true"
+    )
+
+    assert response.status_code == 200
+    query, params = cursor.executed[0]
+    assert "i.request_type = %s" in query
+    assert "i.onderwerp_logging = %s" in query
+    assert "i.assignee = %s" in query
+    assert "org.org_name = %s" in query
+    assert params == (
+        "2026-01-19",
+        "2026-01-26",
+        "Incident",
+        "Incident",
+        "Email",
+        "Email",
+        "High",
+        "High",
+        "Alice",
+        "Alice",
+        "Org A",
+        "Org A",
+        True,
+    )
 
 
 def test_vacations_and_today_map_rows(monkeypatch):
