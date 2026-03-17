@@ -78,6 +78,7 @@ def test_issue_metrics_filter_sql_builds_default_conditions():
     )
 
     assert "request_type = %s" in sql
+    assert "and and" not in sql
     assert "onderwerp_logging = %s" in sql
     assert "priority = %s" in sql
     assert "assignee = %s" in sql
