@@ -849,7 +849,7 @@ def get_servicedesk_config():
 def servicedesk_filter_clause(alias: str = ""):
     prefix = f"{alias}." if alias else ""
     return f"""
-      and (
+      (
         not %s
         or (
           {prefix}assignee is not null
@@ -1803,7 +1803,6 @@ def volume_weekly(
       count(*) as tickets
     from issues
     where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
-      # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
       and """ + filter_sql + """
     group by 1,2
     order by 1,2;
@@ -1852,7 +1851,6 @@ def inflow_vs_closed_weekly(
         count(*) as incoming_count
       from issues
       where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
-        # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
         and """ + incoming_filter_sql + """
       group by 1
     ),
@@ -1863,7 +1861,6 @@ def inflow_vs_closed_weekly(
       from issues
       where resolved_at is not null
         and resolved_at >= %s::timestamptz and resolved_at < (%s::timestamptz + interval '1 day')
-        # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
         and """ + closed_filter_sql + """
       group by 1
     )
@@ -1931,7 +1928,6 @@ def leadtime_p90_by_type(
     from issues
     where resolved_at is not null
       and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
-      # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
       and """ + filter_sql + """
     group by 1
     order by p90_hours desc nulls last, 1;
@@ -2000,7 +1996,6 @@ def time_summary(
       ) as first_response_n
     from issues
     where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
-      # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
       and """ + filter_sql + """;
     """
     with conn() as c, c.cursor() as cur:
@@ -2051,7 +2046,6 @@ def time_to_resolution_weekly_by_type(
       and resolved_at >= created_at
       and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
       and request_type is not null
-      # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
       and """ + filter_sql + """
     group by 1,2
     order by 1,2;
@@ -2105,7 +2099,6 @@ def time_to_first_response_weekly(
     where updated_at is not null
       and updated_at >= created_at
       and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
-      # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
       and """ + filter_sql + """
     group by 1
     order by 1;
@@ -2158,7 +2151,6 @@ def ttfr_overdue_weekly(
       and first_response_due_at < now()
       and first_response_due_at >= %s::timestamptz
       and first_response_due_at < (%s::timestamptz + interval '1 day')
-      # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
       and """ + filter_sql + """
     group by 1
     order by 1;
@@ -2204,7 +2196,6 @@ def volume_by_priority(
     from issues
     where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
       and priority is not null
-      # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
       and """ + filter_sql + """
     group by 1
     order by 2 desc, 1;
@@ -2243,7 +2234,6 @@ def volume_by_assignee(
     from issues
     where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
       and assignee is not null
-      # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
       and """ + filter_sql + """
     group by 1
     order by 2 desc, 1;
@@ -2282,7 +2272,6 @@ def volume_weekly_by_onderwerp(
       count(*) as tickets
     from issues
     where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
-      # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
       and """ + filter_sql + """
     group by 1,2
     order by 1,2;
@@ -2324,7 +2313,6 @@ def volume_weekly_by_organization(
     from issues i
     cross join lateral unnest(i.organizations) as org(org_name)
     where i.created_at >= %s::timestamptz and i.created_at < (%s::timestamptz + interval '1 day')
-      # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
       and """ + filter_sql + """
     group by 1,2
     order by 1,2;
