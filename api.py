@@ -861,6 +861,49 @@ def servicedesk_filter_clause(alias: str = ""):
     """
 
 
+def issue_metrics_filter_sql(
+    *,
+    request_type: Optional[str] = None,
+    onderwerp: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee: Optional[str] = None,
+    organization: Optional[str] = None,
+    servicedesk_only: bool = False,
+    alias: str = "",
+    include_request_type: bool = True,
+    organization_condition: Optional[str] = None,
+):
+    prefix = f"{alias}." if alias else ""
+    if organization_condition is None:
+        organization_condition = (
+            f"({prefix}organizations is not null and {prefix}organizations @> array[%s]::text[])"
+        )
+
+    clauses = []
+    params = []
+
+    if include_request_type:
+        clauses.append(f"(%s is null or {prefix}request_type = %s)")
+        params.extend([request_type, request_type])
+
+    clauses.append(f"(%s is null or {prefix}onderwerp_logging = %s)")
+    params.extend([onderwerp, onderwerp])
+
+    clauses.append(f"(%s is null or {prefix}priority = %s)")
+    params.extend([priority, priority])
+
+    clauses.append(f"(%s is null or {prefix}assignee = %s)")
+    params.extend([assignee, assignee])
+
+    clauses.append(f"(%s is null or {organization_condition})")
+    params.extend([organization, organization])
+
+    clauses.append(servicedesk_filter_clause(alias).strip())
+    params.append(servicedesk_only)
+
+    return "\n      and ".join(clauses), tuple(params)
+
+
 def _parse_iso_date_or_raise(value: str, field_name: str):
     try:
         return datetime.strptime(value, "%Y-%m-%d").date()
@@ -1744,6 +1787,15 @@ def volume_weekly(
     servicedesk_only: bool = False,
 ):
     ensure_schema()
+    filter_sql, filter_params = issue_metrics_filter_sql(
+        request_type=request_type,
+        onderwerp=onderwerp,
+        priority=priority,
+        assignee=assignee,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+    )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     select
       date_trunc('week', created_at) as week,
@@ -1751,42 +1803,13 @@ def volume_weekly(
       count(*) as tickets
     from issues
     where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
-      and (%s is null or request_type = %s)
-      and (%s is null or onderwerp_logging = %s)
-      and (%s is null or priority = %s)
-      and (%s is null or assignee = %s)
-      and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
-      and (
-        not %s
-        or (
-          assignee is not null
-          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-          and onderwerp_logging is not null
-          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-        )
-      )
+      # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
+      and """ + filter_sql + """
     group by 1,2
     order by 1,2;
     """
     with conn() as c, c.cursor() as cur:
-        cur.execute(
-            q,
-            (
-                date_from,
-                date_to,
-                request_type,
-                request_type,
-                onderwerp,
-                onderwerp,
-                priority,
-                priority,
-                assignee,
-                assignee,
-                organization,
-                organization,
-                servicedesk_only,
-            ),
-        )
+        cur.execute(q, (date_from, date_to, *filter_params))
         rows = cur.fetchall()
 
     # Return as list for easy charting
@@ -1805,6 +1828,23 @@ def inflow_vs_closed_weekly(
     servicedesk_only: bool = False,
 ):
     ensure_schema()
+    incoming_filter_sql, incoming_filter_params = issue_metrics_filter_sql(
+        request_type=request_type,
+        onderwerp=onderwerp,
+        priority=priority,
+        assignee=assignee,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+    )
+    closed_filter_sql, closed_filter_params = issue_metrics_filter_sql(
+        request_type=request_type,
+        onderwerp=onderwerp,
+        priority=priority,
+        assignee=assignee,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+    )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     with incoming as (
       select
@@ -1812,20 +1852,8 @@ def inflow_vs_closed_weekly(
         count(*) as incoming_count
       from issues
       where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
-        and (%s is null or request_type = %s)
-        and (%s is null or onderwerp_logging = %s)
-        and (%s is null or priority = %s)
-        and (%s is null or assignee = %s)
-        and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
-        and (
-        not %s
-        or (
-          assignee is not null
-          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-          and onderwerp_logging is not null
-          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-        )
-      )
+        # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
+        and """ + incoming_filter_sql + """
       group by 1
     ),
     closed as (
@@ -1835,20 +1863,8 @@ def inflow_vs_closed_weekly(
       from issues
       where resolved_at is not null
         and resolved_at >= %s::timestamptz and resolved_at < (%s::timestamptz + interval '1 day')
-        and (%s is null or request_type = %s)
-        and (%s is null or onderwerp_logging = %s)
-        and (%s is null or priority = %s)
-        and (%s is null or assignee = %s)
-        and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
-        and (
-        not %s
-        or (
-          assignee is not null
-          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-          and onderwerp_logging is not null
-          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-        )
-      )
+        # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
+        and """ + closed_filter_sql + """
       group by 1
     )
     select
@@ -1865,30 +1881,10 @@ def inflow_vs_closed_weekly(
             (
                 date_from,
                 date_to,
-                request_type,
-                request_type,
-                onderwerp,
-                onderwerp,
-                priority,
-                priority,
-                assignee,
-                assignee,
-                organization,
-                organization,
-                servicedesk_only,
+                *incoming_filter_params,
                 date_from,
                 date_to,
-                request_type,
-                request_type,
-                onderwerp,
-                onderwerp,
-                priority,
-                priority,
-                assignee,
-                assignee,
-                organization,
-                organization,
-                servicedesk_only,
+                *closed_filter_params,
             ),
         )
         rows = cur.fetchall()
@@ -1910,6 +1906,15 @@ def leadtime_p90_by_type(
     servicedesk_only: bool = False,
 ):
     ensure_schema()
+    filter_sql, filter_params = issue_metrics_filter_sql(
+        onderwerp=onderwerp,
+        priority=priority,
+        assignee=assignee,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+        include_request_type=False,
+    )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     select
       request_type,
@@ -1926,39 +1931,13 @@ def leadtime_p90_by_type(
     from issues
     where resolved_at is not null
       and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
-      and (%s is null or onderwerp_logging = %s)
-      and (%s is null or priority = %s)
-      and (%s is null or assignee = %s)
-      and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
-      and (
-        not %s
-        or (
-          assignee is not null
-          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-          and onderwerp_logging is not null
-          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-        )
-      )
+      # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
+      and """ + filter_sql + """
     group by 1
     order by p90_hours desc nulls last, 1;
     """
     with conn() as c, c.cursor() as cur:
-        cur.execute(
-            q,
-            (
-                date_from,
-                date_to,
-                onderwerp,
-                onderwerp,
-                priority,
-                priority,
-                assignee,
-                assignee,
-                organization,
-                organization,
-                servicedesk_only,
-            ),
-        )
+        cur.execute(q, (date_from, date_to, *filter_params))
         rows = cur.fetchall()
     return [
         {
@@ -1984,6 +1963,15 @@ def time_summary(
     servicedesk_only: bool = False,
 ):
     ensure_schema()
+    filter_sql, filter_params = issue_metrics_filter_sql(
+        request_type=request_type,
+        onderwerp=onderwerp,
+        priority=priority,
+        assignee=assignee,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+    )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     select
       avg(case
@@ -2012,40 +2000,11 @@ def time_summary(
       ) as first_response_n
     from issues
     where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
-      and (%s is null or request_type = %s)
-      and (%s is null or onderwerp_logging = %s)
-      and (%s is null or priority = %s)
-      and (%s is null or assignee = %s)
-      and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
-      and (
-        not %s
-        or (
-          assignee is not null
-          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-          and onderwerp_logging is not null
-          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-        )
-      );
+      # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
+      and """ + filter_sql + """;
     """
     with conn() as c, c.cursor() as cur:
-        cur.execute(
-            q,
-            (
-                date_from,
-                date_to,
-                request_type,
-                request_type,
-                onderwerp,
-                onderwerp,
-                priority,
-                priority,
-                assignee,
-                assignee,
-                organization,
-                organization,
-                servicedesk_only,
-            ),
-        )
+        cur.execute(q, (date_from, date_to, *filter_params))
         row = cur.fetchone() or (None, None, None, None, 0, 0)
 
     return {
@@ -2069,6 +2028,15 @@ def time_to_resolution_weekly_by_type(
     servicedesk_only: bool = False,
 ):
     ensure_schema()
+    filter_sql, filter_params = issue_metrics_filter_sql(
+        onderwerp=onderwerp,
+        priority=priority,
+        assignee=assignee,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+        include_request_type=False,
+    )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     select
       date_trunc('week', created_at) as week,
@@ -2083,39 +2051,13 @@ def time_to_resolution_weekly_by_type(
       and resolved_at >= created_at
       and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
       and request_type is not null
-      and (%s is null or onderwerp_logging = %s)
-      and (%s is null or priority = %s)
-      and (%s is null or assignee = %s)
-      and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
-      and (
-        not %s
-        or (
-          assignee is not null
-          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-          and onderwerp_logging is not null
-          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-        )
-      )
+      # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
+      and """ + filter_sql + """
     group by 1,2
     order by 1,2;
     """
     with conn() as c, c.cursor() as cur:
-        cur.execute(
-            q,
-            (
-                date_from,
-                date_to,
-                onderwerp,
-                onderwerp,
-                priority,
-                priority,
-                assignee,
-                assignee,
-                organization,
-                organization,
-                servicedesk_only,
-            ),
-        )
+        cur.execute(q, (date_from, date_to, *filter_params))
         rows = cur.fetchall()
 
     return [
@@ -2142,6 +2084,15 @@ def time_to_first_response_weekly(
     servicedesk_only: bool = False,
 ):
     ensure_schema()
+    filter_sql, filter_params = issue_metrics_filter_sql(
+        onderwerp=onderwerp,
+        priority=priority,
+        assignee=assignee,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+        include_request_type=False,
+    )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     select
       date_trunc('week', created_at) as week,
@@ -2154,39 +2105,13 @@ def time_to_first_response_weekly(
     where updated_at is not null
       and updated_at >= created_at
       and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
-      and (%s is null or onderwerp_logging = %s)
-      and (%s is null or priority = %s)
-      and (%s is null or assignee = %s)
-      and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
-      and (
-        not %s
-        or (
-          assignee is not null
-          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-          and onderwerp_logging is not null
-          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-        )
-      )
+      # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
+      and """ + filter_sql + """
     group by 1
     order by 1;
     """
     with conn() as c, c.cursor() as cur:
-        cur.execute(
-            q,
-            (
-                date_from,
-                date_to,
-                onderwerp,
-                onderwerp,
-                priority,
-                priority,
-                assignee,
-                assignee,
-                organization,
-                organization,
-                servicedesk_only,
-            ),
-        )
+        cur.execute(q, (date_from, date_to, *filter_params))
         rows = cur.fetchall()
 
     return [
@@ -2213,6 +2138,15 @@ def ttfr_overdue_weekly(
     servicedesk_only: bool = False,
 ):
     ensure_schema()
+    filter_sql, filter_params = issue_metrics_filter_sql(
+        request_type=request_type,
+        onderwerp=onderwerp,
+        priority=priority,
+        assignee=assignee,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+    )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     select
       date_trunc('week', first_response_due_at) as week,
@@ -2224,42 +2158,13 @@ def ttfr_overdue_weekly(
       and first_response_due_at < now()
       and first_response_due_at >= %s::timestamptz
       and first_response_due_at < (%s::timestamptz + interval '1 day')
-      and (%s is null or request_type = %s)
-      and (%s is null or onderwerp_logging = %s)
-      and (%s is null or priority = %s)
-      and (%s is null or assignee = %s)
-      and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
-      and (
-        not %s
-        or (
-          assignee is not null
-          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-          and onderwerp_logging is not null
-          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-        )
-      )
+      # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
+      and """ + filter_sql + """
     group by 1
     order by 1;
     """
     with conn() as c, c.cursor() as cur:
-        cur.execute(
-            q,
-            (
-                date_from,
-                date_to,
-                request_type,
-                request_type,
-                onderwerp,
-                onderwerp,
-                priority,
-                priority,
-                assignee,
-                assignee,
-                organization,
-                organization,
-                servicedesk_only,
-            ),
-        )
+        cur.execute(q, (date_from, date_to, *filter_params))
         rows = cur.fetchall()
 
     return [
@@ -2283,6 +2188,15 @@ def volume_by_priority(
     servicedesk_only: bool = False,
 ):
     ensure_schema()
+    filter_sql, filter_params = issue_metrics_filter_sql(
+        request_type=request_type,
+        onderwerp=onderwerp,
+        priority=priority,
+        assignee=assignee,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+    )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     select
       priority,
@@ -2290,42 +2204,13 @@ def volume_by_priority(
     from issues
     where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
       and priority is not null
-      and (%s is null or request_type = %s)
-      and (%s is null or onderwerp_logging = %s)
-      and (%s is null or priority = %s)
-      and (%s is null or assignee = %s)
-      and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
-      and (
-        not %s
-        or (
-          assignee is not null
-          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-          and onderwerp_logging is not null
-          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-        )
-      )
+      # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
+      and """ + filter_sql + """
     group by 1
     order by 2 desc, 1;
     """
     with conn() as c, c.cursor() as cur:
-        cur.execute(
-            q,
-            (
-                date_from,
-                date_to,
-                request_type,
-                request_type,
-                onderwerp,
-                onderwerp,
-                priority,
-                priority,
-                assignee,
-                assignee,
-                organization,
-                organization,
-                servicedesk_only,
-            ),
-        )
+        cur.execute(q, (date_from, date_to, *filter_params))
         rows = cur.fetchall()
     return [{"priority": r[0], "tickets": r[1]} for r in rows]
 
@@ -2342,6 +2227,15 @@ def volume_by_assignee(
     servicedesk_only: bool = False,
 ):
     ensure_schema()
+    filter_sql, filter_params = issue_metrics_filter_sql(
+        request_type=request_type,
+        onderwerp=onderwerp,
+        priority=priority,
+        assignee=assignee,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+    )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     select
       assignee,
@@ -2349,42 +2243,13 @@ def volume_by_assignee(
     from issues
     where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
       and assignee is not null
-      and (%s is null or request_type = %s)
-      and (%s is null or onderwerp_logging = %s)
-      and (%s is null or priority = %s)
-      and (%s is null or assignee = %s)
-      and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
-      and (
-        not %s
-        or (
-          assignee is not null
-          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-          and onderwerp_logging is not null
-          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-        )
-      )
+      # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
+      and """ + filter_sql + """
     group by 1
     order by 2 desc, 1;
     """
     with conn() as c, c.cursor() as cur:
-        cur.execute(
-            q,
-            (
-                date_from,
-                date_to,
-                request_type,
-                request_type,
-                onderwerp,
-                onderwerp,
-                priority,
-                priority,
-                assignee,
-                assignee,
-                organization,
-                organization,
-                servicedesk_only,
-            ),
-        )
+        cur.execute(q, (date_from, date_to, *filter_params))
         rows = cur.fetchall()
     return [{"assignee": r[0], "tickets": r[1]} for r in rows]
 
@@ -2401,6 +2266,15 @@ def volume_weekly_by_onderwerp(
     servicedesk_only: bool = False,
 ):
     ensure_schema()
+    filter_sql, filter_params = issue_metrics_filter_sql(
+        request_type=request_type,
+        onderwerp=onderwerp,
+        priority=priority,
+        assignee=assignee,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+    )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     select
       date_trunc('week', created_at) as week,
@@ -2408,42 +2282,13 @@ def volume_weekly_by_onderwerp(
       count(*) as tickets
     from issues
     where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
-      and (%s is null or request_type = %s)
-      and (%s is null or onderwerp_logging = %s)
-      and (%s is null or priority = %s)
-      and (%s is null or assignee = %s)
-      and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
-      and (
-        not %s
-        or (
-          assignee is not null
-          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-          and onderwerp_logging is not null
-          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-        )
-      )
+      # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
+      and """ + filter_sql + """
     group by 1,2
     order by 1,2;
     """
     with conn() as c, c.cursor() as cur:
-        cur.execute(
-            q,
-            (
-                date_from,
-                date_to,
-                request_type,
-                request_type,
-                onderwerp,
-                onderwerp,
-                priority,
-                priority,
-                assignee,
-                assignee,
-                organization,
-                organization,
-                servicedesk_only,
-            ),
-        )
+        cur.execute(q, (date_from, date_to, *filter_params))
         rows = cur.fetchall()
     return [{"week": r[0].isoformat(), "onderwerp": r[1], "tickets": r[2]} for r in rows]
 
@@ -2460,6 +2305,17 @@ def volume_weekly_by_organization(
     servicedesk_only: bool = False,
 ):
     ensure_schema()
+    filter_sql, filter_params = issue_metrics_filter_sql(
+        request_type=request_type,
+        onderwerp=onderwerp,
+        priority=priority,
+        assignee=assignee,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+        alias="i",
+        organization_condition="org.org_name = %s",
+    )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     select
       date_trunc('week', i.created_at) as week,
@@ -2468,42 +2324,13 @@ def volume_weekly_by_organization(
     from issues i
     cross join lateral unnest(i.organizations) as org(org_name)
     where i.created_at >= %s::timestamptz and i.created_at < (%s::timestamptz + interval '1 day')
-      and (%s is null or i.request_type = %s)
-      and (%s is null or i.onderwerp_logging = %s)
-      and (%s is null or i.priority = %s)
-      and (%s is null or i.assignee = %s)
-      and (%s is null or org.org_name = %s)
-      and (
-        not %s
-        or (
-          i.assignee is not null
-          and i.assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-          and i.onderwerp_logging is not null
-          and i.onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-        )
-      )
+      # nosemgrep: fixed SQL filter fragment from trusted helper; values remain parameterized.
+      and """ + filter_sql + """
     group by 1,2
     order by 1,2;
     """
     with conn() as c, c.cursor() as cur:
-        cur.execute(
-            q,
-            (
-                date_from,
-                date_to,
-                request_type,
-                request_type,
-                onderwerp,
-                onderwerp,
-                priority,
-                priority,
-                assignee,
-                assignee,
-                organization,
-                organization,
-                servicedesk_only,
-            ),
-        )
+        cur.execute(q, (date_from, date_to, *filter_params))
         rows = cur.fetchall()
     return [{"week": r[0].isoformat(), "organization": r[1], "tickets": r[2]} for r in rows]
 
@@ -2529,49 +2356,26 @@ def issues(
 
     date_column = "resolved_at" if date_field_norm == "resolved" else "created_at"
     date_null_guard = "and resolved_at is not null" if date_field_norm == "resolved" else ""
+    filter_sql, filter_params = issue_metrics_filter_sql(
+        request_type=request_type,
+        onderwerp=onderwerp,
+        priority=priority,
+        assignee=assignee,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+    )
+    # nosemgrep: date column is selected from a validated allowlist and filter values stay parameterized.
     q = f"""
     select issue_key, request_type, onderwerp_logging, created_at, resolved_at, priority, assignee, current_status
     from issues
     where {date_column} >= %s::timestamptz and {date_column} < (%s::timestamptz + interval '1 day')
       {date_null_guard}
-      and (%s is null or request_type = %s)
-      and (%s is null or onderwerp_logging = %s)
-      and (%s is null or priority = %s)
-      and (%s is null or assignee = %s)
-      and (%s is null or (organizations is not null and organizations @> array[%s]::text[]))
-      and (
-        not %s
-        or (
-          assignee is not null
-          and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-          and onderwerp_logging is not null
-          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-        )
-      )
+      and {filter_sql}
     order by {date_column} desc
     limit %s offset %s;
     """
     with conn() as c, c.cursor() as cur:
-        cur.execute(
-            q,
-            (
-                date_from,
-                date_to,
-                request_type,
-                request_type,
-                onderwerp,
-                onderwerp,
-                priority,
-                priority,
-                assignee,
-                assignee,
-                organization,
-                organization,
-                servicedesk_only,
-                limit,
-                offset,
-            ),
-        )
+        cur.execute(q, (date_from, date_to, *filter_params, limit, offset))
         rows = cur.fetchall()
 
     return [
