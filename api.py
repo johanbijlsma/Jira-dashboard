@@ -1795,6 +1795,7 @@ def volume_weekly(
         organization=organization,
         servicedesk_only=servicedesk_only,
     )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     select
       date_trunc('week', created_at) as week,
@@ -1842,6 +1843,7 @@ def inflow_vs_closed_weekly(
         organization=organization,
         servicedesk_only=servicedesk_only,
     )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     with incoming as (
       select
@@ -1909,6 +1911,7 @@ def leadtime_p90_by_type(
         servicedesk_only=servicedesk_only,
         include_request_type=False,
     )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     select
       request_type,
@@ -1964,6 +1967,7 @@ def time_summary(
         organization=organization,
         servicedesk_only=servicedesk_only,
     )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     select
       avg(case
@@ -2027,6 +2031,7 @@ def time_to_resolution_weekly_by_type(
         servicedesk_only=servicedesk_only,
         include_request_type=False,
     )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     select
       date_trunc('week', created_at) as week,
@@ -2081,6 +2086,7 @@ def time_to_first_response_weekly(
         servicedesk_only=servicedesk_only,
         include_request_type=False,
     )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     select
       date_trunc('week', created_at) as week,
@@ -2133,6 +2139,7 @@ def ttfr_overdue_weekly(
         organization=organization,
         servicedesk_only=servicedesk_only,
     )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     select
       date_trunc('week', first_response_due_at) as week,
@@ -2181,6 +2188,7 @@ def volume_by_priority(
         organization=organization,
         servicedesk_only=servicedesk_only,
     )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     select
       priority,
@@ -2218,6 +2226,7 @@ def volume_by_assignee(
         organization=organization,
         servicedesk_only=servicedesk_only,
     )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     select
       assignee,
@@ -2255,6 +2264,7 @@ def volume_weekly_by_onderwerp(
         organization=organization,
         servicedesk_only=servicedesk_only,
     )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     select
       date_trunc('week', created_at) as week,
@@ -2294,6 +2304,7 @@ def volume_weekly_by_organization(
         alias="i",
         organization_condition="org.org_name = %s",
     )
+    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
     select
       date_trunc('week', i.created_at) as week,
@@ -2341,6 +2352,7 @@ def issues(
         organization=organization,
         servicedesk_only=servicedesk_only,
     )
+    # nosemgrep: date column is selected from a validated allowlist and filter values stay parameterized.
     q = f"""
     select issue_key, request_type, onderwerp_logging, created_at, resolved_at, priority, assignee, current_status
     from issues
