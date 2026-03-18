@@ -2,11 +2,22 @@ from datetime import date, datetime
 
 from fastapi.testclient import TestClient
 import psycopg2
+from psycopg2 import sql as psycopg2_sql
 
 import api
 
 
 client = TestClient(api.app)
+
+
+def _query_text(query):
+    if isinstance(query, str):
+        return query
+    if isinstance(query, psycopg2_sql.SQL):
+        return query.string
+    if isinstance(query, psycopg2_sql.Composed):
+        return "".join(_query_text(part) for part in query.seq)
+    return str(query)
 
 
 class _CursorStub:
@@ -203,6 +214,7 @@ def test_metrics_volume_weekly_uses_shared_filter_params(monkeypatch):
 
     assert response.status_code == 200
     query, params = cursor.executed[0]
+    query = _query_text(query)
     assert "request_type = %s" in query
     assert "organizations @> array[%s]::text[]" in query
     assert params == (
@@ -250,6 +262,7 @@ def test_metrics_ttr_weekly_by_type_uses_shared_filter_params_without_request_ty
 
     assert response.status_code == 200
     query, params = cursor.executed[0]
+    query = _query_text(query)
     assert "request_type = %s" not in query
     assert "request_type is not null" in query
     assert "organizations @> array[%s]::text[]" in query
@@ -462,6 +475,7 @@ def test_metrics_volume_weekly_by_organization_uses_alias_filter_params(monkeypa
 
     assert response.status_code == 200
     query, params = cursor.executed[0]
+    query = _query_text(query)
     assert "i.request_type = %s" in query
     assert "i.onderwerp_logging = %s" in query
     assert "i.assignee = %s" in query

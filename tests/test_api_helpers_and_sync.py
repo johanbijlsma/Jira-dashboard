@@ -2,11 +2,22 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
+from psycopg2 import sql as psycopg2_sql
 
 import api
 
 
 client = TestClient(api.app)
+
+
+def _query_text(query):
+    if isinstance(query, str):
+        return query
+    if isinstance(query, psycopg2_sql.SQL):
+        return query.string
+    if isinstance(query, psycopg2_sql.Composed):
+        return "".join(_query_text(part) for part in query.seq)
+    return str(query)
 
 
 class CursorStub:
@@ -17,7 +28,7 @@ class CursorStub:
 
     def execute(self, query, params=None):
         self.executed.append((query, params))
-        if "delete from alert_logs" in query.lower():
+        if "delete from alert_logs" in _query_text(query).lower():
             self.rowcount = 1
         else:
             self.rowcount = 0
@@ -511,6 +522,7 @@ def test_issues_endpoint_uses_shared_filter_params(monkeypatch):
 
     assert response.status_code == 200
     query, params = cursor.executed[0]
+    query = _query_text(query)
     assert "resolved_at is not null" in query
     assert "request_type = %s" in query
     assert "organizations @> array[%s]::text[]" in query
