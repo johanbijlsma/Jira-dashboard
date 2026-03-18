@@ -7,7 +7,10 @@ export default function LiveAlertStack({ alerts }) {
     : (Array.isArray(alerts?.first_response_due_soon) ? alerts.first_response_due_soon : []);
   const slaCriticalItems = Array.isArray(alerts?.first_response_due_critical) ? alerts.first_response_due_critical : [];
   const overdueItems = Array.isArray(alerts?.first_response_overdue) ? alerts.first_response_overdue : [];
-  if (!p1Items.length && !slaWarningItems.length && !slaCriticalItems.length && !overdueItems.length) return null;
+  const ttrWarningItems = Array.isArray(alerts?.time_to_resolution_warning) ? alerts.time_to_resolution_warning : [];
+  const ttrCriticalItems = Array.isArray(alerts?.time_to_resolution_critical) ? alerts.time_to_resolution_critical : [];
+  const ttrOverdueItems = Array.isArray(alerts?.time_to_resolution_overdue) ? alerts.time_to_resolution_overdue : [];
+  if (!p1Items.length && !slaWarningItems.length && !slaCriticalItems.length && !overdueItems.length && !ttrWarningItems.length && !ttrCriticalItems.length && !ttrOverdueItems.length) return null;
 
   const shellStyle = {
     position: "fixed",
@@ -178,6 +181,108 @@ export default function LiveAlertStack({ alerts }) {
           <ul style={listStyle}>
             {overdueItems.slice(0, 5).map((item) => (
               <li key={`sla-overdue-${item.issue_key}`} style={itemStyle}>
+                <a
+                  href={`${JIRA_BASE}/browse/${item.issue_key}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: "#fff", fontWeight: 700 }}
+                >
+                  {item.issue_key}
+                </a>
+                <span>{Math.max(0, Number(item.minutes_overdue) || 0)} min te laat</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {ttrWarningItems.length ? (
+        <section
+          style={{
+            ...cardStyle,
+            borderColor: "rgba(30, 64, 175, 0.45)",
+            background: "linear-gradient(135deg, #1d4ed8, #1e40af)",
+            color: "#dbeafe",
+          }}
+        >
+          <div style={titleRowStyle}>
+            <span style={{ fontSize: 11, border: "1px solid rgba(219,234,254,0.45)", borderRadius: 999, padding: "2px 8px" }}>
+              TTR
+            </span>
+            <span>Incident TTR waarschuwing (&lt;24u)</span>
+            <strong style={{ marginLeft: "auto", fontSize: 12 }}>{ttrWarningItems.length}</strong>
+          </div>
+          <ul style={listStyle}>
+            {ttrWarningItems.slice(0, 5).map((item) => (
+              <li key={`ttr-warning-${item.issue_key}`} style={itemStyle}>
+                <a
+                  href={`${JIRA_BASE}/browse/${item.issue_key}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: "#fff", fontWeight: 700 }}
+                >
+                  {item.issue_key}
+                </a>
+                <span>{Math.max(0, Number(item.minutes_left) || 0)} min</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {ttrCriticalItems.length ? (
+        <section
+          style={{
+            ...cardStyle,
+            borderColor: "rgba(8, 47, 73, 0.55)",
+            background: "linear-gradient(135deg, #0f766e, #0f172a)",
+            color: "#ccfbf1",
+          }}
+        >
+          <div style={titleRowStyle}>
+            <span style={{ fontSize: 11, border: "1px solid rgba(204,251,241,0.45)", borderRadius: 999, padding: "2px 8px" }}>
+              TTR !
+            </span>
+            <span>Incident TTR escalatie (&lt;60m)</span>
+            <strong style={{ marginLeft: "auto", fontSize: 12 }}>{ttrCriticalItems.length}</strong>
+          </div>
+          <ul style={listStyle}>
+            {ttrCriticalItems.slice(0, 5).map((item) => (
+              <li key={`ttr-critical-${item.issue_key}`} style={itemStyle}>
+                <a
+                  href={`${JIRA_BASE}/browse/${item.issue_key}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ color: "#fff", fontWeight: 700 }}
+                >
+                  {item.issue_key}
+                </a>
+                <span>{Math.max(0, Number(item.minutes_left) || 0)} min</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {ttrOverdueItems.length ? (
+        <section
+          style={{
+            ...cardStyle,
+            borderColor: "rgba(30, 41, 59, 0.55)",
+            background: "linear-gradient(135deg, #0f172a, #1e3a8a)",
+            color: "#dbeafe",
+          }}
+        >
+          <div style={titleRowStyle}>
+            <span style={{ fontSize: 11, border: "1px solid rgba(219,234,254,0.45)", borderRadius: 999, padding: "2px 8px" }}>
+              TTR X
+            </span>
+            <span>Incident TTR verlopen</span>
+            <strong style={{ marginLeft: "auto", fontSize: 12 }}>{ttrOverdueItems.length}</strong>
+          </div>
+          <ul style={listStyle}>
+            {ttrOverdueItems.slice(0, 5).map((item) => (
+              <li key={`ttr-overdue-${item.issue_key}`} style={itemStyle}>
                 <a
                   href={`${JIRA_BASE}/browse/${item.issue_key}`}
                   target="_blank"

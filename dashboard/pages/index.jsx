@@ -710,17 +710,53 @@ export default function Home() {
       seen.add(key);
       return true;
     });
+    const newTtrWarning = liveAlerts.time_to_resolution_warning.filter((item) => {
+      const key = `ttr-warning:${item.issue_key}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const newTtrCritical = liveAlerts.time_to_resolution_critical.filter((item) => {
+      const key = `ttr-critical:${item.issue_key}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const newTtrOverdue = liveAlerts.time_to_resolution_overdue.filter((item) => {
+      const key = `ttr-overdue:${item.issue_key}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 
     if (newP1.length) {
       flashToast(`ALERT P1: ${newP1[0].issue_key}${newP1.length > 1 ? ` +${newP1.length - 1}` : ""}`, "error", 9000);
+    } else if (newTtrCritical.length) {
+      flashToast(
+        `ALERT INCIDENT TTR <60m: ${newTtrCritical[0].issue_key}${newTtrCritical.length > 1 ? ` +${newTtrCritical.length - 1}` : ""}`,
+        "error",
+        9000
+      );
     } else if (newSlaCritical.length) {
       flashToast(
         `ALERT SLA <5m: ${newSlaCritical[0].issue_key}${newSlaCritical.length > 1 ? ` +${newSlaCritical.length - 1}` : ""}`,
         "error",
         9000
       );
+    } else if (newTtrOverdue.length) {
+      flashToast(
+        `ALERT INCIDENT TTR VERLOPEN: ${newTtrOverdue[0].issue_key}${newTtrOverdue.length > 1 ? ` +${newTtrOverdue.length - 1}` : ""}`,
+        "error",
+        9000
+      );
     } else if (newOverdue.length) {
       flashToast(`ALERT SLA VERLOPEN: ${newOverdue[0].issue_key}${newOverdue.length > 1 ? ` +${newOverdue.length - 1}` : ""}`, "error", 9000);
+    } else if (newTtrWarning.length) {
+      flashToast(
+        `ALERT INCIDENT TTR <24u: ${newTtrWarning[0].issue_key}${newTtrWarning.length > 1 ? ` +${newTtrWarning.length - 1}` : ""}`,
+        "error",
+        9000
+      );
     } else if (newSlaWarning.length) {
       flashToast(
         `ALERT SLA <30m: ${newSlaWarning[0].issue_key}${newSlaWarning.length > 1 ? ` +${newSlaWarning.length - 1}` : ""}`,
@@ -1014,7 +1050,11 @@ export default function Home() {
       (Array.isArray(liveAlerts?.first_response_due_warning) && liveAlerts.first_response_due_warning.length > 0) ||
       (Array.isArray(liveAlerts?.first_response_due_critical) && liveAlerts.first_response_due_critical.length > 0) ||
       (Array.isArray(liveAlerts?.first_response_overdue) && liveAlerts.first_response_overdue.length > 0);
-    if (!(hasP1 || hasSla)) {
+    const hasTtr =
+      (Array.isArray(liveAlerts?.time_to_resolution_warning) && liveAlerts.time_to_resolution_warning.length > 0) ||
+      (Array.isArray(liveAlerts?.time_to_resolution_critical) && liveAlerts.time_to_resolution_critical.length > 0) ||
+      (Array.isArray(liveAlerts?.time_to_resolution_overdue) && liveAlerts.time_to_resolution_overdue.length > 0);
+    if (!(hasP1 || hasSla || hasTtr)) {
       setFaviconPulseOn(false);
       return;
     }
@@ -1029,9 +1069,13 @@ export default function Home() {
     const hasSlaWarning = Array.isArray(liveAlerts?.first_response_due_warning) && liveAlerts.first_response_due_warning.length > 0;
     const hasSlaCritical = Array.isArray(liveAlerts?.first_response_due_critical) && liveAlerts.first_response_due_critical.length > 0;
     const hasOverdue = Array.isArray(liveAlerts?.first_response_overdue) && liveAlerts.first_response_overdue.length > 0;
+    const hasTtrWarning = Array.isArray(liveAlerts?.time_to_resolution_warning) && liveAlerts.time_to_resolution_warning.length > 0;
+    const hasTtrCritical = Array.isArray(liveAlerts?.time_to_resolution_critical) && liveAlerts.time_to_resolution_critical.length > 0;
+    const hasTtrOverdue = Array.isArray(liveAlerts?.time_to_resolution_overdue) && liveAlerts.time_to_resolution_overdue.length > 0;
     const hasSla = hasSlaWarning || hasSlaCritical || hasOverdue;
-    if (!hasP1 && !hasSla) return "/favicon.ico";
-    const color = hasP1 || hasSlaCritical || hasOverdue ? "#dc2626" : "#f59e0b";
+    const hasTtr = hasTtrWarning || hasTtrCritical || hasTtrOverdue;
+    if (!hasP1 && !hasSla && !hasTtr) return "/favicon.ico";
+    const color = hasP1 || hasSlaCritical || hasOverdue ? "#dc2626" : (hasTtrCritical || hasTtrOverdue ? "#1d4ed8" : "#f59e0b");
     return alertFaviconDataUri(color, faviconPulseOn);
   }, [liveAlerts, faviconPulseOn]);
 

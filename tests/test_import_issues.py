@@ -50,6 +50,9 @@ def test_normalizers_and_datetime_helpers(monkeypatch):
   assert mod.norm_first_response_due_at({"ongoingCycle": {"breachTime": {"iso8601": "2026-01-01T10:30:00+0000"}}}) == datetime(
     2026, 1, 1, 10, 30
   )
+  assert mod.norm_time_to_resolution_due_at({"ongoingCycle": {"breachTime": {"iso8601": "2026-01-01T11:30:00+0000"}}}) == datetime(
+    2026, 1, 1, 11, 30
+  )
 
 
 def test_api_search_retries_on_rate_limit(monkeypatch):
@@ -70,3 +73,18 @@ def test_api_search_retries_on_rate_limit(monkeypatch):
   assert data == {"issues": [], "isLast": True}
   assert sleep.call_args[0][0] == 7
   assert post.call_count == 2
+
+
+def test_api_search_skips_empty_ttr_field(monkeypatch):
+  mod = load_import_issues(monkeypatch)
+  response_ok = Mock(status_code=200, headers={})
+  response_ok.json.return_value = {"issues": [], "isLast": True}
+  response_ok.raise_for_status = Mock()
+  post = Mock(return_value=response_ok)
+  monkeypatch.setattr(mod.s, "post", post)
+  monkeypatch.setattr(mod, "TIME_TO_RESOLUTION_SLA_FIELD", "")
+
+  mod.api_search()
+
+  payload = post.call_args.kwargs["data"]
+  assert '""' not in payload

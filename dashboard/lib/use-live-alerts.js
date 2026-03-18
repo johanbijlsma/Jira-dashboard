@@ -6,6 +6,9 @@ const DEFAULT_LIVE_ALERTS = {
   first_response_due_warning: [],
   first_response_due_critical: [],
   first_response_overdue: [],
+  time_to_resolution_warning: [],
+  time_to_resolution_critical: [],
+  time_to_resolution_overdue: [],
 };
 
 function normalizeLiveAlerts(data) {
@@ -18,6 +21,9 @@ function normalizeLiveAlerts(data) {
     first_response_due_warning: warningItems,
     first_response_due_critical: Array.isArray(data?.first_response_due_critical) ? data.first_response_due_critical : [],
     first_response_overdue: Array.isArray(data?.first_response_overdue) ? data.first_response_overdue : [],
+    time_to_resolution_warning: Array.isArray(data?.time_to_resolution_warning) ? data.time_to_resolution_warning : [],
+    time_to_resolution_critical: Array.isArray(data?.time_to_resolution_critical) ? data.time_to_resolution_critical : [],
+    time_to_resolution_overdue: Array.isArray(data?.time_to_resolution_overdue) ? data.time_to_resolution_overdue : [],
   };
 }
 

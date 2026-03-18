@@ -232,6 +232,10 @@ def test_normalizers_and_priority_helpers(monkeypatch):
         {"ongoingCycle": {"breachTime": {"iso8601": "2026-02-25T12:00:00+0200"}}}
     )
     assert dt.isoformat() == "2026-02-25T10:00:00+00:00"
+    dt2 = api.norm_time_to_resolution_due_at(
+        {"ongoingCycle": {"breachTime": {"iso8601": "2026-02-26T11:15:00+0100"}}}
+    )
+    assert dt2.isoformat() == "2026-02-26T10:15:00+00:00"
     assert api.norm_first_response_due_at(
         {
             "completedCycles": [
@@ -319,6 +323,7 @@ def test_jira_existing_issue_keys_paths(monkeypatch):
 def test_upsert_issues_executes_insert(monkeypatch):
     cursor = CursorStub()
     patch_conn(monkeypatch, cursor)
+    monkeypatch.setattr(api, "TIME_TO_RESOLUTION_SLA_FIELD", "customfield_ttr")
     issue = {
         "key": "SD-1",
         "fields": {
@@ -327,6 +332,7 @@ def test_upsert_issues_executes_insert(monkeypatch):
             api.ONDERWERP_FIELD: {"value": "Koppelingen"},
             api.ORGANIZATION_FIELD: [{"name": "Org A"}],
             api.FIRST_RESPONSE_SLA_FIELD: {"ongoingCycle": {"breachTime": {"iso8601": "2026-02-25T10:00:00+0000"}}},
+            api.TIME_TO_RESOLUTION_SLA_FIELD: {"ongoingCycle": {"breachTime": {"iso8601": "2026-02-26T10:00:00+0000"}}},
             "created": "2026-02-24T10:00:00+0000",
             "updated": "2026-02-25T10:00:00+0000",
             "resolutiondate": None,
@@ -346,6 +352,7 @@ def test_upsert_issues_executes_insert(monkeypatch):
     assert params[4] == ["Org A"]
     assert params[9] == "Johan"
     assert params[10] == "http://img"
+    assert params[13].isoformat() == "2026-02-26T10:00:00+00:00"
 
 
 def test_run_sync_once_branches(monkeypatch):
@@ -451,6 +458,9 @@ def test_meta_alerts_and_issue_endpoints(monkeypatch):
             [("SD-3", now, 2, "Waarschuwing titel", "Nieuwe melding")],
             [],
             [("SD-4", now, 8, "Overdue titel", "Nieuwe melding")],
+            [("SD-5", now, 45, "TTR waarschuwing titel", "In behandeling")],
+            [("SD-6", now, 30, "TTR kritiek titel", "In behandeling")],
+            [("SD-7", now, 90, "TTR overdue titel", "In behandeling")],
             [("SD-10", "Incident", "Koppelingen", now, now, "P1", "Johan", "Open")],
         ]
     )
@@ -471,6 +481,9 @@ def test_meta_alerts_and_issue_endpoints(monkeypatch):
     assert alerts_data["first_response_due_warning"][0]["status"] == "Nieuwe melding"
     assert alerts_data["first_response_overdue"][0]["minutes_overdue"] == 8
     assert alerts_data["first_response_overdue"][0]["status"] == "Nieuwe melding"
+    assert alerts_data["time_to_resolution_warning"][0]["issue_key"] == "SD-5"
+    assert alerts_data["time_to_resolution_critical"][0]["issue_key"] == "SD-6"
+    assert alerts_data["time_to_resolution_overdue"][0]["minutes_overdue"] == 90
 
     issues_response = client.get(
         "/issues?date_from=2026-01-01&date_to=2026-02-28&date_field=resolved&limit=5&offset=0"
@@ -529,6 +542,9 @@ def test_alerts_overdue_query_only_uses_open_issues(monkeypatch):
             [("SD-2", now, 2, "Waarschuwing titel", "Nieuwe melding")],
             [],
             [("SD-3", now, 8, "Overdue titel", "Nieuwe melding")],
+            [],
+            [],
+            [("SD-5", now, 9, "TTR overdue titel", "In behandeling")],
         ]
     )
     patch_conn(monkeypatch, cursor)
@@ -544,6 +560,12 @@ def test_alerts_overdue_query_only_uses_open_issues(monkeypatch):
     assert "lower(coalesce(current_status, '')) = 'nieuwe melding'" in overdue_sql
     assert "assignee is null" in overdue_sql
 
+    ttr_overdue_queries = [q for q, _params in cursor.executed if "time_to_resolution_due_at" in q and "minutes_overdue" in q]
+    assert ttr_overdue_queries
+    ttr_overdue_sql = ttr_overdue_queries[0].lower()
+    assert "lower(coalesce(request_type, '')) = 'incident'" in ttr_overdue_sql
+    assert "not (lower(coalesce(current_status, '')) = any(%s::text[]))" in ttr_overdue_sql
+
 
 def test_alerts_live_forces_servicedesk_scope(monkeypatch):
     now = datetime(2026, 2, 25, 10, 0, 0)
@@ -553,6 +575,9 @@ def test_alerts_live_forces_servicedesk_scope(monkeypatch):
             [("SD-2", now, 2, "Waarschuwing titel", "Nieuwe melding")],
             [],
             [("SD-3", now, 8, "Overdue titel", "Nieuwe melding")],
+            [],
+            [],
+            [],
         ]
     )
     patch_conn(monkeypatch, cursor)
@@ -574,6 +599,9 @@ def test_alerts_warning_and_critical_queries_only_use_nieuwe_melding(monkeypatch
             [("SD-2", now, 20, "Waarschuwing titel", "Nieuwe melding")],
             [("SD-3", now, 4, "Kritiek titel", "Nieuwe melding")],
             [("SD-4", now, 8, "Overdue titel", "Nieuwe melding")],
+            [("SD-5", now, 120, "TTR titel", "In behandeling")],
+            [("SD-6", now, 45, "TTR kritiek", "In behandeling")],
+            [],
         ]
     )
     patch_conn(monkeypatch, cursor)
@@ -583,9 +611,12 @@ def test_alerts_warning_and_critical_queries_only_use_nieuwe_melding(monkeypatch
     assert response.status_code == 200
 
     warning_queries = [q.lower() for q, _params in cursor.executed if "minutes_left" in q.lower()]
-    assert len(warning_queries) >= 2
+    assert len(warning_queries) >= 4
     assert "lower(coalesce(current_status, '')) = 'nieuwe melding'" in warning_queries[0]
     assert "lower(coalesce(current_status, '')) = 'nieuwe melding'" in warning_queries[1]
+    assert "lower(coalesce(request_type, '')) = 'incident'" in warning_queries[2]
+    assert "not (lower(coalesce(current_status, '')) = any(%s::text[]))" in warning_queries[2]
+    assert "lower(coalesce(request_type, '')) = 'incident'" in warning_queries[3]
 
 
 def test_alerts_live_persists_log_events_and_cleans_up(monkeypatch):
@@ -596,6 +627,9 @@ def test_alerts_live_persists_log_events_and_cleans_up(monkeypatch):
             [("SD-2", now, 2, "Waarschuwing titel", "Nieuwe melding")],
             [],
             [("SD-3", now, 8, "Overdue titel", "Nieuwe melding")],
+            [("SD-5", now, 240, "TTR waarschuwing titel", "In behandeling")],
+            [("SD-6", now, 45, "TTR kritiek titel", "In behandeling")],
+            [("SD-7", now, 10, "TTR overdue titel", "In behandeling")],
         ]
     )
     patch_conn(monkeypatch, cursor)
@@ -665,8 +699,11 @@ def test_alerts_live_sends_teams_notification_for_new_events(monkeypatch):
             [("SD-2", now, 2, "Waarschuwing titel", "Nieuwe melding")],
             [],
             [("SD-3", now, 8, "Overdue titel", "Nieuwe melding")],
+            [("SD-5", now, 240, "TTR waarschuwing titel", "In behandeling")],
+            [("SD-6", now, 45, "TTR kritiek titel", "In behandeling")],
+            [("SD-7", now, 10, "TTR overdue titel", "In behandeling")],
         ],
-        fetchone_values=[(1,), (2,), (3,)],
+        fetchone_values=[(1,), (2,), (3,), (4,), (5,), (6,)],
     )
     patch_conn(monkeypatch, cursor)
     monkeypatch.setattr(api, "_jira_existing_issue_keys", lambda keys: set(keys))
@@ -683,7 +720,7 @@ def test_alerts_live_sends_teams_notification_for_new_events(monkeypatch):
 
     response = client.get("/alerts/live")
     assert response.status_code == 200
-    assert len(sent) == 1
+    assert len(sent) == 3
     assert sent[0][0] == "https://example.invalid/webhook"
     payload = sent[0][1]
     assert payload["type"] == "message"
@@ -696,6 +733,8 @@ def test_alerts_live_sends_teams_notification_for_new_events(monkeypatch):
     assert content["body"][2]["items"][1]["text"] == "SD-1"
     assert content["body"][2]["items"][2]["text"] == "P1 titel"
     assert content["actions"][0]["url"] == "https://planningsagenda.atlassian.net/browse/SD-1"
+    assert sent[1][1]["attachments"][0]["content"]["body"][2]["items"][0]["text"] == "TTR INCIDENT <24U"
+    assert sent[2][1]["attachments"][0]["content"]["body"][2]["items"][0]["text"] == "TTR INCIDENT <60M"
 
 
 def test_send_teams_alert_notification_handles_missing_title(monkeypatch):
@@ -734,6 +773,7 @@ def test_send_teams_alert_notification_handles_missing_title(monkeypatch):
     assert content["body"][2]["items"][2]["text"] == "Geen titel beschikbaar"
     assert content["body"][3]["facts"][0]["value"] == "Nieuwe melding"
     assert content["actions"][0]["url"] == "https://planningsagenda.atlassian.net/browse/SD-123"
+    assert result["sent_count"] == 1
 
 
 def test_dev_alert_trigger_and_clear(monkeypatch):

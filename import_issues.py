@@ -16,6 +16,7 @@ REQUEST_TYPE_FIELD = os.environ.get("REQUEST_TYPE_FIELD", "customfield_10010")
 ONDERWERP_FIELD = os.environ.get("ONDERWERP_FIELD", "customfield_10143")
 ORGANIZATION_FIELD = os.environ.get("ORGANIZATION_FIELD", "customfield_10002")
 FIRST_RESPONSE_SLA_FIELD = os.environ.get("FIRST_RESPONSE_SLA_FIELD", "customfield_10131")
+TIME_TO_RESOLUTION_SLA_FIELD = os.environ.get("TIME_TO_RESOLUTION_SLA_FIELD", "customfield_10130").strip()
 
 DB_HOST = os.environ.get("DB_HOST", "localhost")
 DB_PORT = int(os.environ.get("DB_PORT", "5432"))
@@ -35,22 +36,25 @@ s.auth = (JIRA_EMAIL, JIRA_TOKEN)
 s.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
 
 def api_search(next_page_token=None):
+    fields = [
+        "key",
+        "created",
+        "updated",
+        "resolutiondate",
+        "status",
+        "priority",
+        "assignee",
+        REQUEST_TYPE_FIELD,
+        ONDERWERP_FIELD,
+        ORGANIZATION_FIELD,
+        FIRST_RESPONSE_SLA_FIELD,
+    ]
+    if TIME_TO_RESOLUTION_SLA_FIELD:
+        fields.append(TIME_TO_RESOLUTION_SLA_FIELD)
     payload = {
         "jql": JQL,
         "maxResults": MAX_RESULTS,
-        "fields": [
-            "key",
-            "created",
-            "updated",
-            "resolutiondate",
-            "status",
-            "priority",
-            "assignee",
-            REQUEST_TYPE_FIELD,
-            ONDERWERP_FIELD,
-            ORGANIZATION_FIELD,
-            FIRST_RESPONSE_SLA_FIELD,
-        ],
+        "fields": fields,
     }
     if next_page_token:
         payload["nextPageToken"] = next_page_token
@@ -111,7 +115,7 @@ def parse_jira_datetime(value):
     return None
 
 
-def norm_first_response_due_at(v):
+def norm_sla_due_at(v):
     if not isinstance(v, dict):
         return None
     ongoing = v.get("ongoingCycle") or {}
@@ -123,6 +127,14 @@ def norm_first_response_due_at(v):
     if dt is None:
         return None
     return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def norm_first_response_due_at(v):
+    return norm_sla_due_at(v)
+
+
+def norm_time_to_resolution_due_at(v):
+    return norm_sla_due_at(v)
 
 def main():
     inserted = 0
@@ -143,7 +155,8 @@ def main():
               priority text,
               assignee text,
               current_status text,
-              first_response_due_at timestamptz
+              first_response_due_at timestamptz,
+              time_to_resolution_due_at timestamptz
             );
             """
         )
@@ -157,6 +170,7 @@ def main():
         cur.execute("alter table issues add column if not exists assignee text;")
         cur.execute("alter table issues add column if not exists current_status text;")
         cur.execute("alter table issues add column if not exists first_response_due_at timestamptz;")
+        cur.execute("alter table issues add column if not exists time_to_resolution_due_at timestamptz;")
         c.commit()
         while True:
             page += 1
@@ -183,11 +197,14 @@ def main():
                 assignee = norm_assignee(f.get("assignee"))
                 organizations = norm_organizations(f.get(ORGANIZATION_FIELD))
                 first_response_due_at = norm_first_response_due_at(f.get(FIRST_RESPONSE_SLA_FIELD))
+                time_to_resolution_due_at = norm_time_to_resolution_due_at(
+                    f.get(TIME_TO_RESOLUTION_SLA_FIELD) if TIME_TO_RESOLUTION_SLA_FIELD else None
+                )
 
                 cur.execute(
                     """
-                    insert into issues(issue_key, request_type, onderwerp_logging, organizations, created_at, resolved_at, updated_at, priority, assignee, current_status, first_response_due_at)
-                    values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    insert into issues(issue_key, request_type, onderwerp_logging, organizations, created_at, resolved_at, updated_at, priority, assignee, current_status, first_response_due_at, time_to_resolution_due_at)
+                    values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     on conflict (issue_key) do update set
                       request_type=excluded.request_type,
                       onderwerp_logging=excluded.onderwerp_logging,
@@ -198,7 +215,8 @@ def main():
                       priority=excluded.priority,
                       assignee=excluded.assignee,
                       current_status=excluded.current_status,
-                      first_response_due_at=excluded.first_response_due_at
+                      first_response_due_at=excluded.first_response_due_at,
+                      time_to_resolution_due_at=excluded.time_to_resolution_due_at
                     """,
                     (
                         issue_key,
@@ -212,6 +230,7 @@ def main():
                         assignee,
                         status,
                         first_response_due_at,
+                        time_to_resolution_due_at,
                     ),
                 )
                 inserted += 1
