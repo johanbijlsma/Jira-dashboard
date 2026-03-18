@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 import psycopg2
+from psycopg2 import sql
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -915,6 +916,10 @@ def issue_metrics_filter_sql(
     params.append(servicedesk_only)
 
     return "\n      and ".join(clauses), tuple(params)
+
+
+def compose_sql_query(template: str, **fragments):
+    return sql.SQL(template).format(**{name: sql.SQL(value) for name, value in fragments.items()})
 
 
 def _parse_iso_date_or_raise(value: str, field_name: str):
@@ -1857,17 +1862,20 @@ def volume_weekly(
         organization=organization,
         servicedesk_only=servicedesk_only,
     )
-    q = """  # nosemgrep: fixed SQL clauses are composed here; filter values stay parameterized.
+    q = compose_sql_query(
+        """
     select
       date_trunc('week', created_at) as week,
       request_type,
       count(*) as tickets
     from issues
     where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
-      and """ + filter_sql + """
+      and {filter_sql}
     group by 1,2
     order by 1,2;
-    """
+    """,
+        filter_sql=filter_sql,
+    )
     with conn() as c, c.cursor() as cur:
         cur.execute(q, (date_from, date_to, *filter_params))
         rows = cur.fetchall()
@@ -1904,15 +1912,15 @@ def inflow_vs_closed_weekly(
         organization=organization,
         servicedesk_only=servicedesk_only,
     )
-    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
-    q = """
+    q = compose_sql_query(
+        """
     with incoming as (
       select
         date_trunc('week', created_at) as week,
         count(*) as incoming_count
       from issues
       where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
-        and """ + incoming_filter_sql + """
+        and {incoming_filter_sql}
       group by 1
     ),
     closed as (
@@ -1922,7 +1930,7 @@ def inflow_vs_closed_weekly(
       from issues
       where resolved_at is not null
         and resolved_at >= %s::timestamptz and resolved_at < (%s::timestamptz + interval '1 day')
-        and """ + closed_filter_sql + """
+        and {closed_filter_sql}
       group by 1
     )
     select
@@ -1932,7 +1940,10 @@ def inflow_vs_closed_weekly(
     from incoming i
     full outer join closed c on c.week = i.week
     order by 1;
-    """
+    """,
+        incoming_filter_sql=incoming_filter_sql,
+        closed_filter_sql=closed_filter_sql,
+    )
     with conn() as c, c.cursor() as cur:
         cur.execute(
             q,
@@ -1972,8 +1983,8 @@ def leadtime_p90_by_type(
         servicedesk_only=servicedesk_only,
         include_request_type=False,
     )
-    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
-    q = """
+    q = compose_sql_query(
+        """
     select
       request_type,
       percentile_cont(0.50) within group (
@@ -1989,10 +2000,12 @@ def leadtime_p90_by_type(
     from issues
     where resolved_at is not null
       and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
-      and """ + filter_sql + """
+      and {filter_sql}
     group by 1
     order by p90_hours desc nulls last, 1;
-    """
+    """,
+        filter_sql=filter_sql,
+    )
     with conn() as c, c.cursor() as cur:
         cur.execute(q, (date_from, date_to, *filter_params))
         rows = cur.fetchall()
@@ -2028,8 +2041,8 @@ def time_summary(
         organization=organization,
         servicedesk_only=servicedesk_only,
     )
-    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
-    q = """
+    q = compose_sql_query(
+        """
     select
       avg(case
         when resolved_at is not null and resolved_at >= created_at
@@ -2057,8 +2070,10 @@ def time_summary(
       ) as first_response_n
     from issues
     where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
-      and """ + filter_sql + """;
-    """
+      and {filter_sql};
+    """,
+        filter_sql=filter_sql,
+    )
     with conn() as c, c.cursor() as cur:
         cur.execute(q, (date_from, date_to, *filter_params))
         row = cur.fetchone() or (None, None, None, None, 0, 0)
@@ -2092,8 +2107,8 @@ def time_to_resolution_weekly_by_type(
         servicedesk_only=servicedesk_only,
         include_request_type=False,
     )
-    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
-    q = """
+    q = compose_sql_query(
+        """
     with actuals as (
       select
         date_trunc('week', created_at) as week,
@@ -2108,7 +2123,7 @@ def time_to_resolution_weekly_by_type(
         and resolved_at >= created_at
         and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
         and request_type is not null
-        and """ + filter_sql + """  # nosemgrep: fixed SQL clauses are composed here; filter values stay parameterized.
+        and {filter_sql}
       group by 1,2
     ),
     sla_targets as (
@@ -2124,7 +2139,7 @@ def time_to_resolution_weekly_by_type(
         and time_to_resolution_due_at >= created_at
         and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
         and request_type is not null
-        and """ + filter_sql + """  # nosemgrep: fixed SQL clauses are composed here; filter values stay parameterized.
+        and {filter_sql}
       group by 1,2
     )
     select
@@ -2139,9 +2154,11 @@ def time_to_resolution_weekly_by_type(
     full outer join sla_targets s
       on a.week = s.week and a.request_type = s.request_type
     order by 1,2;
-    """
+    """,
+        filter_sql=filter_sql,
+    )
     with conn() as c, c.cursor() as cur:
-        cur.execute(q, (date_from, date_to, *filter_params, date_from, date_to, *filter_params))  # nosemgrep
+        cur.execute(q, (date_from, date_to, *filter_params, date_from, date_to, *filter_params))
         rows = cur.fetchall()
 
     return [
@@ -2179,8 +2196,8 @@ def time_to_first_response_weekly(
         servicedesk_only=servicedesk_only,
         include_request_type=False,
     )
-    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
-    q = """
+    q = compose_sql_query(
+        """
     select
       date_trunc('week', created_at) as week,
       avg(extract(epoch from (updated_at - created_at))/3600.0) as avg_hours,
@@ -2192,10 +2209,12 @@ def time_to_first_response_weekly(
     where updated_at is not null
       and updated_at >= created_at
       and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
-      and """ + filter_sql + """
+      and {filter_sql}
     group by 1
     order by 1;
-    """
+    """,
+        filter_sql=filter_sql,
+    )
     with conn() as c, c.cursor() as cur:
         cur.execute(q, (date_from, date_to, *filter_params))
         rows = cur.fetchall()
@@ -2232,8 +2251,8 @@ def ttfr_overdue_weekly(
         organization=organization,
         servicedesk_only=servicedesk_only,
     )
-    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
-    q = """
+    q = compose_sql_query(
+        """
     select
       date_trunc('week', first_response_due_at) as week,
       count(*) as tickets
@@ -2244,10 +2263,12 @@ def ttfr_overdue_weekly(
       and first_response_due_at < now()
       and first_response_due_at >= %s::timestamptz
       and first_response_due_at < (%s::timestamptz + interval '1 day')
-      and """ + filter_sql + """
+      and {filter_sql}
     group by 1
     order by 1;
-    """
+    """,
+        filter_sql=filter_sql,
+    )
     with conn() as c, c.cursor() as cur:
         cur.execute(q, (date_from, date_to, *filter_params))
         rows = cur.fetchall()
@@ -2281,18 +2302,20 @@ def volume_by_priority(
         organization=organization,
         servicedesk_only=servicedesk_only,
     )
-    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
-    q = """
+    q = compose_sql_query(
+        """
     select
       priority,
       count(*) as tickets
     from issues
     where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
       and priority is not null
-      and """ + filter_sql + """
+      and {filter_sql}
     group by 1
     order by 2 desc, 1;
-    """
+    """,
+        filter_sql=filter_sql,
+    )
     with conn() as c, c.cursor() as cur:
         cur.execute(q, (date_from, date_to, *filter_params))
         rows = cur.fetchall()
@@ -2319,18 +2342,20 @@ def volume_by_assignee(
         organization=organization,
         servicedesk_only=servicedesk_only,
     )
-    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
-    q = """
+    q = compose_sql_query(
+        """
     select
       assignee,
       count(*) as tickets
     from issues
     where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
       and assignee is not null
-      and """ + filter_sql + """
+      and {filter_sql}
     group by 1
     order by 2 desc, 1;
-    """
+    """,
+        filter_sql=filter_sql,
+    )
     with conn() as c, c.cursor() as cur:
         cur.execute(q, (date_from, date_to, *filter_params))
         rows = cur.fetchall()
@@ -2357,18 +2382,20 @@ def volume_weekly_by_onderwerp(
         organization=organization,
         servicedesk_only=servicedesk_only,
     )
-    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
-    q = """
+    q = compose_sql_query(
+        """
     select
       date_trunc('week', created_at) as week,
       onderwerp_logging as onderwerp,
       count(*) as tickets
     from issues
     where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
-      and """ + filter_sql + """
+      and {filter_sql}
     group by 1,2
     order by 1,2;
-    """
+    """,
+        filter_sql=filter_sql,
+    )
     with conn() as c, c.cursor() as cur:
         cur.execute(q, (date_from, date_to, *filter_params))
         rows = cur.fetchall()
@@ -2397,8 +2424,8 @@ def volume_weekly_by_organization(
         alias="i",
         organization_condition="org.org_name = %s",
     )
-    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
-    q = """
+    q = compose_sql_query(
+        """
     select
       date_trunc('week', i.created_at) as week,
       org.org_name as organization,
@@ -2406,10 +2433,12 @@ def volume_weekly_by_organization(
     from issues i
     cross join lateral unnest(i.organizations) as org(org_name)
     where i.created_at >= %s::timestamptz and i.created_at < (%s::timestamptz + interval '1 day')
-      and """ + filter_sql + """
+      and {filter_sql}
     group by 1,2
     order by 1,2;
-    """
+    """,
+        filter_sql=filter_sql,
+    )
     with conn() as c, c.cursor() as cur:
         cur.execute(q, (date_from, date_to, *filter_params))
         rows = cur.fetchall()
@@ -2445,8 +2474,8 @@ def issues(
         organization=organization,
         servicedesk_only=servicedesk_only,
     )
-    # nosemgrep: date column is selected from a validated allowlist and filter values stay parameterized.
-    q = f"""
+    q = compose_sql_query(
+        """
     select issue_key, request_type, onderwerp_logging, created_at, resolved_at, priority, assignee, current_status
     from issues
     where {date_column} >= %s::timestamptz and {date_column} < (%s::timestamptz + interval '1 day')
@@ -2454,7 +2483,11 @@ def issues(
       and {filter_sql}
     order by {date_column} desc
     limit %s offset %s;
-    """
+    """,
+        date_column=date_column,
+        date_null_guard=date_null_guard,
+        filter_sql=filter_sql,
+    )
     with conn() as c, c.cursor() as cur:
         cur.execute(q, (date_from, date_to, *filter_params, limit, offset))
         rows = cur.fetchall()

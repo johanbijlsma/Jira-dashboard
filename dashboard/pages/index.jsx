@@ -272,6 +272,7 @@ export default function Home() {
   const [alertKindFilter, setAlertKindFilter] = useState("ALL");
   const [expandedAlertGroups, setExpandedAlertGroups] = useState({});
   const [faviconPulseOn, setFaviconPulseOn] = useState(false);
+  const [ttrAlertsCollapsed, setTtrAlertsCollapsed] = useState(false);
   const drillPanelRef = useRef(null);
   const drillCloseRef = useRef(null);
   const hotkeysPopupRef = useRef(null);
@@ -785,6 +786,11 @@ export default function Home() {
       seen.add(key);
       return true;
     });
+    const hasNewTtrAlert = newTtrWarning.length || newTtrCritical.length || newTtrOverdue.length;
+
+    if (hasNewTtrAlert) {
+      setTtrAlertsCollapsed(false);
+    }
 
     if (newP1.length) {
       flashToast(`ALERT P1: ${newP1[0].issue_key}${newP1.length > 1 ? ` +${newP1.length - 1}` : ""}`, "error", 9000);
@@ -1111,7 +1117,8 @@ export default function Home() {
       (Array.isArray(liveAlerts?.time_to_resolution_warning) && liveAlerts.time_to_resolution_warning.length > 0) ||
       (Array.isArray(liveAlerts?.time_to_resolution_critical) && liveAlerts.time_to_resolution_critical.length > 0) ||
       (Array.isArray(liveAlerts?.time_to_resolution_overdue) && liveAlerts.time_to_resolution_overdue.length > 0);
-    if (!(hasP1 || hasSla || hasTtr)) {
+    const shouldShowTtrSignal = hasTtr && !ttrAlertsCollapsed;
+    if (!(hasP1 || hasSla || shouldShowTtrSignal)) {
       setFaviconPulseOn(false);
       return;
     }
@@ -1119,7 +1126,7 @@ export default function Home() {
     return () => {
       window.clearInterval(t);
     };
-  }, [liveAlerts]);
+  }, [liveAlerts, ttrAlertsCollapsed]);
 
   const faviconHref = useMemo(() => {
     const hasP1 = Array.isArray(liveAlerts?.priority1) && liveAlerts.priority1.length > 0;
@@ -1131,19 +1138,20 @@ export default function Home() {
     const hasTtrOverdue = Array.isArray(liveAlerts?.time_to_resolution_overdue) && liveAlerts.time_to_resolution_overdue.length > 0;
     const hasSla = hasSlaWarning || hasSlaCritical || hasOverdue;
     const hasTtr = hasTtrWarning || hasTtrCritical || hasTtrOverdue;
-    if (!hasP1 && !hasSla && !hasTtr) return "/favicon.ico";
+    const showTtrSignal = hasTtr && !ttrAlertsCollapsed;
+    if (!hasP1 && !hasSla && !showTtrSignal) return "/favicon.ico";
     const color =
       hasP1 || hasSlaCritical || hasOverdue
         ? "#dc2626"
-        : hasTtrOverdue
+        : showTtrSignal && hasTtrOverdue
           ? "#1e3a8a"
-          : hasTtrCritical
+          : showTtrSignal && hasTtrCritical
             ? "#2563eb"
-            : hasTtrWarning
+            : showTtrSignal && hasTtrWarning
               ? "#60a5fa"
               : "#f59e0b";
     return alertFaviconDataUri(color, faviconPulseOn);
-  }, [liveAlerts, faviconPulseOn]);
+  }, [liveAlerts, faviconPulseOn, ttrAlertsCollapsed]);
 
   useEffect(() => {
     if (backendAutoSyncEnabled) return undefined;
@@ -3637,7 +3645,11 @@ export default function Home() {
         <link rel="icon" href={faviconHref} />
       </Head>
       <Toast message={syncMessage} kind={syncMessageKind} onClose={() => setSyncMessage("")} />
-      <LiveAlertStack alerts={liveAlerts} />
+      <LiveAlertStack
+        alerts={liveAlerts}
+        ttrCollapsed={ttrAlertsCollapsed}
+        onToggleTtrCollapsed={() => setTtrAlertsCollapsed((value) => !value)}
+      />
       <button
         ref={hotkeysButtonRef}
         type="button"
