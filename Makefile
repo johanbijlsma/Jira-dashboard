@@ -23,7 +23,7 @@ dev-check:
 prod-api:
 	uvicorn api:app --host 0.0.0.0 --port 8000
 
-prod-frontend:
+prod-frontend: prod-build
 	npm --prefix dashboard run start
 
 prod-build:
