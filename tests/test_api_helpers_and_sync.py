@@ -565,6 +565,7 @@ def test_alerts_overdue_query_only_uses_open_issues(monkeypatch):
     ttr_overdue_sql = ttr_overdue_queries[0].lower()
     assert "lower(coalesce(request_type, '')) = 'incident'" in ttr_overdue_sql
     assert "not (lower(coalesce(current_status, '')) = any(%s::text[]))" in ttr_overdue_sql
+    assert "time_to_resolution_due_at >= now() - make_interval(hours => %s)" in ttr_overdue_sql
 
 
 def test_alerts_live_forces_servicedesk_scope(monkeypatch):
@@ -710,6 +711,7 @@ def test_alerts_live_sends_teams_notification_for_new_events(monkeypatch):
     monkeypatch.setattr(api, "_last_alert_log_cleanup_at", 999999.0)
     monkeypatch.setattr(api.time, "time", lambda: 1000000.0)
     monkeypatch.setattr(api, "ALERT_TEAMS_WEBHOOK_URL", "https://example.invalid/webhook")
+    monkeypatch.setattr(api, "_is_teams_alert_business_window", lambda now_utc=None: True)
 
     sent = []
 
@@ -739,6 +741,7 @@ def test_alerts_live_sends_teams_notification_for_new_events(monkeypatch):
 
 def test_send_teams_alert_notification_handles_missing_title(monkeypatch):
     monkeypatch.setattr(api, "ALERT_TEAMS_WEBHOOK_URL", "https://example.invalid/webhook")
+    monkeypatch.setattr(api, "_is_teams_alert_business_window", lambda now_utc=None: True)
     sent = []
 
     def fake_post(url, json, timeout):
@@ -774,6 +777,45 @@ def test_send_teams_alert_notification_handles_missing_title(monkeypatch):
     assert content["body"][3]["facts"][0]["value"] == "Nieuwe melding"
     assert content["actions"][0]["url"] == "https://planningsagenda.atlassian.net/browse/SD-123"
     assert result["sent_count"] == 1
+
+
+def test_is_teams_alert_business_window_uses_dutch_working_hours():
+    assert api._is_teams_alert_business_window(datetime(2026, 3, 18, 7, 29, tzinfo=timezone.utc)) is False
+    assert api._is_teams_alert_business_window(datetime(2026, 3, 18, 7, 30, tzinfo=timezone.utc)) is True
+    assert api._is_teams_alert_business_window(datetime(2026, 3, 18, 15, 59, tzinfo=timezone.utc)) is True
+    assert api._is_teams_alert_business_window(datetime(2026, 3, 18, 16, 0, tzinfo=timezone.utc)) is False
+    assert api._is_teams_alert_business_window(datetime(2026, 3, 21, 10, 0, tzinfo=timezone.utc)) is False
+
+
+def test_send_teams_alert_notification_skips_outside_business_hours(monkeypatch):
+    monkeypatch.setattr(api, "ALERT_TEAMS_WEBHOOK_URL", "https://example.invalid/webhook")
+    monkeypatch.setattr(api, "_is_teams_alert_business_window", lambda now_utc=None: False)
+    sent = []
+
+    def fake_post(url, json, timeout):
+        sent.append((url, json, timeout))
+        raise AssertionError("Teams webhook should not be called outside business hours")
+
+    monkeypatch.setattr(api.requests, "post", fake_post)
+
+    result = api._send_teams_alert_notification(
+        [
+            {
+                "issue_key": "SD-123",
+                "alert_kind": "SLA_CRITICAL",
+                "status": "Nieuwe melding",
+                "meta": "5 min",
+                "issue_summary": "Test",
+                "issue_url": "https://planningsagenda.atlassian.net/browse/SD-123",
+                "servicedesk_only": True,
+            }
+        ]
+    )
+
+    assert sent == []
+    assert result["attempted"] is False
+    assert result["skipped"] is True
+    assert result["skipped_reason"] == "outside_business_hours"
 
 
 def test_dev_alert_trigger_and_clear(monkeypatch):

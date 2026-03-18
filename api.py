@@ -1446,9 +1446,29 @@ def _teams_alert_card(event: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _is_teams_alert_business_window(now_utc: Optional[datetime] = None) -> bool:
+    now_local = (now_utc or datetime.now(timezone.utc)).astimezone(REPORT_TIMEZONE)
+    if now_local.weekday() >= 5:
+        return False
+    minutes_since_midnight = (now_local.hour * 60) + now_local.minute
+    return (8 * 60 + 30) <= minutes_since_midnight < (17 * 60)
+
+
 def _send_teams_alert_notification(events):
-    result = {"attempted": False, "ok": False, "status_code": None, "error": None, "sent_count": 0}
+    result = {
+        "attempted": False,
+        "ok": False,
+        "status_code": None,
+        "error": None,
+        "sent_count": 0,
+        "skipped": False,
+        "skipped_reason": None,
+    }
     if not ALERT_TEAMS_WEBHOOK_URL or not events:
+        return result
+    if not _is_teams_alert_business_window():
+        result["skipped"] = True
+        result["skipped_reason"] = "outside_business_hours"
         return result
     result["attempted"] = True
     result["ok"] = True
@@ -2075,25 +2095,54 @@ def time_to_resolution_weekly_by_type(
     )
     # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
+    with actuals as (
+      select
+        date_trunc('week', created_at) as week,
+        request_type,
+        avg(extract(epoch from (resolved_at - created_at))/3600.0) as avg_hours,
+        percentile_cont(0.50) within group (
+          order by extract(epoch from (resolved_at - created_at))/3600.0
+        ) as p50_hours,
+        count(*) as n
+      from issues
+      where resolved_at is not null
+        and resolved_at >= created_at
+        and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
+        and request_type is not null
+        and """ + filter_sql + """
+      group by 1,2
+    ),
+    sla_targets as (
+      select
+        date_trunc('week', created_at) as week,
+        request_type,
+        avg(extract(epoch from (time_to_resolution_due_at - created_at))/3600.0) as sla_avg_hours,
+        percentile_cont(0.50) within group (
+          order by extract(epoch from (time_to_resolution_due_at - created_at))/3600.0
+        ) as sla_p50_hours
+      from issues
+      where time_to_resolution_due_at is not null
+        and time_to_resolution_due_at >= created_at
+        and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
+        and request_type is not null
+        and """ + filter_sql + """
+      group by 1,2
+    )
     select
-      date_trunc('week', created_at) as week,
-      request_type,
-      avg(extract(epoch from (resolved_at - created_at))/3600.0) as avg_hours,
-      percentile_cont(0.50) within group (
-        order by extract(epoch from (resolved_at - created_at))/3600.0
-      ) as p50_hours,
-      count(*) as n
-    from issues
-    where resolved_at is not null
-      and resolved_at >= created_at
-      and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
-      and request_type is not null
-      and """ + filter_sql + """
-    group by 1,2
+      coalesce(a.week, s.week) as week,
+      coalesce(a.request_type, s.request_type) as request_type,
+      a.avg_hours,
+      a.p50_hours,
+      s.sla_avg_hours,
+      s.sla_p50_hours,
+      coalesce(a.n, 0) as n
+    from actuals a
+    full outer join sla_targets s
+      on a.week = s.week and a.request_type = s.request_type
     order by 1,2;
     """
     with conn() as c, c.cursor() as cur:
-        cur.execute(q, (date_from, date_to, *filter_params))
+        cur.execute(q, (date_from, date_to, *filter_params, date_from, date_to, *filter_params))
         rows = cur.fetchall()
 
     return [
@@ -2103,7 +2152,10 @@ def time_to_resolution_weekly_by_type(
             "avg_hours": float(r[2]) if r[2] is not None else None,
             "p50_hours": float(r[3]) if r[3] is not None else None,
             "median_hours": float(r[3]) if r[3] is not None else None,
-            "n": int(r[4] or 0),
+            "sla_avg_hours": float(r[4]) if r[4] is not None else None,
+            "sla_p50_hours": float(r[5]) if r[5] is not None else None,
+            "sla_median_hours": float(r[5]) if r[5] is not None else None,
+            "n": int(r[6] or 0),
         }
         for r in rows
     ]
@@ -2635,6 +2687,7 @@ def alerts_live(servicedesk_only: bool = True):
               and not (lower(coalesce(current_status, '')) = any(%s::text[]))
               and time_to_resolution_due_at is not null
               and time_to_resolution_due_at < now()
+              and time_to_resolution_due_at >= now() - make_interval(hours => %s)
       and (
         not %s
         or (
@@ -2649,7 +2702,7 @@ def alerts_live(servicedesk_only: bool = True):
             order by time_to_resolution_due_at asc
             limit 25;
             """,
-            (list(ALERT_TTR_CLOSED_STATUSES), servicedesk_only),
+            (list(ALERT_TTR_CLOSED_STATUSES), SLA_OVERDUE_MAX_AGE_HOURS, servicedesk_only),
         )
         ttr_overdue_rows = cur.fetchall()
 
