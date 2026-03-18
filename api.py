@@ -1857,7 +1857,8 @@ def volume_weekly(
         organization=organization,
         servicedesk_only=servicedesk_only,
     )
-    q = """  # nosemgrep: fixed SQL clauses are composed here; filter values stay parameterized.
+    # nosemgrep: fixed SQL clauses are composed here; filter values stay parameterized.
+    q = """
     select
       date_trunc('week', created_at) as week,
       request_type,
@@ -2108,7 +2109,7 @@ def time_to_resolution_weekly_by_type(
         and resolved_at >= created_at
         and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
         and request_type is not null
-        and """ + filter_sql + """  # nosemgrep: fixed SQL clauses are composed here; filter values stay parameterized.
+        and """ + filter_sql + """
       group by 1,2
     ),
     sla_targets as (
@@ -2124,7 +2125,7 @@ def time_to_resolution_weekly_by_type(
         and time_to_resolution_due_at >= created_at
         and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
         and request_type is not null
-        and """ + filter_sql + """  # nosemgrep: fixed SQL clauses are composed here; filter values stay parameterized.
+        and """ + filter_sql + """
       group by 1,2
     )
     select
