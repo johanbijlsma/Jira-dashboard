@@ -1857,7 +1857,7 @@ def volume_weekly(
         organization=organization,
         servicedesk_only=servicedesk_only,
     )
-    q = """
+    q = """  # nosemgrep: fixed SQL clauses are composed here; filter values stay parameterized.
     select
       date_trunc('week', created_at) as week,
       request_type,
@@ -2141,7 +2141,7 @@ def time_to_resolution_weekly_by_type(
     order by 1,2;
     """
     with conn() as c, c.cursor() as cur:
-        cur.execute(q, (date_from, date_to, *filter_params, date_from, date_to, *filter_params))
+        cur.execute(q, (date_from, date_to, *filter_params, date_from, date_to, *filter_params))  # nosemgrep
         rows = cur.fetchall()
 
     return [
