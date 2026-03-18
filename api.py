@@ -26,6 +26,7 @@ REQUEST_TYPE_FIELD = os.environ.get("REQUEST_TYPE_FIELD", "customfield_10010")
 ONDERWERP_FIELD = os.environ.get("ONDERWERP_FIELD", "customfield_10143")
 ORGANIZATION_FIELD = os.environ.get("ORGANIZATION_FIELD", "customfield_10002")
 FIRST_RESPONSE_SLA_FIELD = os.environ.get("FIRST_RESPONSE_SLA_FIELD", "customfield_10131")
+TIME_TO_RESOLUTION_SLA_FIELD = os.environ.get("TIME_TO_RESOLUTION_SLA_FIELD", "customfield_10130").strip()
 ALERT_P1_PRIORITIES = [
     p.strip().lower()
     for p in os.environ.get(
@@ -50,6 +51,16 @@ SYNC_FULL_INTERVAL_HOURS = max(1, int(os.environ.get("SYNC_FULL_INTERVAL_HOURS",
 SLA_CRITICAL_MINUTES = max(1, int(os.environ.get("SLA_CRITICAL_MINUTES", "5")))
 SLA_WARNING_MINUTES = max(SLA_CRITICAL_MINUTES + 1, int(os.environ.get("SLA_WARNING_MINUTES", "30")))
 SLA_OVERDUE_MAX_AGE_HOURS = max(1, int(os.environ.get("SLA_OVERDUE_MAX_AGE_HOURS", "24")))
+TTR_WARNING_HOURS = max(1, int(os.environ.get("TTR_WARNING_HOURS", "24")))
+TTR_CRITICAL_MINUTES = max(1, int(os.environ.get("TTR_CRITICAL_MINUTES", "60")))
+ALERT_TTR_CLOSED_STATUSES = tuple(
+    s.strip().lower()
+    for s in os.environ.get(
+        "ALERT_TTR_CLOSED_STATUSES",
+        "gesloten,closed,resolved,opgelost,done,afgerond",
+    ).split(",")
+    if s.strip()
+)
 CORS_ORIGINS_RAW = os.environ.get(
     "BACKEND_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
 )
@@ -535,7 +546,8 @@ def ensure_schema():  # pragma: no cover
               assignee text,
               assignee_avatar_url text,
               current_status text,
-              first_response_due_at timestamptz
+              first_response_due_at timestamptz,
+              time_to_resolution_due_at timestamptz
             );
             """
         )
@@ -615,6 +627,7 @@ def ensure_schema():  # pragma: no cover
         cur.execute("alter table issues add column if not exists assignee_avatar_url text;")
         cur.execute("alter table issues add column if not exists current_status text;")
         cur.execute("alter table issues add column if not exists first_response_due_at timestamptz;")
+        cur.execute("alter table issues add column if not exists time_to_resolution_due_at timestamptz;")
         cur.execute("alter table sync_runs add column if not exists started_at timestamptz not null default now();")
         cur.execute("alter table sync_runs add column if not exists finished_at timestamptz;")
         cur.execute("alter table sync_runs add column if not exists mode text not null default 'incremental';")
@@ -1123,23 +1136,26 @@ def get_sync_status_payload():
 
 
 def jira_search(jql: str, max_results: int = 100, next_page_token: Optional[str] = None):
+    fields = [
+        "key",
+        "summary",
+        "created",
+        "updated",
+        "resolutiondate",
+        "status",
+        "priority",
+        "assignee",
+        REQUEST_TYPE_FIELD,
+        ONDERWERP_FIELD,
+        ORGANIZATION_FIELD,
+        FIRST_RESPONSE_SLA_FIELD,
+    ]
+    if TIME_TO_RESOLUTION_SLA_FIELD:
+        fields.append(TIME_TO_RESOLUTION_SLA_FIELD)
     payload = {
         "jql": jql,
         "maxResults": max_results,
-        "fields": [
-            "key",
-            "summary",
-            "created",
-            "updated",
-            "resolutiondate",
-            "status",
-            "priority",
-            "assignee",
-            REQUEST_TYPE_FIELD,
-            ONDERWERP_FIELD,
-            ORGANIZATION_FIELD,
-            FIRST_RESPONSE_SLA_FIELD,
-        ],
+        "fields": fields,
     }
     if next_page_token:
         payload["nextPageToken"] = next_page_token
@@ -1229,11 +1245,11 @@ def norm_organizations(v):
     return list(dict.fromkeys(out))
 
 
-def norm_first_response_due_at(v):
+def norm_sla_due_at(v):
     """
     Parse Jira SLA field and return ISO datetime when breach is expected.
     For active SLAs Jira commonly provides ongoingCycle.breachTime.iso8601.
-    Completed/paused cycles should not drive live TTFR alerts.
+    Completed/paused cycles should not drive live alerts.
     """
     if not isinstance(v, dict):
         return None
@@ -1246,6 +1262,14 @@ def norm_first_response_due_at(v):
     if dt is None:
         return None
     return dt.astimezone(timezone.utc)
+
+
+def norm_first_response_due_at(v):
+    return norm_sla_due_at(v)
+
+
+def norm_time_to_resolution_due_at(v):
+    return norm_sla_due_at(v)
 
 
 def is_priority1_priority(value: Optional[str]) -> bool:
@@ -1338,6 +1362,12 @@ def _teams_alert_kind_label(kind: Any) -> str:
     normalized = str(kind or "ALERT").strip().upper()
     if normalized in {"SLA_CRITICAL", "SLA_OVERDUE", "SLA_WARNING"}:
         return "SLA VERLOOPT"
+    if normalized == "TTR_WARNING":
+        return "TTR INCIDENT <24U"
+    if normalized == "TTR_CRITICAL":
+        return "TTR INCIDENT <60M"
+    if normalized == "TTR_OVERDUE":
+        return "TTR INCIDENT VERLOPEN"
     return normalized or "ALERT"
 
 
@@ -1416,33 +1446,60 @@ def _teams_alert_card(event: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _is_teams_alert_business_window(now_utc: Optional[datetime] = None) -> bool:
+    now_local = (now_utc or datetime.now(timezone.utc)).astimezone(REPORT_TIMEZONE)
+    if now_local.weekday() >= 5:
+        return False
+    minutes_since_midnight = (now_local.hour * 60) + now_local.minute
+    return (8 * 60 + 30) <= minutes_since_midnight < (17 * 60)
+
+
 def _send_teams_alert_notification(events):
-    result = {"attempted": False, "ok": False, "status_code": None, "error": None}
+    result = {
+        "attempted": False,
+        "ok": False,
+        "status_code": None,
+        "error": None,
+        "sent_count": 0,
+        "skipped": False,
+        "skipped_reason": None,
+    }
     if not ALERT_TEAMS_WEBHOOK_URL or not events:
         return result
-    try:
-        result["attempted"] = True
-        payload = {
-            "type": "message",
-            "attachments": [
-                {
-                    "contentType": "application/vnd.microsoft.card.adaptive",
-                    "contentUrl": None,
-                    "content": _teams_alert_card(events[0]),
-                }
-            ],
-        }
-        response = requests.post(ALERT_TEAMS_WEBHOOK_URL, json=payload, timeout=ALERT_TEAMS_TIMEOUT_SECONDS)
-        status_code = getattr(response, "status_code", None)
-        result["status_code"] = status_code
-        result["ok"] = bool(status_code and 200 <= int(status_code) < 300)
-        if not result["ok"]:
-            body = getattr(response, "text", "")
-            result["error"] = f"HTTP {status_code}: {str(body)[:240]}"
-    except Exception as exc:
-        # Alerts endpoint should stay responsive even when webhook delivery fails.
-        result["attempted"] = True
-        result["error"] = str(exc)
+    if not _is_teams_alert_business_window():
+        result["skipped"] = True
+        result["skipped_reason"] = "outside_business_hours"
+        return result
+    result["attempted"] = True
+    result["ok"] = True
+    for event in events:
+        try:
+            payload = {
+                "type": "message",
+                "attachments": [
+                    {
+                        "contentType": "application/vnd.microsoft.card.adaptive",
+                        "contentUrl": None,
+                        "content": _teams_alert_card(event),
+                    }
+                ],
+            }
+            response = requests.post(ALERT_TEAMS_WEBHOOK_URL, json=payload, timeout=ALERT_TEAMS_TIMEOUT_SECONDS)
+            status_code = getattr(response, "status_code", None)
+            result["status_code"] = status_code
+            ok = bool(status_code and 200 <= int(status_code) < 300)
+            if ok:
+                result["sent_count"] += 1
+            else:
+                result["ok"] = False
+                if result["error"] is None:
+                    body = getattr(response, "text", "")
+                    result["error"] = f"HTTP {status_code}: {str(body)[:240]}"
+        except Exception as exc:
+            # Alerts endpoint should stay responsive even when webhook delivery fails.
+            result["ok"] = False
+            if result["error"] is None:
+                result["error"] = str(exc)
     return result
 
 
@@ -1518,11 +1575,14 @@ def upsert_issues(issues):
             assignee_avatar_url = norm_assignee_avatar_url(f.get("assignee"))
             organizations = norm_organizations(f.get(ORGANIZATION_FIELD))
             first_response_due_at = norm_first_response_due_at(f.get(FIRST_RESPONSE_SLA_FIELD))
+            time_to_resolution_due_at = norm_time_to_resolution_due_at(
+                f.get(TIME_TO_RESOLUTION_SLA_FIELD) if TIME_TO_RESOLUTION_SLA_FIELD else None
+            )
 
             cur.execute(
                 """
-                insert into issues(issue_key, issue_summary, request_type, onderwerp_logging, organizations, created_at, resolved_at, updated_at, priority, assignee, assignee_avatar_url, current_status, first_response_due_at)
-                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                insert into issues(issue_key, issue_summary, request_type, onderwerp_logging, organizations, created_at, resolved_at, updated_at, priority, assignee, assignee_avatar_url, current_status, first_response_due_at, time_to_resolution_due_at)
+                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 on conflict (issue_key) do update set
                   issue_summary=excluded.issue_summary,
                   request_type=excluded.request_type,
@@ -1535,7 +1595,8 @@ def upsert_issues(issues):
                   assignee=excluded.assignee,
                   assignee_avatar_url=excluded.assignee_avatar_url,
                   current_status=excluded.current_status,
-                  first_response_due_at=excluded.first_response_due_at
+                  first_response_due_at=excluded.first_response_due_at,
+                  time_to_resolution_due_at=excluded.time_to_resolution_due_at
                 """,
                 (
                     issue_key,
@@ -1551,6 +1612,7 @@ def upsert_issues(issues):
                     assignee_avatar_url,
                     status,
                     first_response_due_at,
+                    time_to_resolution_due_at,
                 ),
             )
         _seed_servicedesk_config_defaults(cur)
@@ -1795,8 +1857,7 @@ def volume_weekly(
         organization=organization,
         servicedesk_only=servicedesk_only,
     )
-    # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
-    q = """
+    q = """  # nosemgrep: fixed SQL clauses are composed here; filter values stay parameterized.
     select
       date_trunc('week', created_at) as week,
       request_type,
@@ -2033,25 +2094,54 @@ def time_to_resolution_weekly_by_type(
     )
     # nosemgrep: fixed SQL clauses are composed here; user values remain bound via execute params.
     q = """
+    with actuals as (
+      select
+        date_trunc('week', created_at) as week,
+        request_type,
+        avg(extract(epoch from (resolved_at - created_at))/3600.0) as avg_hours,
+        percentile_cont(0.50) within group (
+          order by extract(epoch from (resolved_at - created_at))/3600.0
+        ) as p50_hours,
+        count(*) as n
+      from issues
+      where resolved_at is not null
+        and resolved_at >= created_at
+        and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
+        and request_type is not null
+        and """ + filter_sql + """  # nosemgrep: fixed SQL clauses are composed here; filter values stay parameterized.
+      group by 1,2
+    ),
+    sla_targets as (
+      select
+        date_trunc('week', created_at) as week,
+        request_type,
+        avg(extract(epoch from (time_to_resolution_due_at - created_at))/3600.0) as sla_avg_hours,
+        percentile_cont(0.50) within group (
+          order by extract(epoch from (time_to_resolution_due_at - created_at))/3600.0
+        ) as sla_p50_hours
+      from issues
+      where time_to_resolution_due_at is not null
+        and time_to_resolution_due_at >= created_at
+        and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
+        and request_type is not null
+        and """ + filter_sql + """  # nosemgrep: fixed SQL clauses are composed here; filter values stay parameterized.
+      group by 1,2
+    )
     select
-      date_trunc('week', created_at) as week,
-      request_type,
-      avg(extract(epoch from (resolved_at - created_at))/3600.0) as avg_hours,
-      percentile_cont(0.50) within group (
-        order by extract(epoch from (resolved_at - created_at))/3600.0
-      ) as p50_hours,
-      count(*) as n
-    from issues
-    where resolved_at is not null
-      and resolved_at >= created_at
-      and created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
-      and request_type is not null
-      and """ + filter_sql + """
-    group by 1,2
+      coalesce(a.week, s.week) as week,
+      coalesce(a.request_type, s.request_type) as request_type,
+      a.avg_hours,
+      a.p50_hours,
+      s.sla_avg_hours,
+      s.sla_p50_hours,
+      coalesce(a.n, 0) as n
+    from actuals a
+    full outer join sla_targets s
+      on a.week = s.week and a.request_type = s.request_type
     order by 1,2;
     """
     with conn() as c, c.cursor() as cur:
-        cur.execute(q, (date_from, date_to, *filter_params))
+        cur.execute(q, (date_from, date_to, *filter_params, date_from, date_to, *filter_params))  # nosemgrep
         rows = cur.fetchall()
 
     return [
@@ -2061,7 +2151,10 @@ def time_to_resolution_weekly_by_type(
             "avg_hours": float(r[2]) if r[2] is not None else None,
             "p50_hours": float(r[3]) if r[3] is not None else None,
             "median_hours": float(r[3]) if r[3] is not None else None,
-            "n": int(r[4] or 0),
+            "sla_avg_hours": float(r[4]) if r[4] is not None else None,
+            "sla_p50_hours": float(r[5]) if r[5] is not None else None,
+            "sla_median_hours": float(r[5]) if r[5] is not None else None,
+            "n": int(r[6] or 0),
         }
         for r in rows
     ]
@@ -2513,7 +2606,114 @@ def alerts_live(servicedesk_only: bool = True):
         )
         overdue_rows = cur.fetchall()
 
-    all_keys = [r[0] for r in p1_rows] + [r[0] for r in warning_rows] + [r[0] for r in critical_rows] + [r[0] for r in overdue_rows]
+        cur.execute(
+            """
+            select
+              issue_key,
+              time_to_resolution_due_at,
+              greatest(0, ceil(extract(epoch from (time_to_resolution_due_at - now())) / 60.0))::int as minutes_left,
+              issue_summary,
+              current_status
+            from issues
+            where resolved_at is null
+              and lower(coalesce(request_type, '')) = 'incident'
+              and not (lower(coalesce(current_status, '')) = any(%s::text[]))
+              and time_to_resolution_due_at is not null
+              and time_to_resolution_due_at > now() + make_interval(mins => %s)
+              and time_to_resolution_due_at <= now() + make_interval(hours => %s)
+      and (
+        not %s
+        or (
+          onderwerp_logging is not null
+          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+          and (
+            assignee is null
+            or assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          )
+        )
+      )
+            order by time_to_resolution_due_at asc
+            limit 25;
+            """,
+            (list(ALERT_TTR_CLOSED_STATUSES), TTR_CRITICAL_MINUTES, TTR_WARNING_HOURS, servicedesk_only),
+        )
+        ttr_warning_rows = cur.fetchall()
+
+        cur.execute(
+            """
+            select
+              issue_key,
+              time_to_resolution_due_at,
+              greatest(0, ceil(extract(epoch from (time_to_resolution_due_at - now())) / 60.0))::int as minutes_left,
+              issue_summary,
+              current_status
+            from issues
+            where resolved_at is null
+              and lower(coalesce(request_type, '')) = 'incident'
+              and not (lower(coalesce(current_status, '')) = any(%s::text[]))
+              and time_to_resolution_due_at is not null
+              and time_to_resolution_due_at >= now()
+              and time_to_resolution_due_at <= now() + make_interval(mins => %s)
+      and (
+        not %s
+        or (
+          onderwerp_logging is not null
+          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+          and (
+            assignee is null
+            or assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          )
+        )
+      )
+            order by time_to_resolution_due_at asc
+            limit 25;
+            """,
+            (list(ALERT_TTR_CLOSED_STATUSES), TTR_CRITICAL_MINUTES, servicedesk_only),
+        )
+        ttr_critical_rows = cur.fetchall()
+
+        cur.execute(
+            """
+            select
+              issue_key,
+              time_to_resolution_due_at,
+              ceil(extract(epoch from (now() - time_to_resolution_due_at)) / 60.0)::int as minutes_overdue,
+              issue_summary,
+              current_status
+            from issues
+            where resolved_at is null
+              and lower(coalesce(request_type, '')) = 'incident'
+              and not (lower(coalesce(current_status, '')) = any(%s::text[]))
+              and time_to_resolution_due_at is not null
+              and time_to_resolution_due_at < now()
+              and time_to_resolution_due_at >= now() - make_interval(hours => %s)
+      and (
+        not %s
+        or (
+          onderwerp_logging is not null
+          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+          and (
+            assignee is null
+            or assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+          )
+        )
+      )
+            order by time_to_resolution_due_at asc
+            limit 25;
+            """,
+            (list(ALERT_TTR_CLOSED_STATUSES), SLA_OVERDUE_MAX_AGE_HOURS, servicedesk_only),
+        )
+        ttr_overdue_rows = cur.fetchall()
+
+    all_keys = (
+        [r[0] for r in p1_rows]
+        + [r[0] for r in warning_rows]
+        + [r[0] for r in critical_rows]
+        + [r[0] for r in overdue_rows]
+        + [r[0] for r in ttr_warning_rows]
+        + [r[0] for r in ttr_critical_rows]
+        + [r[0] for r in ttr_overdue_rows]
+    )
     existing_keys = _jira_existing_issue_keys(all_keys)
 
     priority_items = [
@@ -2558,6 +2758,39 @@ def alerts_live(servicedesk_only: bool = True):
             "status": r[4],
         }
         for r in overdue_rows
+        if r[0] in existing_keys
+    ]
+    ttr_warning_items = [
+        {
+            "issue_key": r[0],
+            "due_at": r[1].isoformat() if r[1] else None,
+            "minutes_left": int(r[2] or 0),
+            "issue_summary": r[3],
+            "status": r[4],
+        }
+        for r in ttr_warning_rows
+        if r[0] in existing_keys
+    ]
+    ttr_critical_items = [
+        {
+            "issue_key": r[0],
+            "due_at": r[1].isoformat() if r[1] else None,
+            "minutes_left": int(r[2] or 0),
+            "issue_summary": r[3],
+            "status": r[4],
+        }
+        for r in ttr_critical_rows
+        if r[0] in existing_keys
+    ]
+    ttr_overdue_items = [
+        {
+            "issue_key": r[0],
+            "due_at": r[1].isoformat() if r[1] else None,
+            "minutes_overdue": int(r[2] or 0),
+            "issue_summary": r[3],
+            "status": r[4],
+        }
+        for r in ttr_overdue_rows
         if r[0] in existing_keys
     ]
 
@@ -2610,12 +2843,48 @@ def alerts_live(servicedesk_only: bool = True):
         }
         for item in overdue_items
     )
+    log_events.extend(
+        {
+            "issue_key": item["issue_key"],
+            "alert_kind": "TTR_WARNING",
+            "status": item.get("status"),
+            "meta": "24 uur",
+            "issue_summary": item.get("issue_summary"),
+            "issue_url": f"{JIRA_BASE}/browse/{item['issue_key']}",
+            "servicedesk_only": servicedesk_only,
+        }
+        for item in ttr_warning_items
+    )
+    log_events.extend(
+        {
+            "issue_key": item["issue_key"],
+            "alert_kind": "TTR_CRITICAL",
+            "status": item.get("status"),
+            "meta": "60 min",
+            "issue_summary": item.get("issue_summary"),
+            "issue_url": f"{JIRA_BASE}/browse/{item['issue_key']}",
+            "servicedesk_only": servicedesk_only,
+        }
+        for item in ttr_critical_items
+    )
+    log_events.extend(
+        {
+            "issue_key": item["issue_key"],
+            "alert_kind": "TTR_OVERDUE",
+            "status": item.get("status"),
+            "meta": "deadline verstreken",
+            "issue_summary": item.get("issue_summary"),
+            "issue_url": f"{JIRA_BASE}/browse/{item['issue_key']}",
+            "servicedesk_only": servicedesk_only,
+        }
+        for item in ttr_overdue_items
+    )
 
     with conn() as c, c.cursor() as cur:
         _maybe_cleanup_alert_logs(cur)
         inserted_events = _persist_alert_log_events(cur, log_events)
         c.commit()
-    teams_events = [e for e in inserted_events if e.get("alert_kind") in {"P1", "SLA_CRITICAL"}]
+    teams_events = [e for e in inserted_events if e.get("alert_kind") in {"P1", "SLA_CRITICAL", "TTR_WARNING", "TTR_CRITICAL"}]
     _send_teams_alert_notification(teams_events)
 
     return {
@@ -2624,6 +2893,9 @@ def alerts_live(servicedesk_only: bool = True):
         "first_response_due_warning": due_warning_items,
         "first_response_due_critical": due_critical_items,
         "first_response_overdue": overdue_items,
+        "time_to_resolution_warning": ttr_warning_items,
+        "time_to_resolution_critical": ttr_critical_items,
+        "time_to_resolution_overdue": ttr_overdue_items,
     }
 
 
@@ -2722,9 +2994,10 @@ def dev_alert_trigger(servicedesk_only: bool = True):
               assignee,
               assignee_avatar_url,
               current_status,
-              first_response_due_at
+              first_response_due_at,
+              time_to_resolution_due_at
             )
-            values (%s, %s, %s, %s, %s, now(), null, now(), %s, %s, null, %s, now() + interval '3 minutes')
+            values (%s, %s, %s, %s, %s, now(), null, now(), %s, %s, null, %s, now() + interval '3 minutes', now() + interval '20 hours')
             on conflict (issue_key) do update set
               issue_summary=excluded.issue_summary,
               request_type=excluded.request_type,
@@ -2737,7 +3010,8 @@ def dev_alert_trigger(servicedesk_only: bool = True):
               assignee=excluded.assignee,
               assignee_avatar_url=excluded.assignee_avatar_url,
               current_status=excluded.current_status,
-              first_response_due_at=excluded.first_response_due_at;
+              first_response_due_at=excluded.first_response_due_at,
+              time_to_resolution_due_at=excluded.time_to_resolution_due_at;
             """,
             (
                 issue_key,

@@ -224,7 +224,7 @@ def test_metrics_volume_weekly_uses_shared_filter_params(monkeypatch):
 
 def test_metrics_ttr_weekly_by_type_maps_rows(monkeypatch):
     cursor = _CursorStub(
-        fetchall_values=[[(datetime(2026, 1, 19, 0, 0), "Vraag", 12.5, 10.0, 4)]]
+        fetchall_values=[[(datetime(2026, 1, 19, 0, 0), "Vraag", 12.5, 10.0, 24.0, 24.0, 4)]]
     )
     _patch_conn(monkeypatch, cursor)
 
@@ -234,6 +234,8 @@ def test_metrics_ttr_weekly_by_type_maps_rows(monkeypatch):
     assert data[0]["request_type"] == "Vraag"
     assert data[0]["avg_hours"] == 12.5
     assert data[0]["median_hours"] == 10.0
+    assert data[0]["sla_avg_hours"] == 24.0
+    assert data[0]["sla_median_hours"] == 24.0
     assert data[0]["n"] == 4
 
 
@@ -252,6 +254,17 @@ def test_metrics_ttr_weekly_by_type_uses_shared_filter_params_without_request_ty
     assert "request_type is not null" in query
     assert "organizations @> array[%s]::text[]" in query
     assert params == (
+        "2026-01-19",
+        "2026-01-26",
+        "Email",
+        "Email",
+        "High",
+        "High",
+        "Alice",
+        "Alice",
+        "Org A",
+        "Org A",
+        True,
         "2026-01-19",
         "2026-01-26",
         "Email",

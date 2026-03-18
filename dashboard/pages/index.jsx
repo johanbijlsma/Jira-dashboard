@@ -97,10 +97,24 @@ function alertFaviconDataUri(color, ring = false) {
 
 function alertKindLabel(kind) {
   if (kind === "P1") return "P1";
+  if (kind === "TTR_WARNING") return "TTR <24u";
+  if (kind === "TTR_CRITICAL") return "TTR <60m";
+  if (kind === "TTR_OVERDUE") return "TTR verlopen";
   if (kind === "SLA_OVERDUE") return "SLA verlopen";
   if (kind === "LOGBOOK_EVENT") return "Logboek";
   return "SLA bijna";
 }
+
+const ALERT_KIND_FILTER_ORDER = [
+  "P1",
+  "SLA_WARNING",
+  "SLA_CRITICAL",
+  "SLA_OVERDUE",
+  "TTR_WARNING",
+  "TTR_CRITICAL",
+  "TTR_OVERDUE",
+  "LOGBOOK_EVENT",
+];
 
 function alertKindPillStyle(kind) {
   return {
@@ -114,6 +128,12 @@ function alertKindPillStyle(kind) {
     borderColor:
       kind === "P1"
         ? "rgba(127, 29, 29, 0.42)"
+        : kind === "TTR_WARNING"
+          ? "rgba(96, 165, 250, 0.42)"
+        : kind === "TTR_CRITICAL"
+          ? "rgba(37, 99, 235, 0.42)"
+        : kind === "TTR_OVERDUE"
+          ? "rgba(30, 58, 138, 0.42)"
         : kind === "LOGBOOK_EVENT"
           ? "rgba(71, 85, 105, 0.42)"
         : kind === "SLA_OVERDUE"
@@ -122,6 +142,12 @@ function alertKindPillStyle(kind) {
     background:
       kind === "P1"
         ? "color-mix(in srgb, #ef4444 18%, var(--surface))"
+        : kind === "TTR_WARNING"
+          ? "color-mix(in srgb, #60a5fa 16%, var(--surface))"
+        : kind === "TTR_CRITICAL"
+          ? "color-mix(in srgb, #2563eb 16%, var(--surface))"
+        : kind === "TTR_OVERDUE"
+          ? "color-mix(in srgb, #1e3a8a 18%, var(--surface))"
         : kind === "LOGBOOK_EVENT"
           ? "color-mix(in srgb, #64748b 14%, var(--surface))"
         : kind === "SLA_OVERDUE"
@@ -130,6 +156,12 @@ function alertKindPillStyle(kind) {
     color:
       kind === "P1"
         ? "#b91c1c"
+        : kind === "TTR_WARNING"
+          ? "#1d4ed8"
+        : kind === "TTR_CRITICAL"
+          ? "#1e40af"
+        : kind === "TTR_OVERDUE"
+          ? "#1e3a8a"
         : kind === "LOGBOOK_EVENT"
           ? "#334155"
         : kind === "SLA_OVERDUE"
@@ -159,6 +191,16 @@ function formatAlertLogbookClearMessage(detectedAt, reason) {
     return `Het Alerts logboek is geleegd op ${datePart} om ${timePart} (geautomatiseerd).`;
   }
   return `Het Alerts logboek is geleegd op ${datePart} om ${timePart}.`;
+}
+
+function formatDurationHoursForTooltip(value) {
+  const hours = Number(value);
+  if (!Number.isFinite(hours)) return "—";
+  if (Math.abs(hours) >= 72) {
+    const days = hours / 24;
+    return `${hours.toFixed(1)} uur (${days.toFixed(1)} dagen)`;
+  }
+  return `${hours.toFixed(1)} uur`;
 }
 
 export default function Home() {
@@ -227,6 +269,7 @@ export default function Home() {
   const [drillOffset, setDrillOffset] = useState(0);
   const [drillHasNext, setDrillHasNext] = useState(false);
   const [clearAlertLogsBusy, setClearAlertLogsBusy] = useState(false);
+  const [alertKindFilter, setAlertKindFilter] = useState("ALL");
   const [expandedAlertGroups, setExpandedAlertGroups] = useState({});
   const [faviconPulseOn, setFaviconPulseOn] = useState(false);
   const drillPanelRef = useRef(null);
@@ -403,10 +446,24 @@ export default function Home() {
     }
     return Array.from(grouped.values());
   }, [alertLogEntries]);
+  const availableAlertKindFilters = useMemo(() => {
+    const kinds = new Set(alertLogEntries.map((entry) => entry.kind).filter(Boolean));
+    return ALERT_KIND_FILTER_ORDER.filter((kind) => kinds.has(kind));
+  }, [alertLogEntries]);
+  const filteredAlertLogGroups = useMemo(() => {
+    if (alertKindFilter === "ALL") return alertLogGroups;
+    return alertLogGroups.filter((group) => group.kind === alertKindFilter);
+  }, [alertKindFilter, alertLogGroups]);
   const hasClearableAlertEntries = useMemo(
     () => alertLogEntries.some((entry) => entry.kind !== "LOGBOOK_EVENT"),
     [alertLogEntries]
   );
+
+  useEffect(() => {
+    if (alertKindFilter === "ALL") return;
+    if (availableAlertKindFilters.includes(alertKindFilter)) return;
+    setAlertKindFilter("ALL");
+  }, [alertKindFilter, availableAlertKindFilters]);
 
   const closeDrilldown = useCallback(() => {
     setSidePanelMode("");
@@ -429,9 +486,9 @@ export default function Home() {
   }, [closeDrilldown, sidePanelMode]);
 
   const openAlertLogPanel = useCallback(() => {
-    setHasNewAlertLogEntry(false);
+    clearHasNewAlertLogEntry();
     setSidePanelMode("alerts");
-  }, []);
+  }, [clearHasNewAlertLogEntry]);
 
   const flashToast = useCallback((message, kind = "success", ms = 3000) => {
     setSyncMessage(message);
@@ -710,17 +767,53 @@ export default function Home() {
       seen.add(key);
       return true;
     });
+    const newTtrWarning = liveAlerts.time_to_resolution_warning.filter((item) => {
+      const key = `ttr-warning:${item.issue_key}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const newTtrCritical = liveAlerts.time_to_resolution_critical.filter((item) => {
+      const key = `ttr-critical:${item.issue_key}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const newTtrOverdue = liveAlerts.time_to_resolution_overdue.filter((item) => {
+      const key = `ttr-overdue:${item.issue_key}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 
     if (newP1.length) {
       flashToast(`ALERT P1: ${newP1[0].issue_key}${newP1.length > 1 ? ` +${newP1.length - 1}` : ""}`, "error", 9000);
+    } else if (newTtrCritical.length) {
+      flashToast(
+        `ALERT INCIDENT TTR <60m: ${newTtrCritical[0].issue_key}${newTtrCritical.length > 1 ? ` +${newTtrCritical.length - 1}` : ""}`,
+        "error",
+        9000
+      );
     } else if (newSlaCritical.length) {
       flashToast(
         `ALERT SLA <5m: ${newSlaCritical[0].issue_key}${newSlaCritical.length > 1 ? ` +${newSlaCritical.length - 1}` : ""}`,
         "error",
         9000
       );
+    } else if (newTtrOverdue.length) {
+      flashToast(
+        `ALERT INCIDENT TTR VERLOPEN: ${newTtrOverdue[0].issue_key}${newTtrOverdue.length > 1 ? ` +${newTtrOverdue.length - 1}` : ""}`,
+        "error",
+        9000
+      );
     } else if (newOverdue.length) {
       flashToast(`ALERT SLA VERLOPEN: ${newOverdue[0].issue_key}${newOverdue.length > 1 ? ` +${newOverdue.length - 1}` : ""}`, "error", 9000);
+    } else if (newTtrWarning.length) {
+      flashToast(
+        `ALERT INCIDENT TTR <24u: ${newTtrWarning[0].issue_key}${newTtrWarning.length > 1 ? ` +${newTtrWarning.length - 1}` : ""}`,
+        "error",
+        9000
+      );
     } else if (newSlaWarning.length) {
       flashToast(
         `ALERT SLA <30m: ${newSlaWarning[0].issue_key}${newSlaWarning.length > 1 ? ` +${newSlaWarning.length - 1}` : ""}`,
@@ -1014,7 +1107,11 @@ export default function Home() {
       (Array.isArray(liveAlerts?.first_response_due_warning) && liveAlerts.first_response_due_warning.length > 0) ||
       (Array.isArray(liveAlerts?.first_response_due_critical) && liveAlerts.first_response_due_critical.length > 0) ||
       (Array.isArray(liveAlerts?.first_response_overdue) && liveAlerts.first_response_overdue.length > 0);
-    if (!(hasP1 || hasSla)) {
+    const hasTtr =
+      (Array.isArray(liveAlerts?.time_to_resolution_warning) && liveAlerts.time_to_resolution_warning.length > 0) ||
+      (Array.isArray(liveAlerts?.time_to_resolution_critical) && liveAlerts.time_to_resolution_critical.length > 0) ||
+      (Array.isArray(liveAlerts?.time_to_resolution_overdue) && liveAlerts.time_to_resolution_overdue.length > 0);
+    if (!(hasP1 || hasSla || hasTtr)) {
       setFaviconPulseOn(false);
       return;
     }
@@ -1029,9 +1126,22 @@ export default function Home() {
     const hasSlaWarning = Array.isArray(liveAlerts?.first_response_due_warning) && liveAlerts.first_response_due_warning.length > 0;
     const hasSlaCritical = Array.isArray(liveAlerts?.first_response_due_critical) && liveAlerts.first_response_due_critical.length > 0;
     const hasOverdue = Array.isArray(liveAlerts?.first_response_overdue) && liveAlerts.first_response_overdue.length > 0;
+    const hasTtrWarning = Array.isArray(liveAlerts?.time_to_resolution_warning) && liveAlerts.time_to_resolution_warning.length > 0;
+    const hasTtrCritical = Array.isArray(liveAlerts?.time_to_resolution_critical) && liveAlerts.time_to_resolution_critical.length > 0;
+    const hasTtrOverdue = Array.isArray(liveAlerts?.time_to_resolution_overdue) && liveAlerts.time_to_resolution_overdue.length > 0;
     const hasSla = hasSlaWarning || hasSlaCritical || hasOverdue;
-    if (!hasP1 && !hasSla) return "/favicon.ico";
-    const color = hasP1 || hasSlaCritical || hasOverdue ? "#dc2626" : "#f59e0b";
+    const hasTtr = hasTtrWarning || hasTtrCritical || hasTtrOverdue;
+    if (!hasP1 && !hasSla && !hasTtr) return "/favicon.ico";
+    const color =
+      hasP1 || hasSlaCritical || hasOverdue
+        ? "#dc2626"
+        : hasTtrOverdue
+          ? "#1e3a8a"
+          : hasTtrCritical
+            ? "#2563eb"
+            : hasTtrWarning
+              ? "#60a5fa"
+              : "#f59e0b";
     return alertFaviconDataUri(color, faviconPulseOn);
   }, [liveAlerts, faviconPulseOn]);
 
@@ -1536,23 +1646,50 @@ export default function Home() {
     const typeSetFromRows = Array.from(
       new Set(rows.map((x) => String(x?.request_type || "").trim()).filter(Boolean))
     );
-    const types = allTypes.length ? allTypes : typeSetFromRows;
-    const datasets = types.map((typeLabel) => ({
-      label: typeLabel,
-      data: weeks.map((w) => {
+    const sourceTypes = allTypes.length ? allTypes : typeSetFromRows;
+    const types = sourceTypes.filter((typeLabel) => String(typeLabel || "").trim().toLowerCase() === "incident");
+    const datasets = types.flatMap((typeLabel) => {
+      const actualData = weeks.map((w) => {
         const row = rows.find(
           (x) =>
             String(x?.week || "").slice(0, 10) === w &&
             String(x?.request_type || "") === String(typeLabel)
         );
         return row?.avg_hours != null ? Number(row.avg_hours) : null;
-      }),
-      tension: 0.2,
-      borderColor: typeColor(typeLabel),
-      backgroundColor: typeColor(typeLabel),
-      pointBackgroundColor: typeColor(typeLabel),
-      pointBorderColor: typeColor(typeLabel),
-    }));
+      });
+      const slaData = weeks.map((w) => {
+        const row = rows.find(
+          (x) =>
+            String(x?.week || "").slice(0, 10) === w &&
+            String(x?.request_type || "") === String(typeLabel)
+        );
+        return row?.sla_avg_hours != null ? Number(row.sla_avg_hours) : null;
+      });
+      const series = [
+        {
+          label: `${typeLabel} werkelijk`,
+          data: actualData,
+          tension: 0.2,
+          borderColor: typeColor(typeLabel),
+          backgroundColor: typeColor(typeLabel),
+          pointBackgroundColor: typeColor(typeLabel),
+          pointBorderColor: typeColor(typeLabel),
+        },
+        {
+          label: `${typeLabel} SLA-doel`,
+          data: slaData,
+          tension: 0.2,
+          borderColor: "#2563eb",
+          backgroundColor: "#2563eb",
+          pointBackgroundColor: "#ffffff",
+          pointBorderColor: "#2563eb",
+          borderDash: [6, 4],
+          pointRadius: 3,
+          pointHoverRadius: 4,
+        },
+      ];
+      return series.filter((dataset) => dataset.data.some((value) => value != null));
+    });
     return {
       labels,
       datasets,
@@ -2977,7 +3114,13 @@ export default function Home() {
                 maintainAspectRatio: false,
                 plugins: {
                   legend: { display: true, position: "top" },
-                  tooltip: { mode: "nearest", intersect: false },
+                  tooltip: {
+                    mode: "nearest",
+                    intersect: false,
+                    callbacks: {
+                      label: (ctx) => `${ctx.dataset.label}: ${formatDurationHoursForTooltip(ctx.parsed.y)}`,
+                    },
+                  },
                   releaseCadence: releaseCadencePlugin,
                   simpleDataLabels: false,
                 },
@@ -4497,7 +4640,7 @@ export default function Home() {
               <>
                 <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Alerts</div>
                 <div style={{ fontSize: 16 }}>
-                  Alerts logboek — <b>{alertLogGroups.length}</b> groepen / <b>{alertLogEntries.length}</b> gebeurtenissen
+                  Alerts logboek — <b>{filteredAlertLogGroups.length}</b> groepen / <b>{alertLogEntries.length}</b> gebeurtenissen
                 </div>
               </>
             ) : (
@@ -4544,6 +4687,21 @@ export default function Home() {
               <span style={{ color: "var(--text-muted)" }}>
                 Meest recente alerts bovenaan
               </span>
+              <label style={{ display: "flex", gap: 8, alignItems: "center", marginLeft: 8 }}>
+                <span style={{ color: "var(--text-muted)", fontSize: 13 }}>Soort</span>
+                <select
+                  value={alertKindFilter}
+                  onChange={(e) => setAlertKindFilter(e.target.value)}
+                  style={{ ...inputBaseStyle, minWidth: 180, width: "auto" }}
+                >
+                  <option value="ALL">Alles</option>
+                  {availableAlertKindFilters.map((kind) => (
+                    <option key={kind} value={kind}>
+                      {alertKindLabel(kind)}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button
                 onClick={() => {
                   if (typeof window !== "undefined") {
@@ -4637,101 +4795,105 @@ export default function Home() {
         <div style={{ padding: "12px 20px", overflow: "auto", flex: 1 }}>
           {sidePanelMode === "alerts" ? (
             alertLogEntries.length ? (
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Tijd</th>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Soort</th>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Issue</th>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Laatste info</th>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Aantal</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {alertLogGroups.map((group) => {
-                      const expanded = !!expandedAlertGroups[group.key];
-                      return (
-                        <Fragment key={group.key}>
-                          <tr>
-                            <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
-                              {fmtDateTime(group.latest_detected_at)}
-                            </td>
-                            <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
-                              <span style={alertKindPillStyle(group.kind)}>{alertKindLabel(group.kind)}</span>
-                            </td>
-                            <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
-                              {group.kind === "LOGBOOK_EVENT" ? (
-                                "—"
-                              ) : (
-                                <a href={`${JIRA_BASE}/browse/${group.issue_key}`} target="_blank" rel="noreferrer">
-                                  {group.issue_key}
-                                </a>
-                              )}
-                            </td>
-                            <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
-                              {group.kind === "LOGBOOK_EVENT"
-                                ? formatAlertLogbookClearMessage(group.latest_detected_at, group.status)
-                                : (group.latest_meta || "—")}
-                            </td>
-                            <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
-                              {group.count > 1 ? (
-                                <button
-                                  onClick={() => toggleAlertGroup(group.key)}
-                                  aria-label={expanded ? "Inklappen" : "Uitklappen"}
-                                  title={expanded ? "Inklappen" : "Uitklappen"}
-                                  style={{
-                                    border: "1px solid var(--border)",
-                                    borderRadius: 6,
-                                    background: "var(--surface)",
-                                    padding: "4px 8px",
-                                    cursor: "pointer",
-                                  }}
-                                >
-                                  {expanded ? "▲" : "▼"} ({group.count}x)
-                                </button>
-                              ) : (
-                                ""
-                              )}
-                            </td>
-                          </tr>
-                          {expanded ? (
+              filteredAlertLogGroups.length ? (
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Tijd</th>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Soort</th>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Issue</th>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Laatste info</th>
+                        <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Aantal</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredAlertLogGroups.map((group) => {
+                        const expanded = !!expandedAlertGroups[group.key];
+                        return (
+                          <Fragment key={group.key}>
                             <tr>
-                              <td colSpan={5} style={{ padding: "0 8px 10px 8px", background: "var(--surface-muted)" }}>
-                                <div style={{ padding: "10px 12px", border: "1px solid var(--border)", borderRadius: 8, marginTop: 6 }}>
-                                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>
-                                    Detailhistorie ({group.count} gebeurtenissen)
-                                  </div>
-                                  <div style={{ overflowX: "auto" }}>
-                                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                                      <thead>
-                                        <tr>
-                                          <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "6px" }}>Tijd</th>
-                                          <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "6px" }}>Info</th>
-                                        </tr>
-                                      </thead>
-                                      <tbody>
-                                        {group.entries.map((entry) => (
-                                          <tr key={entry.id}>
-                                            <td style={{ borderBottom: "1px solid var(--border)", padding: "6px" }}>
-                                              {fmtDateTime(entry.detected_at)}
-                                            </td>
-                                            <td style={{ borderBottom: "1px solid var(--border)", padding: "6px" }}>{entry.meta || "—"}</td>
-                                          </tr>
-                                        ))}
-                                      </tbody>
-                                    </table>
-                                  </div>
-                                </div>
+                              <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                                {fmtDateTime(group.latest_detected_at)}
+                              </td>
+                              <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                                <span style={alertKindPillStyle(group.kind)}>{alertKindLabel(group.kind)}</span>
+                              </td>
+                              <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                                {group.kind === "LOGBOOK_EVENT" ? (
+                                  "—"
+                                ) : (
+                                  <a href={`${JIRA_BASE}/browse/${group.issue_key}`} target="_blank" rel="noreferrer">
+                                    {group.issue_key}
+                                  </a>
+                                )}
+                              </td>
+                              <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                                {group.kind === "LOGBOOK_EVENT"
+                                  ? formatAlertLogbookClearMessage(group.latest_detected_at, group.status)
+                                  : (group.latest_meta || "—")}
+                              </td>
+                              <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                                {group.count > 1 ? (
+                                  <button
+                                    onClick={() => toggleAlertGroup(group.key)}
+                                    aria-label={expanded ? "Inklappen" : "Uitklappen"}
+                                    title={expanded ? "Inklappen" : "Uitklappen"}
+                                    style={{
+                                      border: "1px solid var(--border)",
+                                      borderRadius: 6,
+                                      background: "var(--surface)",
+                                      padding: "4px 8px",
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    {expanded ? "▲" : "▼"} ({group.count}x)
+                                  </button>
+                                ) : (
+                                  ""
+                                )}
                               </td>
                             </tr>
-                          ) : null}
-                        </Fragment>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                            {expanded ? (
+                              <tr>
+                                <td colSpan={5} style={{ padding: "0 8px 10px 8px", background: "var(--surface-muted)" }}>
+                                  <div style={{ padding: "10px 12px", border: "1px solid var(--border)", borderRadius: 8, marginTop: 6 }}>
+                                    <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>
+                                      Detailhistorie ({group.count} gebeurtenissen)
+                                    </div>
+                                    <div style={{ overflowX: "auto" }}>
+                                      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                                        <thead>
+                                          <tr>
+                                            <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "6px" }}>Tijd</th>
+                                            <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "6px" }}>Info</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {group.entries.map((entry) => (
+                                            <tr key={entry.id}>
+                                              <td style={{ borderBottom: "1px solid var(--border)", padding: "6px" }}>
+                                                {fmtDateTime(entry.detected_at)}
+                                              </td>
+                                              <td style={{ borderBottom: "1px solid var(--border)", padding: "6px" }}>{entry.meta || "—"}</td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+                            ) : null}
+                          </Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div style={{ color: "var(--text-muted)" }}>Geen alerts gevonden voor deze soort.</div>
+              )
             ) : (
               <div style={{ color: "var(--text-muted)" }}>Nog geen alerts in dit logboek.</div>
             )

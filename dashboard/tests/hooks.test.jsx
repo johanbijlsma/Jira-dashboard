@@ -145,8 +145,18 @@ describe("dashboard hooks", () => {
     const onRefresh = vi.fn();
     global.fetch = createFetchMock({
       "/alerts/live?": [
-        { priority1: [{ issue_key: "SD-1" }], first_response_due_soon: [{ issue_key: "SD-2" }] },
-        { priority1: [], first_response_due_warning: [{ issue_key: "SD-3" }], first_response_overdue: [{ issue_key: "SD-4" }] },
+        {
+          priority1: [{ issue_key: "SD-1" }],
+          first_response_due_soon: [{ issue_key: "SD-2" }],
+          time_to_resolution_warning: [{ issue_key: "SD-20" }],
+        },
+        {
+          priority1: [],
+          first_response_due_warning: [{ issue_key: "SD-3" }],
+          first_response_overdue: [{ issue_key: "SD-4" }],
+          time_to_resolution_critical: [{ issue_key: "SD-21" }],
+          time_to_resolution_overdue: [{ issue_key: "SD-22" }],
+        },
       ],
     });
 
@@ -154,15 +164,18 @@ describe("dashboard hooks", () => {
 
     await waitFor(() => expect(result.current.liveAlerts.priority1).toHaveLength(1));
     expect(result.current.liveAlerts.first_response_due_warning[0].issue_key).toBe("SD-2");
+    expect(result.current.liveAlerts.time_to_resolution_warning[0].issue_key).toBe("SD-20");
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 20000);
     expect(onRefresh).toHaveBeenCalledWith(expect.objectContaining({ priority1: [{ issue_key: "SD-1" }] }));
 
     await act(async () => {
       const refreshed = await result.current.refreshLiveAlerts();
       expect(refreshed.first_response_overdue[0].issue_key).toBe("SD-4");
+      expect(refreshed.time_to_resolution_overdue[0].issue_key).toBe("SD-22");
     });
 
     expect(result.current.liveAlerts.first_response_overdue[0].issue_key).toBe("SD-4");
+    expect(result.current.liveAlerts.time_to_resolution_critical[0].issue_key).toBe("SD-21");
   });
 
   it("loads alert logs, tracks unseen entries, registers polling, and resets the badge", async () => {
