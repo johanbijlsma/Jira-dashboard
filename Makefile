@@ -15,6 +15,7 @@ dev-api-no-reload:
 	uvicorn api:app --host 0.0.0.0 --port 8000
 
 dev-frontend:
+	test -x dashboard/node_modules/.bin/next || npm --prefix dashboard ci
 	npm --prefix dashboard run dev
 
 dev-check:
@@ -23,7 +24,7 @@ dev-check:
 prod-api:
 	uvicorn api:app --host 0.0.0.0 --port 8000
 
-prod-frontend:
+prod-frontend: prod-build
 	npm --prefix dashboard run start
 
 prod-build:
