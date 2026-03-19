@@ -855,6 +855,7 @@ def test_dev_alert_trigger_and_clear(monkeypatch):
 
 def test_dev_alert_notify_test(monkeypatch):
     monkeypatch.setattr(api, "ALERT_TEAMS_WEBHOOK_URL", "https://example.invalid/webhook")
+    monkeypatch.setattr(api, "_is_teams_alert_business_window", lambda now_utc=None: False)
     sent = []
 
     def fake_post(url, json, timeout):

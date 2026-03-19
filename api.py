@@ -1459,7 +1459,7 @@ def _is_teams_alert_business_window(now_utc: Optional[datetime] = None) -> bool:
     return (8 * 60 + 30) <= minutes_since_midnight < (17 * 60)
 
 
-def _send_teams_alert_notification(events):
+def _send_teams_alert_notification(events, *, bypass_business_window: bool = False):
     result = {
         "attempted": False,
         "ok": False,
@@ -1471,7 +1471,7 @@ def _send_teams_alert_notification(events):
     }
     if not ALERT_TEAMS_WEBHOOK_URL or not events:
         return result
-    if not _is_teams_alert_business_window():
+    if not bypass_business_window and not _is_teams_alert_business_window():
         result["skipped"] = True
         result["skipped_reason"] = "outside_business_hours"
         return result
@@ -3107,7 +3107,8 @@ def dev_alert_notify_test():
                 "issue_url": f"{JIRA_BASE}/browse/{DEV_ALERT_ISSUE_KEY}-NOTIFY",
                 "servicedesk_only": True,
             }
-        ]
+        ],
+        bypass_business_window=True,
     )
     return result
 
