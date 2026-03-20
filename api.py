@@ -1035,20 +1035,22 @@ def _build_insight_scope_key(
 def _insight_weekly_rows(cur, *, field: str, alias: str, date_from: str, date_to: str, filter_sql: str, filter_params: list[Any]):
     cur.execute(
         compose_sql_query(
-            f"""
+            """
             select
               date_trunc('week', created_at) as week_start,
-              {field} as label,
+              {field_sql} as label,
               count(*) as tickets
             from issues
             where created_at >= %s::timestamptz
               and created_at < (%s::timestamptz + interval '1 day')
-              and {field} is not null
-              and btrim({field}) <> ''
-              {filter_sql}
+              and {field_sql} is not null
+              and btrim({field_sql}) <> ''
+              {filters_sql}
             group by 1, 2
             order by 1 asc, 3 desc, 2 asc;
-            """
+            """,
+            field_sql=field,
+            filters_sql=filter_sql,
         ),
         [date_from, date_to, *filter_params],
     )
@@ -1077,7 +1079,8 @@ def _insight_metric_payload(
             servicedesk_only=servicedesk_only,
         )
         cur.execute(
-            f"""
+            compose_sql_query(
+            """
             select
               date_trunc('week', created_at) as week_start,
               count(*) filter (where created_at is not null) as inflow,
@@ -1089,10 +1092,12 @@ def _insight_metric_payload(
             from issues
             where created_at >= %s::timestamptz
               and created_at < (%s::timestamptz + interval '1 day')
-              {filter_sql}
+              {filters_sql}
             group by 1
             order by 1 asc;
             """,
+            filters_sql=filter_sql,
+            ),
             [date_from, date_to, *filter_params],
         )
         inflow_vs_closed = [
@@ -1100,7 +1105,8 @@ def _insight_metric_payload(
         ]
 
         cur.execute(
-            f"""
+            compose_sql_query(
+            """
             select
               date_trunc('week', coalesce(first_response_due_at, created_at)) as week_start,
               count(*) as overdue
@@ -1110,10 +1116,12 @@ def _insight_metric_payload(
               and first_response_due_at < now()
               and created_at >= %s::timestamptz
               and created_at < (%s::timestamptz + interval '1 day')
-              {filter_sql}
+              {filters_sql}
             group by 1
             order by 1 asc;
             """,
+            filters_sql=filter_sql,
+            ),
             [date_from, date_to, *filter_params],
         )
         ttfr_overdue = [{"week_start": row[0], "overdue": int(row[1] or 0)} for row in cur.fetchall()]
@@ -1128,7 +1136,8 @@ def _insight_metric_payload(
             include_request_type=False,
         )
         cur.execute(
-            f"""
+            compose_sql_query(
+            """
             select
               date_trunc('week', created_at) as week_start,
               avg(extract(epoch from (resolved_at - created_at))/3600.0) as avg_hours
@@ -1138,10 +1147,12 @@ def _insight_metric_payload(
               and resolved_at is not null
               and resolved_at >= created_at
               and lower(coalesce(request_type, '')) = 'incident'
-              {ttr_filter_sql}
+              {filters_sql}
             group by 1
             order by 1 asc;
             """,
+            filters_sql=ttr_filter_sql,
+            ),
             [date_from, date_to, *ttr_filter_params],
         )
         incident_resolution = [
@@ -1167,7 +1178,8 @@ def _insight_metric_payload(
             alias="i",
         )
         cur.execute(
-            f"""
+            compose_sql_query(
+            """
             select
               date_trunc('week', i.created_at) as week_start,
               org.org_name as organization,
@@ -1178,10 +1190,12 @@ def _insight_metric_payload(
               and i.created_at < (%s::timestamptz + interval '1 day')
               and org.org_name is not null
               and btrim(org.org_name) <> ''
-              {organization_filter_sql}
+              {filters_sql}
             group by 1, 2
             order by 1 asc, 3 desc, 2 asc;
             """,
+            filters_sql=organization_filter_sql,
+            ),
             [date_from, date_to, *organization_filter_params],
         )
         organization_rows = [{"week_start": row[0], "organization": row[1], "tickets": int(row[2] or 0)} for row in cur.fetchall()]
