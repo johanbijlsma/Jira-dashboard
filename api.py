@@ -709,10 +709,8 @@ def ensure_schema():  # pragma: no cover
         cur.execute("alter table dashboard_config add column if not exists servicedesk_team_members text[] not null default '{}';")
         cur.execute("alter table dashboard_config add column if not exists servicedesk_onderwerpen text[] not null default '{}';")
         cur.execute(
-            sql.SQL(
-                "alter table dashboard_config add column if not exists "
-                "ai_insight_threshold_pct integer not null default {};"
-            ).format(sql.Literal(DEFAULT_AI_INSIGHT_THRESHOLD_PCT))
+            "alter table dashboard_config add column if not exists "
+            "ai_insight_threshold_pct integer not null default 75;"
         )
         cur.execute("alter table dashboard_config add column if not exists servicedesk_onderwerpen_customized boolean not null default false;")
         cur.execute("alter table dashboard_config add column if not exists updated_at timestamptz not null default now();")
