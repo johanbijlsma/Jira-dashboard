@@ -469,12 +469,13 @@ def test_meta_alerts_and_issue_endpoints(monkeypatch):
             [("SD-3", now, 2, "Waarschuwing titel", "Nieuwe melding")],
             [],
             [("SD-4", now, 8, "Overdue titel", "Nieuwe melding")],
-            [("SD-5", now, 45, "TTR waarschuwing titel", "In behandeling")],
-            [("SD-6", now, 30, "TTR kritiek titel", "In behandeling")],
-            [("SD-7", now, 90, "TTR overdue titel", "In behandeling")],
-            [("SD-10", "Incident", "Koppelingen", now, now, "P1", "Johan", "Open")],
-        ]
-    )
+                [("SD-5", now, 45, "TTR waarschuwing titel", "In behandeling")],
+                [("SD-6", now, 30, "TTR kritiek titel", "In behandeling")],
+                [("SD-7", now, 90, "TTR overdue titel", "In behandeling")],
+                [],
+                [("SD-10", "Incident", "Koppelingen", now, now, "P1", "Johan", "Open")],
+            ]
+        )
     patch_conn(monkeypatch, cursor)
     monkeypatch.setattr(api, "_jira_existing_issue_keys", lambda keys: set(keys) - {"SD-2"})
 
@@ -715,8 +716,12 @@ def test_alerts_live_sends_teams_notification_for_new_events(monkeypatch):
             [("SD-5", now, 240, "TTR waarschuwing titel", "In behandeling")],
             [("SD-6", now, 45, "TTR kritiek titel", "In behandeling")],
             [("SD-7", now, 10, "TTR overdue titel", "In behandeling")],
+            [
+                ("SD-1", "P1", "Nieuwe melding", "P1", True),
+                ("SD-5", "TTR_WARNING", "In behandeling", "24 uur", True),
+                ("SD-6", "TTR_CRITICAL", "In behandeling", "60 min", True),
+            ],
         ],
-        fetchone_values=[(1,), (2,), (3,), (4,), (5,), (6,)],
     )
     patch_conn(monkeypatch, cursor)
     monkeypatch.setattr(api, "_jira_existing_issue_keys", lambda keys: set(keys))

@@ -83,6 +83,8 @@ _issue_existence_cache_ttl_seconds = 60
 _last_alert_log_cleanup_at = 0.0
 _auto_sync_scheduler_started = False
 _auto_sync_scheduler_lock = threading.Lock()
+_sync_status_cache_payload = None
+_sync_status_cache_checked_at = 0.0
 DEV_ALERT_ISSUE_KEY = "DEV-ALERT-TEST"
 DEFAULT_SERVICEDESK_TEAM_MEMBERS = ["Johan", "Ashley", "Jarno"]
 DEFAULT_NON_SERVICEDESK_ONDERWERPEN = {
@@ -629,6 +631,27 @@ def ensure_schema():  # pragma: no cover
         cur.execute("alter table issues add column if not exists current_status text;")
         cur.execute("alter table issues add column if not exists first_response_due_at timestamptz;")
         cur.execute("alter table issues add column if not exists time_to_resolution_due_at timestamptz;")
+        cur.execute("create index if not exists issues_created_at_idx on issues(created_at desc);")
+        cur.execute("create index if not exists issues_resolved_at_idx on issues(resolved_at desc);")
+        cur.execute("create index if not exists issues_updated_at_idx on issues(updated_at desc);")
+        cur.execute(
+            """
+            create index if not exists issues_first_response_alerts_idx
+            on issues(first_response_due_at asc)
+            where resolved_at is null
+              and first_response_due_at is not null
+              and lower(coalesce(current_status, '')) = 'nieuwe melding';
+            """
+        )
+        cur.execute(
+            """
+            create index if not exists issues_ttr_alerts_idx
+            on issues(time_to_resolution_due_at asc)
+            where resolved_at is null
+              and time_to_resolution_due_at is not null
+              and lower(coalesce(request_type, '')) = 'incident';
+            """
+        )
         cur.execute("alter table sync_runs add column if not exists started_at timestamptz not null default now();")
         cur.execute("alter table sync_runs add column if not exists finished_at timestamptz;")
         cur.execute("alter table sync_runs add column if not exists mode text not null default 'incremental';")
@@ -662,6 +685,7 @@ def ensure_schema():  # pragma: no cover
         cur.execute("alter table alert_logs add column if not exists logged_on date not null default current_date;")
         cur.execute("update alert_logs set status_key = coalesce(status, ''), meta_key = coalesce(meta, '') where status_key = '' and meta_key = '';")
         cur.execute("create index if not exists alert_logs_detected_at_idx on alert_logs(detected_at desc);")
+        cur.execute("create index if not exists alert_logs_scope_detected_at_idx on alert_logs(servicedesk_only, detected_at desc, id desc);")
         cur.execute("drop index if exists alert_logs_daily_dedupe_idx;")
         cur.execute(
             """
@@ -801,6 +825,23 @@ def _same_text_set(a, b):
     left = set(_normalize_text_list(a))
     right = set(_normalize_text_list(b))
     return left == right
+
+
+def _get_servicedesk_scope(cur):
+    _seed_servicedesk_config_defaults(cur)
+    cur.execute(
+        """
+        select
+          coalesce(servicedesk_team_members, array[]::text[]),
+          coalesce(servicedesk_onderwerpen, array[]::text[])
+        from dashboard_config
+        where id = 1;
+        """
+    )
+    row = cur.fetchone()
+    if not isinstance(row, (list, tuple)) or len(row) < 2:
+        return [], []
+    return _normalize_text_list(row[0]), _normalize_text_list(row[1])
 
 
 def get_servicedesk_config():
@@ -1031,6 +1072,15 @@ def complete_sync_run_error(run_id: int, error_text: str):
 
 
 def get_sync_status_payload():
+    global _sync_status_cache_payload, _sync_status_cache_checked_at
+    now_ts = time.time()
+    if (
+        not _sync_running
+        and _sync_status_cache_payload is not None
+        and now_ts - _sync_status_cache_checked_at < 5
+    ):
+        return _sync_status_cache_payload
+
     ensure_schema()
     last = get_last_sync()
 
@@ -1122,7 +1172,7 @@ def get_sync_status_payload():
                 "set_last_sync": _to_utc_z(full_row[4]),
             }
 
-    return {
+    payload = {
         "running": _sync_running,
         "last_run": _sync_last_run,
         "last_error": _sync_last_error,
@@ -1138,6 +1188,10 @@ def get_sync_status_payload():
             "full_interval_hours": SYNC_FULL_INTERVAL_HOURS,
         },
     }
+    if not _sync_running:
+        _sync_status_cache_payload = payload
+        _sync_status_cache_checked_at = now_ts
+    return payload
 
 
 def jira_search(jql: str, max_results: int = 100, next_page_token: Optional[str] = None):
@@ -1338,15 +1392,10 @@ def _persist_alert_log_events(cur, events):
     inserted_events = []
     if not events:
         return inserted_events
-    for event in events:
-        cur.execute(
-            """
-            insert into alert_logs(issue_key, alert_kind, status, meta, status_key, meta_key, servicedesk_only, detected_at, logged_on)
-            values (%s, %s, %s, %s, %s, %s, %s, now(), current_date)
-            on conflict (issue_key, alert_kind, status_key, meta_key, servicedesk_only, logged_on)
-            do nothing
-            returning id;
-            """,
+    chunk_size = 100
+    for start in range(0, len(events), chunk_size):
+        chunk = events[start : start + chunk_size]
+        rows = [
             (
                 event["issue_key"],
                 event["alert_kind"],
@@ -1355,11 +1404,38 @@ def _persist_alert_log_events(cur, events):
                 str(event.get("status") or ""),
                 str(event.get("meta") or ""),
                 bool(event.get("servicedesk_only", True)),
-            ),
+            )
+            for event in chunk
+        ]
+        placeholders = ",".join(["(%s, %s, %s, %s, %s, %s, %s, now(), current_date)"] * len(rows))
+        flat_params = tuple(value for row in rows for value in row)
+        cur.execute(
+            f"""
+            insert into alert_logs(issue_key, alert_kind, status, meta, status_key, meta_key, servicedesk_only, detected_at, logged_on)
+            values {placeholders}
+            on conflict (issue_key, alert_kind, status_key, meta_key, servicedesk_only, logged_on)
+            do nothing
+            returning issue_key, alert_kind, status_key, meta_key, servicedesk_only;
+            """,
+            flat_params,
         )
-        inserted = cur.fetchone()
-        if inserted:
-            inserted_events.append(event)
+        inserted_rows = cur.fetchall()
+        inserted_keys = {
+            (row[0], row[1], row[2], row[3], bool(row[4]))
+            for row in inserted_rows
+            if isinstance(row, (list, tuple)) and len(row) >= 5
+        }
+        inserted_events.extend(
+            event
+            for event in chunk
+            if (
+                event["issue_key"],
+                event["alert_kind"],
+                str(event.get("status") or ""),
+                str(event.get("meta") or ""),
+                bool(event.get("servicedesk_only", True)),
+            ) in inserted_keys
+        )
     return inserted_events
 
 
@@ -1631,6 +1707,7 @@ def run_sync_once(full: bool = False, trigger_type: str = "manual"):
     We gebruiken 5 minuten overlap om edge-cases te voorkomen.
     """
     global _sync_running, _sync_last_error, _sync_last_run, _sync_last_result
+    global _sync_status_cache_payload, _sync_status_cache_checked_at
 
     if not (JIRA_EMAIL and JIRA_TOKEN):
         raise RuntimeError("JIRA_EMAIL/JIRA_TOKEN ontbreken in .env")
@@ -1643,6 +1720,8 @@ def run_sync_once(full: bool = False, trigger_type: str = "manual"):
         _sync_last_error = None
         _sync_last_run = datetime.utcnow().isoformat() + "Z"
         _sync_last_result = None
+        _sync_status_cache_payload = None
+        _sync_status_cache_checked_at = 0.0
 
     try:
         run_id = create_sync_run("full" if full else "incremental", trigger_type=trigger_type)
@@ -1713,6 +1792,8 @@ def run_sync_once(full: bool = False, trigger_type: str = "manual"):
     finally:
         with _sync_lock:
             _sync_running = False
+            _sync_status_cache_payload = None
+            _sync_status_cache_checked_at = 0.0
 
 
 app = FastAPI(title="JSM Analytics API")
@@ -2519,6 +2600,7 @@ def alerts_live(servicedesk_only: bool = True):
     ensure_schema()
     servicedesk_only = True
     with conn() as c, c.cursor() as cur:
+        servicedesk_team_members, servicedesk_onderwerpen = _get_servicedesk_scope(cur)
         cur.execute(
             """
             select issue_key, created_at, priority, current_status
@@ -2529,17 +2611,17 @@ def alerts_live(servicedesk_only: bool = True):
         not %s
         or (
           onderwerp_logging is not null
-          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging = any(%s::text[])
           and (
             assignee is null
-            or assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+            or assignee = any(%s::text[])
           )
         )
       )
             order by created_at desc
             limit 500;
             """,
-            (servicedesk_only,),
+            (servicedesk_only, servicedesk_onderwerpen, servicedesk_team_members),
         )
         p1_rows = [r for r in cur.fetchall() if is_priority1_priority(r[2]) and is_priority1_alert_status(r[3])][:25]
 
@@ -2561,17 +2643,17 @@ def alerts_live(servicedesk_only: bool = True):
         not %s
         or (
           onderwerp_logging is not null
-          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging = any(%s::text[])
           and (
             assignee is null
-            or assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+            or assignee = any(%s::text[])
           )
         )
       )
             order by first_response_due_at asc
             limit 25;
             """,
-            (SLA_CRITICAL_MINUTES, SLA_WARNING_MINUTES, servicedesk_only),
+            (SLA_CRITICAL_MINUTES, SLA_WARNING_MINUTES, servicedesk_only, servicedesk_onderwerpen, servicedesk_team_members),
         )
         warning_rows = cur.fetchall()
 
@@ -2593,17 +2675,17 @@ def alerts_live(servicedesk_only: bool = True):
         not %s
         or (
           onderwerp_logging is not null
-          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging = any(%s::text[])
           and (
             assignee is null
-            or assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+            or assignee = any(%s::text[])
           )
         )
       )
             order by first_response_due_at asc
             limit 25;
             """,
-            (SLA_CRITICAL_MINUTES, servicedesk_only),
+            (SLA_CRITICAL_MINUTES, servicedesk_only, servicedesk_onderwerpen, servicedesk_team_members),
         )
         critical_rows = cur.fetchall()
 
@@ -2625,17 +2707,17 @@ def alerts_live(servicedesk_only: bool = True):
         not %s
         or (
           onderwerp_logging is not null
-          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging = any(%s::text[])
           and (
             assignee is null
-            or assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+            or assignee = any(%s::text[])
           )
         )
       )
             order by first_response_due_at asc
             limit 25;
             """,
-            (SLA_OVERDUE_MAX_AGE_HOURS, servicedesk_only),
+            (SLA_OVERDUE_MAX_AGE_HOURS, servicedesk_only, servicedesk_onderwerpen, servicedesk_team_members),
         )
         overdue_rows = cur.fetchall()
 
@@ -2658,17 +2740,24 @@ def alerts_live(servicedesk_only: bool = True):
         not %s
         or (
           onderwerp_logging is not null
-          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging = any(%s::text[])
           and (
             assignee is null
-            or assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+            or assignee = any(%s::text[])
           )
         )
       )
             order by time_to_resolution_due_at asc
             limit 25;
             """,
-            (list(ALERT_TTR_CLOSED_STATUSES), TTR_CRITICAL_MINUTES, TTR_WARNING_HOURS, servicedesk_only),
+            (
+                list(ALERT_TTR_CLOSED_STATUSES),
+                TTR_CRITICAL_MINUTES,
+                TTR_WARNING_HOURS,
+                servicedesk_only,
+                servicedesk_onderwerpen,
+                servicedesk_team_members,
+            ),
         )
         ttr_warning_rows = cur.fetchall()
 
@@ -2691,17 +2780,23 @@ def alerts_live(servicedesk_only: bool = True):
         not %s
         or (
           onderwerp_logging is not null
-          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging = any(%s::text[])
           and (
             assignee is null
-            or assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+            or assignee = any(%s::text[])
           )
         )
       )
             order by time_to_resolution_due_at asc
             limit 25;
             """,
-            (list(ALERT_TTR_CLOSED_STATUSES), TTR_CRITICAL_MINUTES, servicedesk_only),
+            (
+                list(ALERT_TTR_CLOSED_STATUSES),
+                TTR_CRITICAL_MINUTES,
+                servicedesk_only,
+                servicedesk_onderwerpen,
+                servicedesk_team_members,
+            ),
         )
         ttr_critical_rows = cur.fetchall()
 
@@ -2724,17 +2819,23 @@ def alerts_live(servicedesk_only: bool = True):
         not %s
         or (
           onderwerp_logging is not null
-          and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
+          and onderwerp_logging = any(%s::text[])
           and (
             assignee is null
-            or assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+            or assignee = any(%s::text[])
           )
         )
       )
             order by time_to_resolution_due_at asc
             limit 25;
             """,
-            (list(ALERT_TTR_CLOSED_STATUSES), SLA_OVERDUE_MAX_AGE_HOURS, servicedesk_only),
+            (
+                list(ALERT_TTR_CLOSED_STATUSES),
+                SLA_OVERDUE_MAX_AGE_HOURS,
+                servicedesk_only,
+                servicedesk_onderwerpen,
+                servicedesk_team_members,
+            ),
         )
         ttr_overdue_rows = cur.fetchall()
 

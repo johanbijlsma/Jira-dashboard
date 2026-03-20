@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { API } from "./dashboard-constants";
+import { usePageVisibility } from "./use-page-visibility";
 
 export function useVacationsData() {
   const [upcomingVacations, setUpcomingVacations] = useState([]);
   const [upcomingVacationTotal, setUpcomingVacationTotal] = useState(0);
   const [allVacations, setAllVacations] = useState([]);
   const [todayVacations, setTodayVacations] = useState([]);
+  const isPageVisible = usePageVisibility();
+  const wasPageVisibleRef = useRef(isPageVisible);
 
   const refreshVacations = useCallback(async () => {
     const [allRes, upcomingRes, todayRes] = await Promise.all([
@@ -32,11 +35,18 @@ export function useVacationsData() {
   }, [refreshVacations]);
 
   useEffect(() => {
+    if (!wasPageVisibleRef.current && isPageVisible) {
+      refreshVacations().catch(() => {});
+    }
+    wasPageVisibleRef.current = isPageVisible;
+  }, [isPageVisible, refreshVacations]);
+
+  useEffect(() => {
     const timer = setInterval(() => {
       refreshVacations().catch(() => {});
-    }, 60000);
+    }, isPageVisible ? 60000 : 300000);
     return () => clearInterval(timer);
-  }, [refreshVacations]);
+  }, [isPageVisible, refreshVacations]);
 
   return {
     upcomingVacations,
