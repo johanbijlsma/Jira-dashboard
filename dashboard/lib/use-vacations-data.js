@@ -35,10 +35,16 @@ export function useVacationsData() {
   }, [refreshVacations]);
 
   useEffect(() => {
+    let timer = null;
     if (!wasPageVisibleRef.current && isPageVisible) {
-      refreshVacations().catch(() => {});
+      timer = window.setTimeout(() => {
+        refreshVacations().catch(() => {});
+      }, 0);
     }
     wasPageVisibleRef.current = isPageVisible;
+    return () => {
+      if (timer) window.clearTimeout(timer);
+    };
   }, [isPageVisible, refreshVacations]);
 
   useEffect(() => {

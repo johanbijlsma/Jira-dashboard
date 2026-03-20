@@ -53,10 +53,16 @@ export function useAlertLogs({ limit, sidePanelMode, resetKey }) {
   }, [refreshAlertLogs]);
 
   useEffect(() => {
+    let timer = null;
     if (!wasPageVisibleRef.current && isPageVisible) {
-      refreshAlertLogs().catch(() => {});
+      timer = window.setTimeout(() => {
+        refreshAlertLogs().catch(() => {});
+      }, 0);
     }
     wasPageVisibleRef.current = isPageVisible;
+    return () => {
+      if (timer) window.clearTimeout(timer);
+    };
   }, [isPageVisible, refreshAlertLogs]);
 
   useEffect(() => {
