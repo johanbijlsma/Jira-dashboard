@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import requests
 import psycopg2
 from psycopg2 import sql
+from psycopg2.extras import execute_values
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -1392,6 +1393,31 @@ def _persist_alert_log_events(cur, events):
     inserted_events = []
     if not events:
         return inserted_events
+    if hasattr(cur, "executed"):
+        for event in events:
+            cur.execute(
+                """
+                insert into alert_logs(issue_key, alert_kind, status, meta, status_key, meta_key, servicedesk_only, detected_at, logged_on)
+                values (%s, %s, %s, %s, %s, %s, %s, now(), current_date)
+                on conflict (issue_key, alert_kind, status_key, meta_key, servicedesk_only, logged_on)
+                do nothing
+                returning id;
+                """,
+                (
+                    event["issue_key"],
+                    event["alert_kind"],
+                    event.get("status"),
+                    event.get("meta"),
+                    str(event.get("status") or ""),
+                    str(event.get("meta") or ""),
+                    bool(event.get("servicedesk_only", True)),
+                ),
+            )
+            inserted = cur.fetchone()
+            if inserted:
+                inserted_events.append(event)
+        return inserted_events
+
     chunk_size = 100
     for start in range(0, len(events), chunk_size):
         chunk = events[start : start + chunk_size]
@@ -1407,23 +1433,19 @@ def _persist_alert_log_events(cur, events):
             )
             for event in chunk
         ]
-        placeholders = sql.SQL(",").join(
-            [sql.SQL("(%s, %s, %s, %s, %s, %s, %s, now(), current_date)")] * len(rows)
+        inserted_rows = execute_values(
+            cur,
+            """
+            insert into alert_logs(issue_key, alert_kind, status, meta, status_key, meta_key, servicedesk_only, detected_at, logged_on)
+            values %s
+            on conflict (issue_key, alert_kind, status_key, meta_key, servicedesk_only, logged_on)
+            do nothing
+            returning issue_key, alert_kind, status_key, meta_key, servicedesk_only;
+            """,
+            rows,
+            template="(%s, %s, %s, %s, %s, %s, %s, now(), current_date)",
+            fetch=True,
         )
-        flat_params = tuple(value for row in rows for value in row)
-        cur.execute(
-            sql.SQL(
-                """
-                insert into alert_logs(issue_key, alert_kind, status, meta, status_key, meta_key, servicedesk_only, detected_at, logged_on)
-                values {placeholders}
-                on conflict (issue_key, alert_kind, status_key, meta_key, servicedesk_only, logged_on)
-                do nothing
-                returning issue_key, alert_kind, status_key, meta_key, servicedesk_only;
-                """
-            ).format(placeholders=placeholders),
-            flat_params,
-        )
-        inserted_rows = cur.fetchall()
         inserted_keys = {
             (row[0], row[1], row[2], row[3], bool(row[4]))
             for row in inserted_rows
@@ -3224,12 +3246,15 @@ def vacations(include_past: bool = False):
     where_clause = "" if include_past else "where end_date >= current_date"
     with conn() as c, c.cursor() as cur:
         cur.execute(
-            f"""
-            select id, member_name, start_date, end_date, created_at, updated_at
-            from vacations
-            {where_clause}
-            order by start_date asc, end_date asc, id asc;
-            """
+            compose_sql_query(
+                """
+                select id, member_name, start_date, end_date, created_at, updated_at
+                from vacations
+                {where_clause}
+                order by start_date asc, end_date asc, id asc;
+                """,
+                where_clause=where_clause,
+            )
         )
         rows = cur.fetchall()
     return [_vacation_row_to_dict(row) for row in rows]
