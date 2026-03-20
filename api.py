@@ -1407,16 +1407,20 @@ def _persist_alert_log_events(cur, events):
             )
             for event in chunk
         ]
-        placeholders = ",".join(["(%s, %s, %s, %s, %s, %s, %s, now(), current_date)"] * len(rows))
+        placeholders = sql.SQL(",").join(
+            [sql.SQL("(%s, %s, %s, %s, %s, %s, %s, now(), current_date)")] * len(rows)
+        )
         flat_params = tuple(value for row in rows for value in row)
         cur.execute(
-            f"""
-            insert into alert_logs(issue_key, alert_kind, status, meta, status_key, meta_key, servicedesk_only, detected_at, logged_on)
-            values {placeholders}
-            on conflict (issue_key, alert_kind, status_key, meta_key, servicedesk_only, logged_on)
-            do nothing
-            returning issue_key, alert_kind, status_key, meta_key, servicedesk_only;
-            """,
+            sql.SQL(
+                """
+                insert into alert_logs(issue_key, alert_kind, status, meta, status_key, meta_key, servicedesk_only, detected_at, logged_on)
+                values {placeholders}
+                on conflict (issue_key, alert_kind, status_key, meta_key, servicedesk_only, logged_on)
+                do nothing
+                returning issue_key, alert_kind, status_key, meta_key, servicedesk_only;
+                """
+            ).format(placeholders=placeholders),
             flat_params,
         )
         inserted_rows = cur.fetchall()

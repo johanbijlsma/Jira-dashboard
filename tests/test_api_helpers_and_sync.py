@@ -648,7 +648,7 @@ def test_alerts_live_forces_servicedesk_scope(monkeypatch):
     response = client.get("/alerts/live?servicedesk_only=false")
 
     assert response.status_code == 200
-    select_params = [params for query, params in cursor.executed if "from issues" in query.lower()]
+    select_params = [params for query, params in cursor.executed if "from issues" in _query_text(query).lower()]
     assert select_params
     assert all(params and all(value is True for value in params if isinstance(value, bool)) for params in select_params)
 
@@ -672,7 +672,7 @@ def test_alerts_warning_and_critical_queries_only_use_nieuwe_melding(monkeypatch
     response = client.get("/alerts/live")
     assert response.status_code == 200
 
-    warning_queries = [q.lower() for q, _params in cursor.executed if "minutes_left" in q.lower()]
+    warning_queries = [_query_text(q).lower() for q, _params in cursor.executed if "minutes_left" in _query_text(q).lower()]
     assert len(warning_queries) >= 4
     assert "lower(coalesce(current_status, '')) = 'nieuwe melding'" in warning_queries[0]
     assert "lower(coalesce(current_status, '')) = 'nieuwe melding'" in warning_queries[1]
@@ -702,9 +702,9 @@ def test_alerts_live_persists_log_events_and_cleans_up(monkeypatch):
     response = client.get("/alerts/live")
     assert response.status_code == 200
 
-    delete_queries = [q for q, _params in cursor.executed if "delete from alert_logs" in q.lower()]
+    delete_queries = [q for q, _params in cursor.executed if "delete from alert_logs" in _query_text(q).lower()]
     assert delete_queries
-    insert_queries = [q for q, _params in cursor.executed if "insert into alert_logs" in q.lower()]
+    insert_queries = [q for q, _params in cursor.executed if "insert into alert_logs" in _query_text(q).lower()]
     assert insert_queries
 
 
