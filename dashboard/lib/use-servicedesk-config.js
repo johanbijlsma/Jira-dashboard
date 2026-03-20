@@ -7,6 +7,9 @@ function normalizeServicedeskConfig(data) {
     onderwerpen: Array.isArray(data?.onderwerpen) ? data.onderwerpen : [],
     onderwerpen_baseline: Array.isArray(data?.onderwerpen_baseline) ? data.onderwerpen_baseline : [],
     onderwerpen_customized: Boolean(data?.onderwerpen_customized),
+    ai_insight_threshold_pct: Number.isFinite(Number(data?.ai_insight_threshold_pct))
+      ? Number(data.ai_insight_threshold_pct)
+      : 75,
     updated_at: data?.updated_at || null,
     team_member_avatars:
       data?.team_member_avatars && typeof data.team_member_avatars === "object" ? data.team_member_avatars : {},
@@ -18,6 +21,7 @@ export function useServicedeskConfig() {
     team_members: [],
     onderwerpen: [],
     onderwerpen_customized: false,
+    ai_insight_threshold_pct: 75,
     updated_at: null,
     team_member_avatars: {},
   });

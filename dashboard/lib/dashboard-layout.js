@@ -88,7 +88,10 @@ export function normalizeDashboardLayout(input) {
     return cardRows[idx].includes(key) ? key : null;
   });
 
-  return { kpiRow, hiddenKpis, cardRows, hiddenCards, expandedByRow };
+  const visibleCards = new Set([...cardRows[0], ...cardRows[1]]);
+  const lockedCards = normalizeList(input.lockedCards, visibleCards);
+
+  return { kpiRow, hiddenKpis, cardRows, hiddenCards, expandedByRow, lockedCards };
 }
 
 export function moveKpiToVisibleLayout(prev, key, targetKey = null, position = "before") {
@@ -156,7 +159,8 @@ export function hideCardLayout(prev, key) {
   const nextRows = prev.cardRows.map((row) => row.filter((k) => k !== key));
   const hidden = prev.hiddenCards.includes(key) ? prev.hiddenCards : [...prev.hiddenCards, key];
   const expandedByRow = [...(prev.expandedByRow || [null, null])].map((v) => (v === key ? null : v));
-  return { ...prev, cardRows: nextRows, hiddenCards: hidden, expandedByRow };
+  const lockedCards = (prev.lockedCards || []).filter((k) => k !== key);
+  return { ...prev, cardRows: nextRows, hiddenCards: hidden, expandedByRow, lockedCards };
 }
 
 export function toggleRowExpandCardLayout(prev, rowIndex, key) {
@@ -175,6 +179,15 @@ export function toggleRowExpandCardLayout(prev, rowIndex, key) {
   const next = [...(prev.expandedByRow || [null, null])];
   next[rowIndex] = key;
   return { ...prev, expandedByRow: next };
+}
+
+export function toggleCardLockLayout(prev, key) {
+  const visibleCards = new Set([...(prev.cardRows?.[0] || []), ...(prev.cardRows?.[1] || [])]);
+  if (!visibleCards.has(key)) return prev;
+  const lockedCards = new Set(prev.lockedCards || []);
+  if (lockedCards.has(key)) lockedCards.delete(key);
+  else lockedCards.add(key);
+  return { ...prev, lockedCards: Array.from(lockedCards) };
 }
 
 export function renderKpiRowWithHintLayout(row, isLayoutEditing, draggingKey, kpiDropHint) {

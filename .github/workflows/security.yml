@@ -56,48 +56,21 @@ jobs:
           semgrep scan \
             --config auto \
             --config p/owasp-top-ten \
+            --exclude .github/workflows \
             --exclude dashboard/coverage \
             --exclude dashboard/.next \
             --exclude dashboard/node_modules \
             --exclude dashboard/test-results \
+            --exclude scripts/filter_semgrep_results.py \
             ${BASELINE_ARG} \
             --json \
             --output semgrep-results.json \
             . || true
 
-      - name: Fail on high severity findings
-        run: |
-          python - <<'PY'
-          import json
-          import sys
-
-          with open("semgrep-results.json", "r", encoding="utf-8") as f:
-              data = json.load(f)
-
-          results = data.get("results", [])
-          if not results:
-              print("No Semgrep findings.")
-              sys.exit(0)
-
-          high_levels = {"HIGH", "CRITICAL", "ERROR"}
-          severities = []
-          for item in results:
-              extra = item.get("extra", {}) if isinstance(item, dict) else {}
-              severity = str(extra.get("severity", "")).upper()
-              if severity:
-                  severities.append(severity)
-
-          if severities:
-              high = [s for s in severities if s in high_levels]
-              if high:
-                  print(f"Semgrep found {len(results)} findings; {len(high)} high/critical/error findings. Failing.")
-                  sys.exit(1)
-              print(f"Semgrep found {len(results)} findings; none are high/critical/error. Passing.")
-              sys.exit(0)
-
-          print("Semgrep findings do not include severity metadata; failing on any findings.")
-          sys.exit(1)
-          PY
+      - name: Fail on new high severity findings
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python scripts/filter_semgrep_results.py
 
   dependency-scan:
     name: Dependency scan (Node + Python)

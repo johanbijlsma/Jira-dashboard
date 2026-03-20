@@ -17,6 +17,7 @@ import Link from "next/link";
 import Head from "next/head";
 import {
   API,
+  AI_INSIGHT_DOWNVOTE_REASONS,
   CARD_TITLES,
   DASHBOARD_CONFIG_STORAGE_KEY,
   DEFAULT_SERVICEDESK_ONLY,
@@ -43,6 +44,7 @@ import {
 } from "../lib/dashboard-utils";
 import { legendNoopHandler, setupChartDefaults } from "../lib/chart-setup";
 import { useAlertLogs } from "../lib/use-alert-logs";
+import { useAiInsights } from "../lib/use-ai-insights";
 import { useDashboardData } from "../lib/use-dashboard-data";
 import { useLiveAlerts } from "../lib/use-live-alerts";
 import { useServicedeskConfig } from "../lib/use-servicedesk-config";
@@ -56,6 +58,7 @@ import {
   normalizeDashboardLayout as normalizeDashboardLayoutState,
   renderCardRowWithHintLayout,
   renderKpiRowWithHintLayout,
+  toggleCardLockLayout,
   toggleRowExpandCardLayout,
 } from "../lib/dashboard-layout";
 import { isTotalLabel, median, trendInfo, uniqueChartColor, wowSortValue } from "../lib/dashboard-metrics";
@@ -271,6 +274,11 @@ export default function Home() {
   const [clearAlertLogsBusy, setClearAlertLogsBusy] = useState(false);
   const [alertKindFilter, setAlertKindFilter] = useState("ALL");
   const [expandedAlertGroups, setExpandedAlertGroups] = useState({});
+  const [expandedInsightIds, setExpandedInsightIds] = useState({});
+  const [selectedInsightId, setSelectedInsightId] = useState("");
+  const [insightFeedbackBusyId, setInsightFeedbackBusyId] = useState(null);
+  const [pendingInsightDownvoteId, setPendingInsightDownvoteId] = useState(null);
+  const [pendingInsightReason, setPendingInsightReason] = useState(AI_INSIGHT_DOWNVOTE_REASONS[0]);
   const [ttrAlertsCollapsed, setTtrAlertsCollapsed] = useState(false);
   const drillPanelRef = useRef(null);
   const drillCloseRef = useRef(null);
@@ -282,6 +290,7 @@ export default function Home() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [showStartupSkeleton, setShowStartupSkeleton] = useState(true);
   const [dashboardLayout, setDashboardLayout] = useState(createDefaultDashboardLayout);
+  const [aiInsightThresholdDraft, setAiInsightThresholdDraft] = useState(75);
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
   const [topOnderwerpSort, setTopOnderwerpSort] = useState("wow");
   const [isTvMode, setIsTvMode] = useState(false);
@@ -304,7 +313,7 @@ export default function Home() {
 
   const DRILL_LIMIT = 100;
   const ALERT_LOG_LIMIT = 300;
-  const sidePanelOpen = sidePanelMode === "alerts" || !!selectedWeek;
+  const sidePanelOpen = sidePanelMode === "alerts" || sidePanelMode === "insights" || !!selectedWeek;
   const filtersAreDefault = useMemo(
     () =>
       !requestType &&
@@ -338,6 +347,9 @@ export default function Home() {
     refreshServicedeskConfig,
     applyServicedeskConfig,
   } = useServicedeskConfig();
+  useEffect(() => {
+    setAiInsightThresholdDraft(Number(servicedeskConfig?.ai_insight_threshold_pct || 75));
+  }, [servicedeskConfig?.ai_insight_threshold_pct]);
   const servicedeskTeamMembers = useMemo(() => {
     const values = Array.isArray(servicedeskConfig?.team_members) ? servicedeskConfig.team_members : [];
     return values.length ? values : VACATION_TEAM_MEMBERS;
@@ -424,6 +436,24 @@ export default function Home() {
     sidePanelMode,
     resetKey: servicedeskOnly,
   });
+  const {
+    liveInsights,
+    insightLogEntries,
+    thresholdPct: activeAiThresholdPct,
+    ttlHours: aiInsightTtlHours,
+    refreshLiveInsights,
+    refreshInsightLog,
+    submitInsightFeedback,
+  } = useAiInsights({
+    dateFrom,
+    dateTo,
+    requestType,
+    onderwerp,
+    priority,
+    assignee,
+    organization,
+    servicedeskOnly,
+  });
   const alertLogGroups = useMemo(() => {
     const grouped = new Map();
     for (const entry of alertLogEntries) {
@@ -478,7 +508,7 @@ export default function Home() {
   }, []);
 
   const closeSidePanel = useCallback(() => {
-    if (sidePanelMode === "alerts") {
+    if (sidePanelMode === "alerts" || sidePanelMode === "insights") {
       setSidePanelMode("");
       return;
     }
@@ -489,6 +519,27 @@ export default function Home() {
     clearHasNewAlertLogEntry();
     setSidePanelMode("alerts");
   }, [clearHasNewAlertLogEntry]);
+
+  const setInsightUrl = useCallback((insightId) => {
+    if (typeof window === "undefined") return;
+    try {
+      const url = new URL(window.location.href);
+      if (insightId) url.searchParams.set("insight", String(insightId));
+      else url.searchParams.delete("insight");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    } catch {
+      // no-op
+    }
+  }, []);
+
+  const openInsightLogPanel = useCallback((insightId = "") => {
+    setSelectedInsightId(insightId ? String(insightId) : "");
+    if (insightId) {
+      setExpandedInsightIds((prev) => ({ ...prev, [insightId]: true }));
+    }
+    setSidePanelMode("insights");
+    setInsightUrl(insightId);
+  }, [setInsightUrl]);
 
   const flashToast = useCallback((message, kind = "success", ms = 3000) => {
     setSyncMessage(message);
@@ -577,6 +628,10 @@ export default function Home() {
     setOnderwerpenDraft(normalizedOnderwerpenSelection(servicedeskConfig?.onderwerpen));
   }, [normalizedOnderwerpenSelection, servicedeskConfig, setOnderwerpenDraft]);
 
+  const cancelAiInsightConfig = useCallback(() => {
+    setAiInsightThresholdDraft(Number(servicedeskConfig?.ai_insight_threshold_pct || 75));
+  }, [servicedeskConfig?.ai_insight_threshold_pct]);
+
   const zichtbareOnderwerpenDraft = useMemo(
     () => normalizedOnderwerpenSelection(onderwerpenDraft),
     [normalizedOnderwerpenSelection, onderwerpenDraft]
@@ -600,6 +655,11 @@ export default function Home() {
     return Boolean(servicedeskConfig?.onderwerpen_customized);
   }, [servicedeskConfig]);
 
+  const aiInsightConfigDirty = useMemo(
+    () => Number(aiInsightThresholdDraft) !== Number(servicedeskConfig?.ai_insight_threshold_pct || 75),
+    [aiInsightThresholdDraft, servicedeskConfig?.ai_insight_threshold_pct]
+  );
+
   useEffect(() => {
     if (!onderwerp) return;
     if (!onderwerpFilterOpties.includes(onderwerp)) {
@@ -620,6 +680,7 @@ export default function Home() {
         body: JSON.stringify({
           team_members: teamMembersDraft,
           onderwerpen: onderwerpenDraft,
+          ai_insight_threshold_pct: aiInsightThresholdDraft,
         }),
       });
       if (!res.ok) {
@@ -634,7 +695,7 @@ export default function Home() {
     } finally {
       setTeamConfigSaving(false);
     }
-  }, [applyServicedeskConfig, flashToast, normalizedOnderwerpenSelection, teamMembersDraft, onderwerpenDraft]);
+  }, [aiInsightThresholdDraft, applyServicedeskConfig, flashToast, normalizedOnderwerpenSelection, teamMembersDraft, onderwerpenDraft]);
 
   const saveOnderwerpConfig = useCallback(async () => {
     const normalizedOnderwerpen = normalizedOnderwerpenSelection(onderwerpenDraft);
@@ -650,6 +711,7 @@ export default function Home() {
         body: JSON.stringify({
           team_members: teamMembersDraft,
           onderwerpen: normalizedOnderwerpen,
+          ai_insight_threshold_pct: aiInsightThresholdDraft,
         }),
       });
       if (!res.ok) {
@@ -664,7 +726,7 @@ export default function Home() {
     } finally {
       setOnderwerpConfigSaving(false);
     }
-  }, [applyServicedeskConfig, flashToast, normalizedOnderwerpenSelection, onderwerpenDraft, teamMembersDraft]);
+  }, [aiInsightThresholdDraft, applyServicedeskConfig, flashToast, normalizedOnderwerpenSelection, onderwerpenDraft, teamMembersDraft]);
 
   const resetOnderwerpConfig = useCallback(async () => {
     const baseline = normalizedOnderwerpenSelection(servicedeskOnderwerpenBaseline);
@@ -677,6 +739,7 @@ export default function Home() {
         body: JSON.stringify({
           team_members: teamMembersDraft,
           onderwerpen: baseline,
+          ai_insight_threshold_pct: aiInsightThresholdDraft,
         }),
       });
       if (!res.ok) {
@@ -691,7 +754,44 @@ export default function Home() {
     } finally {
       setOnderwerpConfigSaving(false);
     }
-  }, [applyServicedeskConfig, flashToast, normalizedOnderwerpenSelection, servicedeskOnderwerpenBaseline, teamMembersDraft]);
+  }, [aiInsightThresholdDraft, applyServicedeskConfig, flashToast, normalizedOnderwerpenSelection, servicedeskOnderwerpenBaseline, teamMembersDraft]);
+
+  const saveAiInsightConfig = useCallback(async () => {
+    setOnderwerpConfigSaving(true);
+    try {
+      const res = await fetch(`${API}/config/servicedesk`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          team_members: teamMembersDraft,
+          onderwerpen: zichtbareOnderwerpenDraft,
+          ai_insight_threshold_pct: aiInsightThresholdDraft,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.detail || "Opslaan van AI-threshold mislukt.");
+      }
+      const updated = await res.json();
+      applyServicedeskConfig(updated, normalizedOnderwerpenSelection);
+      await refreshLiveInsights();
+      await refreshInsightLog();
+      flashToast("AI-threshold opgeslagen.");
+    } catch (err) {
+      flashToast(err?.message || "Opslaan van AI-threshold mislukt.", "error");
+    } finally {
+      setOnderwerpConfigSaving(false);
+    }
+  }, [
+    aiInsightThresholdDraft,
+    applyServicedeskConfig,
+    flashToast,
+    normalizedOnderwerpenSelection,
+    refreshInsightLog,
+    refreshLiveInsights,
+    teamMembersDraft,
+    zichtbareOnderwerpenDraft,
+  ]);
 
   const saveDashboardLayout = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -1025,6 +1125,8 @@ export default function Home() {
       }
 
       await refreshDashboard();
+      await refreshLiveInsights();
+      await refreshInsightLog();
 
       if (!silent) {
         const upserts = last?.last_result?.upserts;
@@ -1042,7 +1144,7 @@ export default function Home() {
     } finally {
       setSyncLoading(false);
     }
-  }, [refreshSyncStatus, refreshDashboard]);
+  }, [refreshInsightLog, refreshLiveInsights, refreshSyncStatus, refreshDashboard]);
 
   useEffect(() => {
     if (typeof document !== "undefined") {
@@ -1105,6 +1207,27 @@ export default function Home() {
       clearHasNewAlertLogEntry();
     }
   }, [sidePanelMode, clearHasNewAlertLogEntry]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const insightId = params.get("insight");
+      if (insightId) {
+        setSelectedInsightId(insightId);
+        setSidePanelMode("insights");
+      }
+    } catch {
+      // no-op
+    }
+  }, []);
+
+  useEffect(() => {
+    if (sidePanelMode === "insights") return;
+    if (!selectedInsightId) return;
+    setSelectedInsightId("");
+    setInsightUrl("");
+  }, [selectedInsightId, setInsightUrl, sidePanelMode]);
 
   const faviconSignal = useMemo(() => {
     const hasP1 = Array.isArray(liveAlerts?.priority1) && liveAlerts.priority1.length > 0;
@@ -2803,6 +2926,223 @@ export default function Home() {
     });
   }, [dashboardLayout.cardRows]);
 
+  const toggleInsightLogItem = useCallback((insightId) => {
+    setExpandedInsightIds((prev) => ({ ...prev, [insightId]: !prev[insightId] }));
+  }, []);
+
+  const handleInsightFeedback = useCallback(async (insightId, vote, reason = null) => {
+    if (!insightId) return;
+    setInsightFeedbackBusyId(insightId);
+    try {
+      await submitInsightFeedback({ insightId, vote, reason });
+      await refreshInsightLog();
+      if (vote === "down") {
+        setPendingInsightDownvoteId(null);
+        setPendingInsightReason(AI_INSIGHT_DOWNVOTE_REASONS[0]);
+        flashToast("AI-card verwijderd en feedback opgeslagen.");
+      } else {
+        flashToast("Feedback op AI-card opgeslagen.");
+      }
+    } catch (err) {
+      flashToast(err?.message || "Feedback opslaan mislukt.", "error");
+    } finally {
+      setInsightFeedbackBusyId(null);
+    }
+  }, [flashToast, refreshInsightLog, submitInsightFeedback]);
+
+  function renderAiInsightCard(originalCardKey, expanded = false) {
+    const insight = aiInsightByCardKey.get(originalCardKey);
+    if (!insight) return renderCardContent(originalCardKey, expanded);
+
+    const pendingDownvote = pendingInsightDownvoteId === insight.id;
+    const confidenceExplanation =
+      insight.source_payload?.confidence?.confidence_explanation ||
+      `Confidence score ${Math.round(insight.score_pct)}%. Dit is een interne relevantiescore op basis van afwijking ten opzichte van de vorige periode en bepaalt of een AI-card getoond wordt.`;
+    return (
+      <div
+        style={{
+          display: "grid",
+          gap: 12,
+          height: "100%",
+          alignContent: "start",
+          gridTemplateRows: "auto auto auto auto minmax(0, 1fr) auto auto",
+          minHeight: 0,
+          position: "relative",
+        }}
+      >
+        <div
+          style={{
+            display: "grid",
+            gap: 8,
+            padding: expanded ? "18px 18px 14px" : "12px 12px 10px",
+            borderRadius: 16,
+            background:
+              "linear-gradient(145deg, color-mix(in srgb, #0f766e 18%, var(--surface)) 0%, color-mix(in srgb, #14b8a6 8%, var(--surface)) 100%)",
+            border: "1px solid color-mix(in srgb, #0f766e 30%, var(--border))",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                width: "fit-content",
+                padding: "5px 10px",
+                borderRadius: 999,
+                background: "rgba(255,255,255,0.72)",
+                color: "#0f766e",
+                border: "1px solid color-mix(in srgb, #0f766e 26%, white)",
+                fontSize: 12,
+                fontWeight: 800,
+                letterSpacing: 0.2,
+              }}
+              title={confidenceExplanation}
+            >
+              AI Insight
+              <span style={{ color: "rgba(15, 23, 42, 0.68)" }}>{Math.round(insight.score_pct)}%</span>
+              <span
+                aria-label="Confidence score uitleg"
+                title={confidenceExplanation}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 16,
+                  height: 16,
+                  borderRadius: 999,
+                  border: "1px solid color-mix(in srgb, #0f766e 25%, currentColor)",
+                  fontSize: 10,
+                  fontWeight: 800,
+                  lineHeight: 1,
+                  cursor: "help",
+                }}
+              >
+                i
+              </span>
+            </span>
+            <button type="button" onClick={() => openInsightLogPanel(String(insight.id))} style={filterOpenButtonStyle}>
+              Log
+            </button>
+          </div>
+          <strong style={{ fontSize: expanded ? 24 : 18, lineHeight: 1.15, maxWidth: 560 }}>{insight.title}</strong>
+          <div style={{ color: "rgba(15, 23, 42, 0.78)", lineHeight: 1.45, fontSize: expanded ? 15 : 13 }}>{insight.summary}</div>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={fixedMetricBadgeStyle}>Vervangt: {cardTitleByKey(originalCardKey)}</span>
+          {insight.deviation_pct != null ? <span style={fixedMetricBadgeStyle}>Afwijking: {insight.deviation_pct > 0 ? "+" : ""}{insight.deviation_pct}%</span> : null}
+          <span style={fixedMetricBadgeStyle}>TTL: {aiInsightTtlHours} uur</span>
+        </div>
+        {insight.action_label ? (
+          <div
+            style={{
+              padding: expanded ? "14px 16px" : "10px 12px",
+              borderRadius: 14,
+              background: "color-mix(in srgb, #f59e0b 10%, var(--surface))",
+              border: "1px solid color-mix(in srgb, #f59e0b 28%, var(--border))",
+              display: "grid",
+              gap: 4,
+            }}
+          >
+            <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 700 }}>Aanbevolen actie</div>
+            <div style={{ fontWeight: 700 }}>{insight.action_label}</div>
+          </div>
+        ) : null}
+        <div
+            style={{
+              display: "grid",
+              gap: 8,
+              padding: expanded ? "14px 16px" : "10px 12px",
+              borderRadius: 14,
+            background: "var(--surface-muted)",
+            border: "1px dashed color-mix(in srgb, #0f766e 28%, var(--border))",
+          }}
+        >
+          <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 700 }}>Waarom deze kaart nu zichtbaar is</div>
+          <div style={{ color: "var(--text-muted)", lineHeight: 1.5 }}>
+            Deze AI-card heeft tijdelijk de standaardkaart vervangen zodat het signaal direct in de hoofdview opvalt.
+          </div>
+        </div>
+        <div style={{ minHeight: 0 }} />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button
+              type="button"
+              onClick={() => handleInsightFeedback(insight.id, "up")}
+              disabled={insightFeedbackBusyId === insight.id}
+              style={{ ...iconButtonStyle, minWidth: 42, fontWeight: 700 }}
+              title="Relevant"
+              aria-label="Relevant"
+            >
+              👍
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPendingInsightDownvoteId(insight.id);
+                setPendingInsightReason(AI_INSIGHT_DOWNVOTE_REASONS[0]);
+              }}
+              disabled={insightFeedbackBusyId === insight.id}
+              style={{ ...iconButtonStyle, minWidth: 42, fontWeight: 700 }}
+              title="Niet relevant"
+              aria-label="Niet relevant"
+            >
+              👎
+            </button>
+          </div>
+          <button type="button" onClick={() => openInsightLogPanel(String(insight.id))} style={{ ...filterOpenButtonStyle, padding: "6px 10px" }}>
+            Brondata
+          </button>
+        </div>
+        {pendingDownvote ? (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 18,
+              borderRadius: 18,
+              background: "color-mix(in srgb, #0f172a 26%, transparent)",
+              zIndex: 3,
+            }}
+          >
+            <div
+              style={{
+                width: "min(100%, 420px)",
+                display: "grid",
+                gap: 10,
+                padding: expanded ? "18px" : "16px",
+                borderRadius: 16,
+                border: "1px solid color-mix(in srgb, var(--danger) 28%, var(--border))",
+                background: "var(--surface)",
+                boxShadow: "0 18px 40px color-mix(in srgb, #0f172a 18%, transparent)",
+              }}
+            >
+              <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 700 }}>Waarom wil je deze AI-card wegstemmen?</div>
+              <select value={pendingInsightReason} onChange={(e) => setPendingInsightReason(e.target.value)} style={inputBaseStyle}>
+                {AI_INSIGHT_DOWNVOTE_REASONS.map((reason) => (
+                  <option key={reason} value={reason}>
+                    {reason}
+                  </option>
+                ))}
+              </select>
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                <button type="button" onClick={() => handleInsightFeedback(insight.id, "down", pendingInsightReason)} style={layoutPrimaryButtonStyle}>
+                  Bevestig downvote
+                </button>
+                <button type="button" onClick={() => setPendingInsightDownvoteId(null)} style={filterOpenButtonStyle}>
+                  Annuleren
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   function renderCardContent(cardKey, expanded = false) {
     const bodyStyle = expanded ? { height: "100%", minHeight: 0, position: "relative" } : chartBodyStyle;
     const donutStyle = expanded ? { ...donutBodyStyle, minHeight: 0 } : donutBodyStyle;
@@ -3539,10 +3879,24 @@ export default function Home() {
   const hiddenKpiKeys = dashboardLayout.hiddenKpis;
   const visibleCardRows = dashboardLayout.cardRows;
   const hiddenCardKeys = dashboardLayout.hiddenCards;
+  const lockedCardKeys = useMemo(() => dashboardLayout.lockedCards || [], [dashboardLayout.lockedCards]);
   const cardTitleByKey = useCallback(
     (key) => (key === "topOnderwerpen" ? "Top 10 onderwerpen" : CARD_TITLES[key] || key),
     []
   );
+  const aiInsightByCardKey = useMemo(() => {
+    const visibleCards = new Set(visibleCardRows.flat());
+    const map = new Map();
+    liveInsights.forEach((item) => {
+      const targetCardKey = item?.target_card_key;
+      if (!targetCardKey) return;
+      if (!visibleCards.has(targetCardKey)) return;
+      if (lockedCardKeys.includes(targetCardKey)) return;
+      if (item?.removed_at || item?.feedback_status === "downvoted") return;
+      if (!map.has(targetCardKey)) map.set(targetCardKey, item);
+    });
+    return map;
+  }, [liveInsights, lockedCardKeys, visibleCardRows]);
 
   function startDrag(kind, key, source) {
     if (!isLayoutEditing) return;
@@ -3592,6 +3946,10 @@ export default function Home() {
 
   function hideCardByKey(key) {
     setDashboardLayout((prev) => hideCardLayout(prev, key));
+  }
+
+  function toggleCardLock(key) {
+    setDashboardLayout((prev) => toggleCardLockLayout(prev, key));
   }
 
   function toggleRowExpandCard(rowIndex, key) {
@@ -3718,6 +4076,36 @@ export default function Home() {
             </>
           ) : null}
           <div style={headerPrimaryButtonsStyle}>
+            <button
+              type="button"
+              onClick={() => openInsightLogPanel("")}
+              style={{ ...layoutPrimaryButtonStyle, minWidth: 42, padding: "0 10px", justifyContent: "center", position: "relative" }}
+              title="AI inzichtenlog openen"
+              aria-label="AI inzichtenlog openen"
+            >
+              AI
+              {liveInsights.length ? (
+                <span
+                  aria-hidden="true"
+                  style={{
+                    marginLeft: 6,
+                    minWidth: 18,
+                    height: 18,
+                    borderRadius: 999,
+                    background: "#dc2626",
+                    color: "#ffffff",
+                    border: "1px solid #dc2626",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 11,
+                    fontWeight: 700,
+                  }}
+                >
+                  {liveInsights.length}
+                </span>
+              ) : null}
+            </button>
             <button
               type="button"
               onClick={openAlertLogPanel}
@@ -4134,6 +4522,45 @@ export default function Home() {
               ) : null}
             </div>
           </details>
+
+          <details style={configDetailsStyle}>
+            <summary style={configSummaryStyle}>AI inzichten</summary>
+            <div style={{ display: "grid", gap: 10 }}>
+              <label style={fieldStyle}>
+                <span style={labelStyle}>Threshold (%)</span>
+                <input
+                  type="number"
+                  min="50"
+                  max="95"
+                  step="1"
+                  value={aiInsightThresholdDraft}
+                  onChange={(e) => setAiInsightThresholdDraft(Number(e.target.value || 75))}
+                  style={inputBaseStyle}
+                />
+              </label>
+              <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
+                Live actief: {activeAiThresholdPct}% · max {liveInsights.length}/3 AI-cards · TTL {aiInsightTtlHours} uur
+              </div>
+            </div>
+            <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+              <button
+                type="button"
+                onClick={saveAiInsightConfig}
+                disabled={onderwerpConfigSaving || !aiInsightConfigDirty}
+                style={layoutPrimaryButtonStyle}
+              >
+                Opslaan
+              </button>
+              <button
+                type="button"
+                onClick={cancelAiInsightConfig}
+                disabled={onderwerpConfigSaving || !aiInsightConfigDirty}
+                style={buttonBaseStyle}
+              >
+                Annuleren
+              </button>
+            </div>
+          </details>
         </div>
 
             </div>
@@ -4278,131 +4705,174 @@ export default function Home() {
                   Rij {rowIndex + 1} is leeg. Sleep een kaart hierheen of haal er een terug uit Verborgen kaarten.
                 </div>
               ) : null}
-              {renderedRow.map((cardKey) => (
-              cardKey === "__DROP_HINT__" ? (
-                <div key={`hint-${rowIndex}`} style={dropSkeletonStyle} />
-              ) : (
-              <div
-                key={cardKey}
-                className="dashboard-card-shell"
-                style={{
-                  ...chartShellStyle,
-                  cursor: isLayoutEditing ? "grab" : "default",
-                  gridColumn: hasExpanded && cardKey === expandedKey ? "span 2" : undefined,
-                  transform: hintActive ? "scale(0.86)" : "scale(1)",
-                  transformOrigin: "center center",
-                  transition: "transform 170ms ease, opacity 170ms ease",
-                  opacity: hintActive ? 0.94 : 1,
-                }}
-                draggable={isLayoutEditing}
-                onDragStart={() => startDrag("card", cardKey, { zone: "cardRow", rowIndex })}
-                onDragEnd={clearDrag}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setCardHintFromEvent(rowIndex, cardKey, e);
-                }}
-                onDrop={() => {
-                  const hint = cardDropHint && cardDropHint.rowIndex === rowIndex ? cardDropHint : null;
-                  moveCardToRow(rowIndex, hint?.targetKey || cardKey, hint?.position || "before");
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
-                  {isLayoutEditing ? (
-                    <div style={{ ...cardTitleButtonStyle, cursor: "default", marginBottom: 0 }}>
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        <span style={dragHandleStyle} aria-hidden>
-                          <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-                            <circle cx="2" cy="2" r="1" />
-                            <circle cx="2" cy="5" r="1" />
-                            <circle cx="2" cy="8" r="1" />
-                            <circle cx="8" cy="2" r="1" />
-                            <circle cx="8" cy="5" r="1" />
-                            <circle cx="8" cy="8" r="1" />
-                          </svg>
-                        </span>
-                        <span style={chartTitleStyle}>{cardTitleByKey(cardKey)}</span>
-                      </span>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      className="card-expand-title"
-                      style={cardTitleButtonStyle}
-                      onClick={() => setExpandedCard(cardKey)}
-                      title="Vergroot kaart"
-                      aria-label={`${cardTitleByKey(cardKey)} vergroten`}
-                    >
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                        <span style={chartTitleStyle}>{cardTitleByKey(cardKey)}</span>
-                      </span>
-                      <span style={cardTitleHintStyle} aria-hidden="true">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
-                          <path
-                            d="M4 10V4h6M20 14v6h-6M14 4h6v6M10 20H4v-6"
-                            stroke="currentColor"
-                            strokeWidth="1.8"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                        </svg>
-                      </span>
-                    </button>
-                  )}
-                  {isLayoutEditing ? (
-                    <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                      {row.length <= 4 ? (
+              {renderedRow.map((cardKey) => {
+                if (cardKey === "__DROP_HINT__") {
+                  return <div key={`hint-${rowIndex}`} style={dropSkeletonStyle} />;
+                }
+                const aiInsight = aiInsightByCardKey.get(cardKey);
+                const isLocked = lockedCardKeys.includes(cardKey);
+                const displayTitle = aiInsight ? aiInsight.title : cardTitleByKey(cardKey);
+                return (
+                  <div
+                    key={cardKey}
+                    className="dashboard-card-shell"
+                    style={{
+                      ...chartShellStyle,
+                      ...(aiInsight
+                        ? {
+                            borderColor: "color-mix(in srgb, #0f766e 48%, var(--border))",
+                            background:
+                              "linear-gradient(180deg, color-mix(in srgb, #0f766e 8%, var(--surface)) 0%, var(--surface) 42%)",
+                            boxShadow: "0 12px 30px color-mix(in srgb, #0f766e 12%, transparent)",
+                          }
+                        : null),
+                      cursor: isLayoutEditing ? "grab" : "default",
+                      gridColumn: hasExpanded && cardKey === expandedKey ? "span 2" : undefined,
+                      transform: hintActive ? "scale(0.86)" : "scale(1)",
+                      transformOrigin: "center center",
+                      transition: "transform 170ms ease, opacity 170ms ease",
+                      opacity: hintActive ? 0.94 : 1,
+                    }}
+                    draggable={isLayoutEditing}
+                    onDragStart={() => startDrag("card", cardKey, { zone: "cardRow", rowIndex })}
+                    onDragEnd={clearDrag}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setCardHintFromEvent(rowIndex, cardKey, e);
+                    }}
+                    onDrop={() => {
+                      const hint = cardDropHint && cardDropHint.rowIndex === rowIndex ? cardDropHint : null;
+                      moveCardToRow(rowIndex, hint?.targetKey || cardKey, hint?.position || "before");
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                      {isLayoutEditing ? (
+                        <div style={{ ...cardTitleButtonStyle, cursor: "default", marginBottom: 0 }}>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            <span style={dragHandleStyle} aria-hidden>
+                              <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                                <circle cx="2" cy="2" r="1" />
+                                <circle cx="2" cy="5" r="1" />
+                                <circle cx="2" cy="8" r="1" />
+                                <circle cx="8" cy="2" r="1" />
+                                <circle cx="8" cy="5" r="1" />
+                                <circle cx="8" cy="8" r="1" />
+                              </svg>
+                            </span>
+                            <span style={chartTitleStyle}>{aiInsight ? aiInsight.title : cardTitleByKey(cardKey)}</span>
+                            {aiInsight ? <span style={fixedMetricBadgeStyle}>AI</span> : null}
+                          </span>
+                        </div>
+                      ) : (
                         <button
                           type="button"
-                          onClick={() => toggleRowExpandCard(rowIndex, cardKey)}
-                          style={{ ...iconButtonStyle, borderColor: "var(--accent)", color: "var(--accent)" }}
-                          title={expandedKey === cardKey ? "Normale breedte" : "Verdubbel breedte"}
-                          aria-label={expandedKey === cardKey ? "Normale breedte" : "Verdubbel breedte"}
+                          className="card-expand-title"
+                          style={cardTitleButtonStyle}
+                          onClick={() => setExpandedCard(cardKey)}
+                          title="Vergroot kaart"
+                          aria-label={`${displayTitle} vergroten`}
                         >
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                            <path d="M4 6h7v12H4V6Zm9 0h7v12h-7V6Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                          </svg>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            <span style={chartTitleStyle}>{displayTitle}</span>
+                            {aiInsight ? <span style={fixedMetricBadgeStyle}>AI</span> : null}
+                          </span>
+                          <span style={cardTitleHintStyle} aria-hidden="true">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                              <path
+                                d="M4 10V4h6M20 14v6h-6M14 4h6v6M10 20H4v-6"
+                                stroke="currentColor"
+                                strokeWidth="1.8"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                            </svg>
+                          </span>
                         </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        onClick={() => hideCardByKey(cardKey)}
-                        style={iconButtonStyle}
-                        title="Verberg kaart"
-                        aria-label="Verberg kaart"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                          <path d="M4 7h16M10 3h4M7 7l1 13h8l1-13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      </button>
-                    </span>
-                  ) : cardKey === "vacationServicedesk" ? (
-                    <button
-                      type="button"
-                      onClick={startVacationCreate}
-                      style={vacationActionButtonStyle}
-                      title="Vakantie toevoegen"
-                      aria-label="Vakantie toevoegen"
+                      )}
+                      {isLayoutEditing ? (
+                        <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                          <button
+                            type="button"
+                            onClick={() => toggleCardLock(cardKey)}
+                            style={{
+                              ...iconButtonStyle,
+                              borderColor: isLocked ? "var(--accent)" : "var(--border)",
+                              color: isLocked ? "var(--accent)" : "inherit",
+                            }}
+                            title={isLocked ? "Slot ontgrendelen" : "Slot vergrendelen"}
+                            aria-label={isLocked ? "Slot ontgrendelen" : "Slot vergrendelen"}
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                              {isLocked ? (
+                                <>
+                                  <path d="M8 10V7a4 4 0 1 1 8 0v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                                  <rect x="5" y="10" width="14" height="10" rx="2" stroke="currentColor" strokeWidth="1.8" />
+                                </>
+                              ) : (
+                                <>
+                                  <path d="M16 10V7a4 4 0 1 0-8 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                                  <path d="M15 10h4v10H5V10h7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                                </>
+                              )}
+                            </svg>
+                          </button>
+                          {row.length <= 4 ? (
+                            <button
+                              type="button"
+                              onClick={() => toggleRowExpandCard(rowIndex, cardKey)}
+                              style={{ ...iconButtonStyle, borderColor: "var(--accent)", color: "var(--accent)" }}
+                              title={expandedKey === cardKey ? "Normale breedte" : "Verdubbel breedte"}
+                              aria-label={expandedKey === cardKey ? "Normale breedte" : "Verdubbel breedte"}
+                            >
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                <path d="M4 6h7v12H4V6Zm9 0h7v12h-7V6Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                              </svg>
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => hideCardByKey(cardKey)}
+                            style={iconButtonStyle}
+                            title="Verberg kaart"
+                            aria-label="Verberg kaart"
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                              <path d="M4 7h16M10 3h4M7 7l1 13h8l1-13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          </button>
+                        </span>
+                      ) : (
+                        <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                          {cardKey === "vacationServicedesk" ? (
+                            <button
+                              type="button"
+                              onClick={startVacationCreate}
+                              style={vacationActionButtonStyle}
+                              title="Vakantie toevoegen"
+                              aria-label="Vakantie toevoegen"
+                            >
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                              </svg>
+                            </button>
+                          ) : null}
+                        </span>
+                      )}
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        flex: 1,
+                        minHeight: 0,
+                        ...(interactionDisabledStyle || {}),
+                      }}
                     >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                        <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                      </svg>
-                    </button>
-                  ) : null}
-                </div>
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    flex: 1,
-                    minHeight: 0,
-                    ...(interactionDisabledStyle || {}),
-                  }}
-                >
-                  {renderCardContent(cardKey)}
-                </div>
-              </div>
-              )
-            ))}
+                      {aiInsight ? renderAiInsightCard(cardKey) : renderCardContent(cardKey)}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           );
         })}
@@ -4417,12 +4887,17 @@ export default function Home() {
           <div style={modalFrameStyle}>
             <div style={modalCardStyle} onClick={(e) => e.stopPropagation()}>
               <div style={modalHeaderStyle}>
-                <h2 style={{ margin: 0, fontSize: 20 }}>{cardTitleByKey(expandedCard)}</h2>
+                <h2 style={{ margin: 0, fontSize: 20 }}>
+                  {aiInsightByCardKey.get(expandedCard)?.title || cardTitleByKey(expandedCard)}
+                  {aiInsightByCardKey.get(expandedCard) ? " · AI-card" : ""}
+                </h2>
                 <button type="button" onClick={() => setExpandedCard("")} style={modalCloseStyle}>
                   Sluiten
                 </button>
               </div>
-              <div style={modalBodyStyle}>{renderCardContent(expandedCard, true)}</div>
+              <div style={modalBodyStyle}>
+                {aiInsightByCardKey.get(expandedCard) ? renderAiInsightCard(expandedCard, true) : renderCardContent(expandedCard, true)}
+              </div>
             </div>
           </div>
         </div>
@@ -4639,7 +5114,7 @@ export default function Home() {
         aria-hidden={!sidePanelOpen}
         role="dialog"
         aria-modal="true"
-        aria-label={sidePanelMode === "alerts" ? "Alerts logboek" : "Drilldown"}
+        aria-label={sidePanelMode === "alerts" ? "Alerts logboek" : sidePanelMode === "insights" ? "AI inzichtenlog" : "Drilldown"}
         onClick={(e) => e.stopPropagation()}
         ref={drillPanelRef}
         style={{
@@ -4664,6 +5139,18 @@ export default function Home() {
                 <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Alerts</div>
                 <div style={{ fontSize: 16 }}>
                   Alerts logboek — <b>{filteredAlertLogGroups.length}</b> groepen / <b>{alertLogEntries.length}</b> gebeurtenissen
+                </div>
+              </>
+            ) : sidePanelMode === "insights" ? (
+              <>
+                <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>AI inzichten</div>
+                <div style={{ fontSize: 16 }}>
+                  Inzichtenlog — <b>{insightLogEntries.length}</b> items
+                  {selectedInsightId ? (
+                    <>
+                      {" "}— focus op <b>#{selectedInsightId}</b>
+                    </>
+                  ) : null}
                 </div>
               </>
             ) : (
@@ -4757,6 +5244,17 @@ export default function Home() {
                   />
                 </svg>
                 {clearAlertLogsBusy ? "Legen..." : "Logboek legen"}
+              </button>
+            </div>
+          </div>
+        ) : sidePanelMode === "insights" ? (
+          <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border)" }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ color: "var(--text-muted)" }}>
+                Threshold <b>{activeAiThresholdPct}%</b> · maximaal <b>3</b> actieve AI-cards
+              </span>
+              <button onClick={() => refreshInsightLog()} style={{ marginLeft: "auto" }}>
+                Vernieuwen
               </button>
             </div>
           </div>
@@ -4919,6 +5417,78 @@ export default function Home() {
               )
             ) : (
               <div style={{ color: "var(--text-muted)" }}>Nog geen alerts in dit logboek.</div>
+            )
+          ) : sidePanelMode === "insights" ? (
+            insightLogEntries.length ? (
+              <div style={{ display: "grid", gap: 12 }}>
+                {insightLogEntries.map((item) => {
+                  const expanded = !!expandedInsightIds[item.id];
+                  const highlighted = selectedInsightId && String(item.id) === String(selectedInsightId);
+                  const sourceCurrent = item.source_payload?.current || {};
+                  const sourcePrevious = item.source_payload?.previous || {};
+                  const sourceLabel = item.source_payload?.label || null;
+                  return (
+                    <div
+                      key={item.id}
+                      style={{
+                        border: "1px solid var(--border)",
+                        borderRadius: 12,
+                        padding: 14,
+                        background: highlighted ? "color-mix(in srgb, var(--accent) 8%, var(--surface))" : "var(--surface)",
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                        <div style={{ display: "grid", gap: 6 }}>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                            <strong>{item.title}</strong>
+                            <span style={fixedMetricBadgeStyle}>{Math.round(item.score_pct)}%</span>
+                            {item.feedback_status !== "pending" ? <span style={fixedMetricBadgeStyle}>{item.feedback_status}</span> : null}
+                          </div>
+                          <div style={{ color: "var(--text-muted)" }}>{item.summary}</div>
+                          <div style={{ fontSize: 12, color: "var(--text-faint)" }}>
+                            {fmtDateTime(item.detected_at)} · kaart: {cardTitleByKey(item.target_card_key)}
+                            {item.feedback_reason ? ` · reden: ${item.feedback_reason}` : ""}
+                          </div>
+                        </div>
+                        <button type="button" onClick={() => toggleInsightLogItem(item.id)} style={filterOpenButtonStyle}>
+                          {expanded ? "Verberg brondata" : "Toon brondata"}
+                        </button>
+                      </div>
+                      {expanded ? (
+                        <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+                          <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
+                            {sourceLabel ? `${sourceLabel} · ` : ""}afwijking: {item.deviation_pct == null ? "—" : `${pct(item.deviation_pct)} vs vorige periode`}
+                          </div>
+                          <div style={{ overflowX: "auto" }}>
+                            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                              <thead>
+                                <tr>
+                                  <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Meting</th>
+                                  <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Huidig</th>
+                                  <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Vorig</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {Object.keys({ ...sourceCurrent, ...sourcePrevious })
+                                  .filter((key) => key !== "week_start")
+                                  .map((key) => (
+                                    <tr key={`${item.id}-${key}`}>
+                                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>{key}</td>
+                                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>{String(sourceCurrent?.[key] ?? "—")}</td>
+                                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>{String(sourcePrevious?.[key] ?? "—")}</td>
+                                    </tr>
+                                  ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div style={{ color: "var(--text-muted)" }}>Nog geen AI-inzichten in het logboek.</div>
             )
           ) : drillLoading ? (
             <div>Bezig met laden…</div>
