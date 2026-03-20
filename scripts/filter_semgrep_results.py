@@ -92,6 +92,17 @@ def main() -> int:
     if severities:
         high = [severity for severity in severities if severity in HIGH_LEVELS]
         if high:
+            for item in scoped_results:
+                extra = item.get("extra", {}) if isinstance(item, dict) else {}
+                severity = str(extra.get("severity", "")).upper() or "UNKNOWN"
+                if severity not in HIGH_LEVELS:
+                    continue
+                path = item.get("path") or "<unknown>"
+                line = ((item.get("start") or {}).get("line")) or "?"
+                rule_id = item.get("check_id") or "<unknown>"
+                message = extra.get("message") or "<no message>"
+                print(f"[{severity}] {path}:{line} {rule_id}")
+                print(message)
             print(
                 f"Semgrep found {len(scoped_results)} findings on PR-changed lines; "
                 f"{len(high)} are high/critical/error. Failing."
