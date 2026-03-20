@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { useAlertLogs } from "../lib/use-alert-logs";
+import { useAiInsights } from "../lib/use-ai-insights";
 import { useDashboardData } from "../lib/use-dashboard-data";
 import { useLiveAlerts } from "../lib/use-live-alerts";
 import { useServicedeskConfig } from "../lib/use-servicedesk-config";
@@ -254,6 +255,79 @@ describe("dashboard hooks", () => {
 
     rerender({ limit: 5, sidePanelMode: "alerts", resetKey: "b" });
     await waitFor(() => expect(result.current.hasNewAlertLogEntry).toBe(false));
+  });
+
+  it("loads AI insights, logs, and applies feedback updates", async () => {
+    global.fetch = createFetchMock({
+      "/insights/live?": [
+        {
+          threshold_pct: 75,
+          ttl_hours: 8,
+          items: [
+            {
+              id: 11,
+              title: "AI-signaal",
+              target_card_key: "inflowVsClosed",
+              score_pct: 88,
+              source_payload: { current: { tickets: 12 } },
+              feedback_status: "pending",
+            },
+          ],
+        },
+      ],
+      "/insights/logs?": [
+        [
+          {
+            id: 11,
+            title: "AI-signaal",
+            target_card_key: "inflowVsClosed",
+            score_pct: 88,
+            source_payload: { current: { tickets: 12 } },
+            feedback_status: "pending",
+          },
+        ],
+      ],
+      "/insights/11/feedback": [
+        {
+          id: 11,
+          title: "AI-signaal",
+          target_card_key: "inflowVsClosed",
+          score_pct: 88,
+          source_payload: { current: { tickets: 12 } },
+          feedback_status: "downvoted",
+          feedback_reason: "niet relevant genoeg",
+          removed_at: "2026-01-01T10:00:00Z",
+        },
+      ],
+    });
+
+    const { result } = renderHook(() =>
+      useAiInsights({
+        dateFrom: "2026-01-01",
+        dateTo: "2026-01-31",
+        requestType: "",
+        onderwerp: "",
+        priority: "",
+        assignee: "",
+        organization: "",
+        servicedeskOnly: true,
+      })
+    );
+
+    await waitFor(() => expect(result.current.liveInsights).toHaveLength(1));
+    await waitFor(() => expect(result.current.insightLogEntries).toHaveLength(1));
+    expect(result.current.thresholdPct).toBe(75);
+
+    await act(async () => {
+      await result.current.submitInsightFeedback({
+        insightId: 11,
+        vote: "down",
+        reason: "niet relevant genoeg",
+      });
+    });
+
+    expect(result.current.liveInsights).toHaveLength(0);
+    expect(result.current.insightLogEntries[0].feedback_status).toBe("downvoted");
   });
 
   it("loads vacation aggregates, registers polling, and supports manual refresh", async () => {

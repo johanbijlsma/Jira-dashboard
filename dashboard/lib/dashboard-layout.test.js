@@ -7,6 +7,7 @@ import {
   normalizeDashboardLayout,
   renderCardRowWithHintLayout,
   renderKpiRowWithHintLayout,
+  toggleCardLockLayout,
   toggleRowExpandCardLayout,
 } from "./dashboard-layout";
 import { createDefaultDashboardLayout } from "./dashboard-constants";
@@ -23,6 +24,7 @@ describe("dashboard-layout", () => {
       cardRows: [["volume", "invalid"], ["priority", "volume"]],
       hiddenCards: ["assignee"],
       expandedByRow: ["volume", "missing"],
+      lockedCards: ["volume", "missing"],
     });
     expect(normalized.kpiRow).toContain("totalTickets");
     expect(normalized.hiddenKpis).toContain("avgPerWeek");
@@ -30,6 +32,7 @@ describe("dashboard-layout", () => {
     expect(normalized.cardRows[1]).not.toContain("volume");
     expect(normalized.expandedByRow[0]).toBe("volume");
     expect(normalized.expandedByRow[1]).toBeNull();
+    expect(normalized.lockedCards).toEqual(["volume"]);
   });
 
   it("normalizes legacy shape and split card order", () => {
@@ -62,8 +65,11 @@ describe("dashboard-layout", () => {
     const compact = { ...moved, cardRows: [moved.cardRows[0].slice(0, 4), moved.cardRows[1]], expandedByRow: [null, null] };
     const toggled = toggleRowExpandCardLayout(compact, 0, "volume");
     expect(toggled.expandedByRow[0]).toBe("volume");
-    const hidden = hideCardLayout(toggled, "volume");
+    const locked = toggleCardLockLayout(toggled, "volume");
+    expect(locked.lockedCards).toContain("volume");
+    const hidden = hideCardLayout(locked, "volume");
     expect(hidden.hiddenCards).toContain("volume");
+    expect(hidden.lockedCards).not.toContain("volume");
     expect(moveCardToRowLayout(base, "volume", -1)).toBe(base);
   });
 

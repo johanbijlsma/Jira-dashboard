@@ -1,3 +1,4 @@
+import json
 import os
 import time
 import threading
@@ -9,7 +10,7 @@ from zoneinfo import ZoneInfo
 import requests
 import psycopg2
 from psycopg2 import sql
-from psycopg2.extras import execute_values
+from psycopg2.extras import Json, execute_values
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -97,6 +98,16 @@ DEFAULT_NON_SERVICEDESK_ONDERWERPEN = {
     "Migratie",
 }
 DEFAULT_NON_SERVICEDESK_ONDERWERPEN_LOWER = {value.lower() for value in DEFAULT_NON_SERVICEDESK_ONDERWERPEN}
+DEFAULT_AI_INSIGHT_THRESHOLD_PCT = 75
+MAX_ACTIVE_AI_INSIGHTS = 3
+AI_INSIGHT_TTL_HOURS = 8
+AI_INSIGHT_RETENTION_DAYS = 730
+AI_INSIGHT_DOWNVOTE_REASONS = [
+    "niet relevant genoeg",
+    "threshold te laag",
+    "onduidelijke formulering",
+    "actie niet beïnvloedbaar",
+]
 
 # Prefer POSTGRES_* and fall back to DB_* for backward compatibility.
 PG_HOST = os.environ.get("POSTGRES_HOST") or os.environ.get("DB_HOST") or "localhost"
@@ -584,8 +595,32 @@ def ensure_schema():  # pragma: no cover
               id integer primary key,
               servicedesk_team_members text[] not null default '{}',
               servicedesk_onderwerpen text[] not null default '{}',
+              ai_insight_threshold_pct integer not null default 75,
               servicedesk_onderwerpen_customized boolean not null default false,
               updated_at timestamptz not null default now()
+            );
+            """
+        )
+        cur.execute(
+            """
+            create table if not exists ai_insights_log (
+              id bigserial primary key,
+              insight_key text not null unique,
+              scope_key text not null,
+              title text not null,
+              summary text not null,
+              action_label text,
+              kind text not null,
+              target_card_key text not null,
+              score_pct numeric(5,1) not null default 0,
+              deviation_pct numeric(8,1),
+              detected_at timestamptz not null default now(),
+              expires_at timestamptz not null,
+              source_payload jsonb not null default '{}'::jsonb,
+              feedback_status text not null default 'pending',
+              feedback_reason text,
+              feedback_at timestamptz,
+              removed_at timestamptz
             );
             """
         )
@@ -673,8 +708,35 @@ def ensure_schema():  # pragma: no cover
         cur.execute("create index if not exists vacations_end_date_idx on vacations(end_date);")
         cur.execute("alter table dashboard_config add column if not exists servicedesk_team_members text[] not null default '{}';")
         cur.execute("alter table dashboard_config add column if not exists servicedesk_onderwerpen text[] not null default '{}';")
+        cur.execute(
+            f"alter table dashboard_config add column if not exists ai_insight_threshold_pct integer not null default {DEFAULT_AI_INSIGHT_THRESHOLD_PCT};"
+        )
         cur.execute("alter table dashboard_config add column if not exists servicedesk_onderwerpen_customized boolean not null default false;")
         cur.execute("alter table dashboard_config add column if not exists updated_at timestamptz not null default now();")
+        cur.execute("alter table ai_insights_log add column if not exists insight_key text;")
+        cur.execute("alter table ai_insights_log add column if not exists scope_key text not null default '';")
+        cur.execute("alter table ai_insights_log add column if not exists title text not null default '';")
+        cur.execute("alter table ai_insights_log add column if not exists summary text not null default '';")
+        cur.execute("alter table ai_insights_log add column if not exists action_label text;")
+        cur.execute("alter table ai_insights_log add column if not exists kind text not null default 'generic';")
+        cur.execute("alter table ai_insights_log add column if not exists target_card_key text not null default 'volume';")
+        cur.execute("alter table ai_insights_log add column if not exists score_pct numeric(5,1) not null default 0;")
+        cur.execute("alter table ai_insights_log add column if not exists deviation_pct numeric(8,1);")
+        cur.execute("alter table ai_insights_log add column if not exists detected_at timestamptz not null default now();")
+        cur.execute("alter table ai_insights_log add column if not exists expires_at timestamptz;")
+        cur.execute("alter table ai_insights_log add column if not exists source_payload jsonb not null default '{}'::jsonb;")
+        cur.execute("alter table ai_insights_log add column if not exists feedback_status text not null default 'pending';")
+        cur.execute("alter table ai_insights_log add column if not exists feedback_reason text;")
+        cur.execute("alter table ai_insights_log add column if not exists feedback_at timestamptz;")
+        cur.execute("alter table ai_insights_log add column if not exists removed_at timestamptz;")
+        cur.execute(
+            f"update ai_insights_log set expires_at = coalesce(expires_at, detected_at + interval '{AI_INSIGHT_TTL_HOURS} hours');"
+        )
+        cur.execute("create unique index if not exists ai_insights_log_insight_key_idx on ai_insights_log(insight_key);")
+        cur.execute(
+            "create index if not exists ai_insights_log_scope_detected_idx on ai_insights_log(scope_key, detected_at desc, id desc);"
+        )
+        cur.execute("create index if not exists ai_insights_log_expires_idx on ai_insights_log(expires_at desc);")
         cur.execute("alter table alert_logs add column if not exists issue_key text;")
         cur.execute("alter table alert_logs add column if not exists alert_kind text;")
         cur.execute("alter table alert_logs add column if not exists status text;")
@@ -794,6 +856,12 @@ class VacationPayload(BaseModel):
 class ServicedeskConfigPayload(BaseModel):
     team_members: list[str]
     onderwerpen: list[str]
+    ai_insight_threshold_pct: Optional[int] = None
+
+
+class InsightFeedbackPayload(BaseModel):
+    vote: str
+    reason: Optional[str] = None
 
 
 def _normalize_text_list(values):
@@ -851,7 +919,7 @@ def get_servicedesk_config():
         _seed_servicedesk_config_defaults(cur)
         cur.execute(
             """
-            select servicedesk_team_members, servicedesk_onderwerpen, servicedesk_onderwerpen_customized, updated_at
+            select servicedesk_team_members, servicedesk_onderwerpen, servicedesk_onderwerpen_customized, updated_at, ai_insight_threshold_pct
             from dashboard_config
             where id = 1;
             """
@@ -885,6 +953,7 @@ def get_servicedesk_config():
             "onderwerpen": [],
             "onderwerpen_baseline": allowed_onderwerpen,
             "onderwerpen_customized": False,
+            "ai_insight_threshold_pct": DEFAULT_AI_INSIGHT_THRESHOLD_PCT,
             "updated_at": None,
             "team_member_avatars": {},
         }
@@ -897,8 +966,518 @@ def get_servicedesk_config():
         "onderwerpen": stored_onderwerpen if onderwerpen_customized else allowed_onderwerpen,
         "onderwerpen_baseline": allowed_onderwerpen,
         "onderwerpen_customized": onderwerpen_customized,
+        "ai_insight_threshold_pct": int(row[4] or DEFAULT_AI_INSIGHT_THRESHOLD_PCT) if len(row) > 4 else DEFAULT_AI_INSIGHT_THRESHOLD_PCT,
         "updated_at": row[3].isoformat() if row[3] else None,
         "team_member_avatars": {name: avatar_map.get(name) for name in team_members if avatar_map.get(name)},
+    }
+
+
+def _cleanup_ai_insights(cur):
+    cur.execute(
+        "delete from ai_insights_log where detected_at < (now() - (%s * interval '1 day'));",
+        (AI_INSIGHT_RETENTION_DAYS,),
+    )
+
+
+def _normalize_ai_threshold(value: Optional[int]) -> int:
+    if value is None:
+        return DEFAULT_AI_INSIGHT_THRESHOLD_PCT
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_AI_INSIGHT_THRESHOLD_PCT
+    return min(95, max(50, parsed))
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+def _iso_or_none(value: Any) -> Optional[str]:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if value is None:
+        return None
+    return str(value)
+
+
+def _build_insight_scope_key(
+    *,
+    date_from: str,
+    date_to: str,
+    request_type: Optional[str],
+    onderwerp: Optional[str],
+    priority: Optional[str],
+    assignee: Optional[str],
+    organization: Optional[str],
+    servicedesk_only: bool,
+):
+    return "|".join(
+        [
+            date_from,
+            date_to,
+            request_type or "",
+            onderwerp or "",
+            priority or "",
+            assignee or "",
+            organization or "",
+            "1" if servicedesk_only else "0",
+        ]
+    )
+
+
+def _insight_weekly_rows(cur, *, field: str, alias: str, date_from: str, date_to: str, filter_sql: str, filter_params: list[Any]):
+    cur.execute(
+        compose_sql_query(
+            f"""
+            select
+              date_trunc('week', created_at) as week_start,
+              {field} as label,
+              count(*) as tickets
+            from issues
+            where created_at >= %s::timestamptz
+              and created_at < (%s::timestamptz + interval '1 day')
+              and {field} is not null
+              and btrim({field}) <> ''
+              {filter_sql}
+            group by 1, 2
+            order by 1 asc, 3 desc, 2 asc;
+            """
+        ),
+        [date_from, date_to, *filter_params],
+    )
+    return [{"week_start": row[0], alias: row[1], "tickets": int(row[2] or 0)} for row in cur.fetchall()]
+
+
+def _insight_metric_payload(
+    *,
+    date_from: str,
+    date_to: str,
+    request_type: Optional[str],
+    onderwerp: Optional[str],
+    priority: Optional[str],
+    assignee: Optional[str],
+    organization: Optional[str],
+    servicedesk_only: bool,
+):
+    ensure_schema()
+    with conn() as c, c.cursor() as cur:
+        filter_sql, filter_params = issue_metrics_filter_sql(
+            request_type=request_type,
+            onderwerp=onderwerp,
+            priority=priority,
+            assignee=assignee,
+            organization=organization,
+            servicedesk_only=servicedesk_only,
+        )
+        cur.execute(
+            f"""
+            select
+              date_trunc('week', created_at) as week_start,
+              count(*) filter (where created_at is not null) as inflow,
+              count(*) filter (
+                where resolved_at is not null
+                  and resolved_at >= date_trunc('week', created_at)
+                  and resolved_at < date_trunc('week', created_at) + interval '7 day'
+              ) as closed
+            from issues
+            where created_at >= %s::timestamptz
+              and created_at < (%s::timestamptz + interval '1 day')
+              {filter_sql}
+            group by 1
+            order by 1 asc;
+            """,
+            [date_from, date_to, *filter_params],
+        )
+        inflow_vs_closed = [
+            {"week_start": row[0], "inflow": int(row[1] or 0), "closed": int(row[2] or 0)} for row in cur.fetchall()
+        ]
+
+        cur.execute(
+            f"""
+            select
+              date_trunc('week', coalesce(first_response_due_at, created_at)) as week_start,
+              count(*) as overdue
+            from issues
+            where first_response_due_at is not null
+              and resolved_at is null
+              and first_response_due_at < now()
+              and created_at >= %s::timestamptz
+              and created_at < (%s::timestamptz + interval '1 day')
+              {filter_sql}
+            group by 1
+            order by 1 asc;
+            """,
+            [date_from, date_to, *filter_params],
+        )
+        ttfr_overdue = [{"week_start": row[0], "overdue": int(row[1] or 0)} for row in cur.fetchall()]
+
+        ttr_filter_sql, ttr_filter_params = issue_metrics_filter_sql(
+            request_type=request_type,
+            onderwerp=onderwerp,
+            priority=priority,
+            assignee=assignee,
+            organization=organization,
+            servicedesk_only=servicedesk_only,
+            include_request_type=False,
+        )
+        cur.execute(
+            f"""
+            select
+              date_trunc('week', created_at) as week_start,
+              avg(extract(epoch from (resolved_at - created_at))/3600.0) as avg_hours
+            from issues
+            where created_at >= %s::timestamptz
+              and created_at < (%s::timestamptz + interval '1 day')
+              and resolved_at is not null
+              and resolved_at >= created_at
+              and lower(coalesce(request_type, '')) = 'incident'
+              {ttr_filter_sql}
+            group by 1
+            order by 1 asc;
+            """,
+            [date_from, date_to, *ttr_filter_params],
+        )
+        incident_resolution = [
+            {"week_start": row[0], "avg_hours": float(row[1]) if row[1] is not None else None} for row in cur.fetchall()
+        ]
+
+        onderwerp_rows = _insight_weekly_rows(
+            cur,
+            field="onderwerp_logging",
+            alias="onderwerp",
+            date_from=date_from,
+            date_to=date_to,
+            filter_sql=filter_sql,
+            filter_params=filter_params,
+        )
+        organization_filter_sql, organization_filter_params = issue_metrics_filter_sql(
+            request_type=request_type,
+            onderwerp=onderwerp,
+            priority=priority,
+            assignee=assignee,
+            organization=organization,
+            servicedesk_only=servicedesk_only,
+            alias="i",
+        )
+        cur.execute(
+            f"""
+            select
+              date_trunc('week', i.created_at) as week_start,
+              org.org_name as organization,
+              count(*) as tickets
+            from issues i
+            cross join lateral unnest(i.organizations) as org(org_name)
+            where i.created_at >= %s::timestamptz
+              and i.created_at < (%s::timestamptz + interval '1 day')
+              and org.org_name is not null
+              and btrim(org.org_name) <> ''
+              {organization_filter_sql}
+            group by 1, 2
+            order by 1 asc, 3 desc, 2 asc;
+            """,
+            [date_from, date_to, *organization_filter_params],
+        )
+        organization_rows = [{"week_start": row[0], "organization": row[1], "tickets": int(row[2] or 0)} for row in cur.fetchall()]
+
+    return {
+        "inflow_vs_closed": inflow_vs_closed,
+        "ttfr_overdue": ttfr_overdue,
+        "incident_resolution": incident_resolution,
+        "onderwerp_volume": onderwerp_rows,
+        "organization_volume": organization_rows,
+    }
+
+
+def _latest_with_previous(rows: List[Dict[str, Any]], value_key: str):
+    usable = [row for row in rows if row.get(value_key) is not None]
+    if len(usable) < 2:
+        return None, None
+    return usable[-1], usable[-2]
+
+
+def _score_from_change(current: float, previous: float, *, min_delta: float = 0.0) -> tuple[float, float, Dict[str, Any]]:
+    if previous <= 0:
+        if current <= 0:
+            return 0.0, 0.0, {
+                "absolute_change": 0.0,
+                "relative_change_pct": 0.0,
+                "magnitude_score": 0.0,
+                "volume_score": 0.0,
+                "threshold_bonus": 0.0,
+                "confidence_explanation": "Geen relevante verandering ten opzichte van de vorige periode.",
+            }
+        score = 85.0 if current >= min_delta else 72.0
+        return score, 100.0, {
+            "absolute_change": round(current, 1),
+            "relative_change_pct": 100.0,
+            "magnitude_score": round(score - 25.0, 1),
+            "volume_score": 25.0,
+            "threshold_bonus": 0.0,
+            "confidence_explanation": "De vorige periode had geen vergelijkbare waarde; de huidige periode laat wel direct een duidelijk signaal zien.",
+        }
+    deviation = ((current - previous) / previous) * 100.0
+    absolute_change = current - previous
+    magnitude_score = min(34.0, max(0.0, deviation * 0.45))
+    volume_score = min(20.0, max(0.0, absolute_change * 1.5))
+    threshold_bonus = 12.0 if absolute_change >= min_delta and deviation >= 20.0 else 0.0
+    score = min(99.0, round(45.0 + magnitude_score + volume_score + threshold_bonus, 1))
+    explanation = (
+        f"Score is gebaseerd op {round(deviation, 1)}% relatieve stijging "
+        f"en {round(absolute_change, 1)} absolute toename versus de vorige periode."
+    )
+    if threshold_bonus:
+        explanation += " Extra gewicht omdat zowel impact als afwijking boven de signaaldrempel uitkomen."
+    return score, round(deviation, 1), {
+        "absolute_change": round(absolute_change, 1),
+        "relative_change_pct": round(deviation, 1),
+        "magnitude_score": round(magnitude_score, 1),
+        "volume_score": round(volume_score, 1),
+        "threshold_bonus": round(threshold_bonus, 1),
+        "confidence_explanation": explanation,
+    }
+
+
+def _create_ai_insight_candidates(metrics: Dict[str, Any]) -> List[Dict[str, Any]]:
+    candidates: List[Dict[str, Any]] = []
+
+    latest, previous = _latest_with_previous(metrics.get("inflow_vs_closed") or [], "inflow")
+    if latest and previous:
+        latest_delta = int(latest.get("inflow") or 0) - int(latest.get("closed") or 0)
+        previous_delta = int(previous.get("inflow") or 0) - int(previous.get("closed") or 0)
+        if latest_delta > previous_delta and latest_delta > 0:
+            score, deviation, confidence = _score_from_change(max(latest_delta, 0), max(previous_delta, 0), min_delta=8.0)
+            candidates.append(
+                {
+                    "kind": "backlog_pressure",
+                    "target_card_key": "inflowVsClosed",
+                    "title": "AI-signaal: backlogdruk loopt op",
+                    "summary": (
+                        f"In de laatste volledige week kwamen {latest['inflow']} tickets binnen en werden er "
+                        f"{latest['closed']} afgesloten. De backlogdelta liep op van {previous_delta} naar {latest_delta}."
+                    ),
+                    "action_label": "Check capaciteit en backlogbalans",
+                    "score_pct": score,
+                    "deviation_pct": deviation,
+                    "source_payload": {
+                        "current": latest,
+                        "previous": previous,
+                        "metric": "Binnengekomen vs afgesloten",
+                        "confidence": confidence,
+                    },
+                }
+            )
+
+    latest, previous = _latest_with_previous(metrics.get("ttfr_overdue") or [], "overdue")
+    if latest and previous and int(latest.get("overdue") or 0) > int(previous.get("overdue") or 0):
+        score, deviation, confidence = _score_from_change(float(latest["overdue"]), float(previous["overdue"]), min_delta=3.0)
+        candidates.append(
+            {
+                "kind": "ttfr_overdue_spike",
+                "target_card_key": "firstResponseAll",
+                "title": "AI-signaal: TTFR-verzuim stijgt",
+                "summary": f"Open tickets met verlopen first response liepen op van {previous['overdue']} naar {latest['overdue']}.",
+                "action_label": "Stuur bij op eerste respons",
+                "score_pct": score,
+                "deviation_pct": deviation,
+                "source_payload": {
+                    "current": latest,
+                    "previous": previous,
+                    "metric": "TTFR overdue",
+                    "confidence": confidence,
+                },
+            }
+        )
+
+    latest, previous = _latest_with_previous(metrics.get("incident_resolution") or [], "avg_hours")
+    if latest and previous and float(latest.get("avg_hours") or 0) > float(previous.get("avg_hours") or 0):
+        score, deviation, confidence = _score_from_change(float(latest["avg_hours"]), float(previous["avg_hours"]), min_delta=6.0)
+        candidates.append(
+            {
+                "kind": "incident_ttr_rise",
+                "target_card_key": "incidentResolution",
+                "title": "AI-signaal: incidenten lossen trager op",
+                "summary": f"Gemiddelde incident-TTR steeg van {previous['avg_hours']:.1f}u naar {latest['avg_hours']:.1f}u.",
+                "action_label": "Onderzoek blokkades in incidentafhandeling",
+                "score_pct": score,
+                "deviation_pct": deviation,
+                "source_payload": {
+                    "current": latest,
+                    "previous": previous,
+                    "metric": "Incident resolution avg hours",
+                    "confidence": confidence,
+                },
+            }
+        )
+
+    for key, target_card_key, label_key, kind, title, summary_prefix, action_label in [
+        ("onderwerp_volume", "onderwerp", "onderwerp", "onderwerp_spike", "AI-signaal: onderwerp springt eruit", "Onderwerp", "Check instroom en trend per onderwerp"),
+        ("organization_volume", "organizationWeekly", "organization", "organization_spike", "AI-signaal: partner springt eruit", "Partner", "Check partnerbelasting en context"),
+    ]:
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for row in metrics.get(key) or []:
+            label = str(row.get(label_key) or "").strip()
+            if not label:
+                continue
+            grouped.setdefault(label, []).append(row)
+        for label, rows in grouped.items():
+            latest, previous = _latest_with_previous(rows, "tickets")
+            if not latest or not previous or int(latest.get("tickets") or 0) <= int(previous.get("tickets") or 0):
+                continue
+            score, deviation, confidence = _score_from_change(float(latest["tickets"]), float(previous["tickets"]), min_delta=5.0)
+            candidates.append(
+                {
+                    "kind": kind,
+                    "target_card_key": target_card_key,
+                    "title": title,
+                    "summary": f"{summary_prefix} '{label}' groeide van {previous['tickets']} naar {latest['tickets']} tickets.",
+                    "action_label": action_label,
+                    "score_pct": score,
+                    "deviation_pct": deviation,
+                    "source_payload": {
+                        "label": label,
+                        "current": latest,
+                        "previous": previous,
+                        "metric": summary_prefix,
+                        "confidence": confidence,
+                    },
+                }
+            )
+            break
+
+    return candidates
+
+
+def _persist_ai_insights(cur, *, scope_key: str, candidates: List[Dict[str, Any]], threshold_pct: int):
+    now = datetime.now(timezone.utc)
+    active: List[Dict[str, Any]] = []
+    filtered = [item for item in candidates if float(item.get("score_pct") or 0) >= threshold_pct]
+    filtered.sort(key=lambda item: (float(item.get("score_pct") or 0), _iso_or_none(item.get("source_payload", {}).get("current", {}).get("week_start")) or ""), reverse=True)
+    for item in filtered[:MAX_ACTIVE_AI_INSIGHTS]:
+        current_week = item.get("source_payload", {}).get("current", {}).get("week_start")
+        insight_key = f"{scope_key}|{item['kind']}|{item['target_card_key']}|{_iso_or_none(current_week) or ''}|{item.get('source_payload', {}).get('label', '')}"
+        expires_at = now + timedelta(hours=AI_INSIGHT_TTL_HOURS)
+        cur.execute(
+            """
+            insert into ai_insights_log(
+              insight_key, scope_key, title, summary, action_label, kind, target_card_key,
+              score_pct, deviation_pct, detected_at, expires_at, source_payload
+            )
+            values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            on conflict (insight_key) do update
+            set title = excluded.title,
+                summary = excluded.summary,
+                action_label = excluded.action_label,
+                score_pct = excluded.score_pct,
+                deviation_pct = excluded.deviation_pct,
+                expires_at = excluded.expires_at,
+                source_payload = excluded.source_payload
+            returning
+              id, insight_key, title, summary, action_label, kind, target_card_key, score_pct, deviation_pct,
+              detected_at, expires_at, source_payload, feedback_status, feedback_reason, feedback_at, removed_at;
+            """,
+            (
+                insight_key,
+                scope_key,
+                item["title"],
+                item["summary"],
+                item.get("action_label"),
+                item["kind"],
+                item["target_card_key"],
+                float(item.get("score_pct") or 0),
+                float(item.get("deviation_pct") or 0),
+                now,
+                expires_at,
+                Json(_json_safe(item.get("source_payload") or {})),
+            ),
+        )
+        row = cur.fetchone()
+        if row:
+            mapped = _map_ai_insight_row(row)
+            if mapped and mapped.get("feedback_status") != "downvoted" and not mapped.get("removed_at"):
+                active.append(mapped)
+    return active
+
+
+def _map_ai_insight_row(row):
+    if not row:
+        return None
+    source_payload = row[11]
+    if isinstance(source_payload, str):
+        try:
+            source_payload = json.loads(source_payload)
+        except json.JSONDecodeError:
+            source_payload = {}
+    if not isinstance(source_payload, dict):
+        source_payload = {}
+    return {
+        "id": int(row[0]),
+        "insight_key": str(row[1] or ""),
+        "title": str(row[2] or ""),
+        "summary": str(row[3] or ""),
+        "action_label": str(row[4] or ""),
+        "kind": str(row[5] or ""),
+        "target_card_key": str(row[6] or ""),
+        "score_pct": float(row[7] or 0),
+        "deviation_pct": float(row[8] or 0) if row[8] is not None else None,
+        "detected_at": row[9].isoformat() if row[9] else None,
+        "expires_at": row[10].isoformat() if row[10] else None,
+        "source_payload": source_payload,
+        "feedback_status": str(row[12] or "pending"),
+        "feedback_reason": str(row[13] or "") if row[13] else None,
+        "feedback_at": row[14].isoformat() if row[14] else None,
+        "removed_at": row[15].isoformat() if row[15] else None,
+    }
+
+
+def get_ai_insights(
+    *,
+    date_from: str,
+    date_to: str,
+    request_type: Optional[str],
+    onderwerp: Optional[str],
+    priority: Optional[str],
+    assignee: Optional[str],
+    organization: Optional[str],
+    servicedesk_only: bool,
+):
+    threshold_pct = _normalize_ai_threshold(get_servicedesk_config().get("ai_insight_threshold_pct"))
+    scope_key = _build_insight_scope_key(
+        date_from=date_from,
+        date_to=date_to,
+        request_type=request_type,
+        onderwerp=onderwerp,
+        priority=priority,
+        assignee=assignee,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+    )
+    metrics = _insight_metric_payload(
+        date_from=date_from,
+        date_to=date_to,
+        request_type=request_type,
+        onderwerp=onderwerp,
+        priority=priority,
+        assignee=assignee,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+    )
+    candidates = _create_ai_insight_candidates(metrics)
+    with conn() as c, c.cursor() as cur:
+        _cleanup_ai_insights(cur)
+        active = _persist_ai_insights(cur, scope_key=scope_key, candidates=candidates, threshold_pct=threshold_pct)
+        c.commit()
+    return {
+        "threshold_pct": threshold_pct,
+        "max_active": MAX_ACTIVE_AI_INSIGHTS,
+        "ttl_hours": AI_INSIGHT_TTL_HOURS,
+        "items": active,
     }
 
 
@@ -1926,6 +2505,7 @@ def update_servicedesk_config(payload: ServicedeskConfigPayload):
     ensure_schema()
     team_members = _normalize_text_list(payload.team_members)
     onderwerpen = _normalize_text_list(payload.onderwerpen)
+    ai_insight_threshold_pct = _normalize_ai_threshold(payload.ai_insight_threshold_pct)
     if not team_members:
         raise HTTPException(status_code=400, detail="Selecteer minimaal 1 servicedesk teamlid.")
     if not onderwerpen:
@@ -1939,14 +2519,96 @@ def update_servicedesk_config(payload: ServicedeskConfigPayload):
             update dashboard_config
             set servicedesk_team_members = %s,
                 servicedesk_onderwerpen = %s,
+                ai_insight_threshold_pct = %s,
                 servicedesk_onderwerpen_customized = %s,
                 updated_at = now()
             where id = 1;
             """,
-            (team_members, onderwerpen_to_save, onderwerpen_customized),
+            (team_members, onderwerpen_to_save, ai_insight_threshold_pct, onderwerpen_customized),
         )
         c.commit()
     return get_servicedesk_config()
+
+
+@app.get("/insights/live")
+def insights_live(
+    date_from: str = Query(..., description="ISO date, e.g. 2026-01-01"),
+    date_to: str = Query(..., description="ISO date, e.g. 2026-02-01"),
+    request_type: Optional[str] = None,
+    onderwerp: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee: Optional[str] = None,
+    organization: Optional[str] = None,
+    servicedesk_only: bool = False,
+):
+    return get_ai_insights(
+        date_from=date_from,
+        date_to=date_to,
+        request_type=request_type,
+        onderwerp=onderwerp,
+        priority=priority,
+        assignee=assignee,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+    )
+
+
+@app.get("/insights/logs")
+def insights_logs(limit: int = Query(100, ge=1, le=500), servicedesk_only: bool = False):
+    ensure_schema()
+    with conn() as c, c.cursor() as cur:
+        _cleanup_ai_insights(cur)
+        scope_suffix = "|1" if servicedesk_only else "|0"
+        cur.execute(
+            """
+            select
+              id, insight_key, title, summary, action_label, kind, target_card_key, score_pct, deviation_pct,
+              detected_at, expires_at, source_payload, feedback_status, feedback_reason, feedback_at, removed_at
+            from ai_insights_log
+            where right(scope_key, 2) = %s
+            order by detected_at desc, id desc
+            limit %s;
+            """,
+            (scope_suffix, limit),
+        )
+        rows = cur.fetchall()
+        c.commit()
+    return [_map_ai_insight_row(row) for row in rows]
+
+
+@app.post("/insights/{insight_id}/feedback")
+def submit_insight_feedback(insight_id: int, payload: InsightFeedbackPayload):
+    ensure_schema()
+    vote = str(payload.vote or "").strip().lower()
+    if vote not in {"up", "down"}:
+        raise HTTPException(status_code=400, detail="Vote moet 'up' of 'down' zijn.")
+    reason = str(payload.reason or "").strip() or None
+    if vote == "down" and reason not in AI_INSIGHT_DOWNVOTE_REASONS:
+        raise HTTPException(status_code=400, detail="Kies een geldige downvote-reason.")
+
+    feedback_status = "upvoted" if vote == "up" else "downvoted"
+    removed_at = datetime.now(timezone.utc) if vote == "down" else None
+
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            update ai_insights_log
+            set feedback_status = %s,
+                feedback_reason = %s,
+                feedback_at = now(),
+                removed_at = coalesce(%s, removed_at)
+            where id = %s
+            returning
+              id, insight_key, title, summary, action_label, kind, target_card_key, score_pct, deviation_pct,
+              detected_at, expires_at, source_payload, feedback_status, feedback_reason, feedback_at, removed_at;
+            """,
+            (feedback_status, reason, removed_at, insight_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Insight niet gevonden.")
+        c.commit()
+    return _map_ai_insight_row(row)
 
 
 @app.get("/metrics/volume_weekly")
