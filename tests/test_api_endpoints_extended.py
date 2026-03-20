@@ -202,6 +202,23 @@ def test_metrics_volume_weekly_maps_rows(monkeypatch):
     assert data[0]["tickets"] == 5
 
 
+def test_issues_invalid_date_field_falls_back_to_created(monkeypatch):
+    cursor = _CursorStub(
+        fetchall_values=[[( "SD-10", "Incident", "Koppelingen", datetime(2026, 1, 19, 0, 0), None, "P1", "Johan", "Open")]]
+    )
+    _patch_conn(monkeypatch, cursor)
+
+    response = client.get(
+        "/issues?date_from=2026-01-01&date_to=2026-02-28&date_field=invalid&limit=5&offset=0"
+    )
+
+    assert response.status_code == 200
+    query, _params = cursor.executed[0]
+    query = _query_text(query)
+    assert "from issues" in query
+    assert "created_at >=" in query
+
+
 def test_metrics_volume_weekly_uses_shared_filter_params(monkeypatch):
     cursor = _CursorStub(fetchall_values=[[]])
     _patch_conn(monkeypatch, cursor)

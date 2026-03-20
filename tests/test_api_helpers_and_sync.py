@@ -179,6 +179,26 @@ def test_allowed_servicedesk_onderwerpen_trims_whitespace(monkeypatch):
     assert params == (list(api.DEFAULT_NON_SERVICEDESK_ONDERWERPEN_LOWER),)
 
 
+def test_get_servicedesk_scope_returns_normalized_values(monkeypatch):
+    cursor = CursorStub(fetchone_values=[([" Johan ", "", "Ashley"], [" Koppelingen ", None, "Koppelingen"])])
+    monkeypatch.setattr(api, "_seed_servicedesk_config_defaults", lambda cur: None)
+
+    team_members, onderwerpen = api._get_servicedesk_scope(cursor)
+
+    assert team_members == ["Johan", "Ashley"]
+    assert onderwerpen == ["Koppelingen"]
+
+
+def test_get_servicedesk_scope_falls_back_to_empty_lists(monkeypatch):
+    cursor = CursorStub(fetchone_values=[(1,)])
+    monkeypatch.setattr(api, "_seed_servicedesk_config_defaults", lambda cur: None)
+
+    team_members, onderwerpen = api._get_servicedesk_scope(cursor)
+
+    assert team_members == []
+    assert onderwerpen == []
+
+
 def test_parse_iso_date_or_raise_success_and_error():
     assert api._parse_iso_date_or_raise("2026-02-25", "start_date").isoformat() == "2026-02-25"
     with pytest.raises(ValueError, match="Ongeldige datum"):
@@ -224,6 +244,32 @@ def test_jira_datetime_parsing_and_formatting():
     assert api.format_jql_datetime(dt) == "2026-02-25 10:30"
 
 
+def test_jira_search_includes_next_page_token(monkeypatch):
+    seen = {}
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"issues": [], "isLast": True}
+
+    def fake_post(url, json, timeout):
+        seen["url"] = url
+        seen["json"] = json
+        seen["timeout"] = timeout
+        return _Resp()
+
+    monkeypatch.setattr(api._jira, "post", fake_post)
+
+    api.jira_search("project = SD", max_results=25, next_page_token="token-123")
+
+    assert seen["json"]["nextPageToken"] == "token-123"
+    assert seen["json"]["maxResults"] == 25
+
+
 def test_normalizers_and_priority_helpers(monkeypatch):
     assert api.norm_request_type({"requestType": {"name": "Incident"}}) == "Incident"
     assert api.norm_request_type({}) is None
@@ -235,6 +281,7 @@ def test_normalizers_and_priority_helpers(monkeypatch):
     assert api.norm_assignee({"accountId": "abc"}) == "abc"
     assert api.norm_assignee(None) is None
     assert api.norm_assignee_avatar_url({"avatarUrls": {"32x32": "u"}}) == "u"
+    assert api.norm_assignee_avatar_url({"avatarUrls": "invalid"}) is None
     assert api.norm_assignee_avatar_url({}) is None
     assert api.norm_organizations(None) == []
     assert api.norm_organizations([{"name": "A"}, {"value": "B"}, {"title": "C"}, "A"]) == ["A", "B", "C"]
@@ -247,6 +294,7 @@ def test_normalizers_and_priority_helpers(monkeypatch):
         {"ongoingCycle": {"breachTime": {"iso8601": "2026-02-26T11:15:00+0100"}}}
     )
     assert dt2.isoformat() == "2026-02-26T10:15:00+00:00"
+    assert api.norm_time_to_resolution_due_at({"ongoingCycle": {"breachTime": {"iso8601": "invalid"}}}) is None
     assert api.norm_first_response_due_at(
         {
             "completedCycles": [
@@ -468,13 +516,13 @@ def test_meta_alerts_and_issue_endpoints(monkeypatch):
             ],
             [("SD-3", now, 2, "Waarschuwing titel", "Nieuwe melding")],
             [],
-            [("SD-4", now, 8, "Overdue titel", "Nieuwe melding")],
-            [("SD-5", now, 45, "TTR waarschuwing titel", "In behandeling")],
-            [("SD-6", now, 30, "TTR kritiek titel", "In behandeling")],
-            [("SD-7", now, 90, "TTR overdue titel", "In behandeling")],
-            [("SD-10", "Incident", "Koppelingen", now, now, "P1", "Johan", "Open")],
-        ]
-    )
+                [("SD-4", now, 8, "Overdue titel", "Nieuwe melding")],
+                [("SD-5", now, 45, "TTR waarschuwing titel", "In behandeling")],
+                [("SD-6", now, 30, "TTR kritiek titel", "In behandeling")],
+                [("SD-7", now, 90, "TTR overdue titel", "In behandeling")],
+                [("SD-10", "Incident", "Koppelingen", now, now, "P1", "Johan", "Open")],
+            ]
+        )
     patch_conn(monkeypatch, cursor)
     monkeypatch.setattr(api, "_jira_existing_issue_keys", lambda keys: set(keys) - {"SD-2"})
 
@@ -599,7 +647,7 @@ def test_alerts_live_forces_servicedesk_scope(monkeypatch):
     response = client.get("/alerts/live?servicedesk_only=false")
 
     assert response.status_code == 200
-    select_params = [params for query, params in cursor.executed if "from issues" in query.lower()]
+    select_params = [params for query, params in cursor.executed if "from issues" in _query_text(query).lower()]
     assert select_params
     assert all(params and all(value is True for value in params if isinstance(value, bool)) for params in select_params)
 
@@ -623,7 +671,7 @@ def test_alerts_warning_and_critical_queries_only_use_nieuwe_melding(monkeypatch
     response = client.get("/alerts/live")
     assert response.status_code == 200
 
-    warning_queries = [q.lower() for q, _params in cursor.executed if "minutes_left" in q.lower()]
+    warning_queries = [_query_text(q).lower() for q, _params in cursor.executed if "minutes_left" in _query_text(q).lower()]
     assert len(warning_queries) >= 4
     assert "lower(coalesce(current_status, '')) = 'nieuwe melding'" in warning_queries[0]
     assert "lower(coalesce(current_status, '')) = 'nieuwe melding'" in warning_queries[1]
@@ -653,9 +701,9 @@ def test_alerts_live_persists_log_events_and_cleans_up(monkeypatch):
     response = client.get("/alerts/live")
     assert response.status_code == 200
 
-    delete_queries = [q for q, _params in cursor.executed if "delete from alert_logs" in q.lower()]
+    delete_queries = [q for q, _params in cursor.executed if "delete from alert_logs" in _query_text(q).lower()]
     assert delete_queries
-    insert_queries = [q for q, _params in cursor.executed if "insert into alert_logs" in q.lower()]
+    insert_queries = [q for q, _params in cursor.executed if "insert into alert_logs" in _query_text(q).lower()]
     assert insert_queries
 
 
@@ -702,6 +750,13 @@ def test_alert_log_cleanup_adds_logbook_event_when_rows_removed(monkeypatch):
     assert len(inserts) == 2
     assert inserts[0][1] == "LOGBOOK_EVENT"
     assert inserts[0][2] == "AUTO_CLEANUP"
+
+
+def test_persist_alert_log_events_returns_empty_for_no_events():
+    cursor = CursorStub()
+
+    assert api._persist_alert_log_events(cursor, []) == []
+    assert cursor.executed == []
 
 
 def test_alerts_live_sends_teams_notification_for_new_events(monkeypatch):

@@ -36,6 +36,52 @@ describe("dashboard hooks", () => {
     vi.restoreAllMocks();
   });
 
+  it("uses slower polling for hidden pages and refreshes when page becomes visible again", async () => {
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+
+    global.fetch = createFetchMock({
+      "/sync/status": [
+        { running: false, auto_sync: { enabled: false } },
+        { running: false, auto_sync: { enabled: true } },
+      ],
+      "/alerts/logs?": [
+        [{ id: 1, issue_key: "SD-1", kind: "P1", detected_at: "2026-01-01T10:00:00Z", status: "OPEN", meta: "" }],
+        [{ id: 2, issue_key: "SD-2", kind: "P1", detected_at: "2026-01-01T11:00:00Z", status: "OPEN", meta: "" }],
+      ],
+      "/vacations/upcoming?limit=3": [[{ id: 2, member_name: "Bob" }], [{ id: 3, member_name: "Carol" }]],
+      "/vacations/today": [[{ id: 4, member_name: "Dana" }], [{ id: 5, member_name: "Erin" }]],
+      "/vacations": [[{ id: 1 }, { id: 2 }], [{ id: 1 }, { id: 2 }, { id: 3 }]],
+    });
+
+    const syncHook = renderHook(() => useSyncStatus());
+    const logHook = renderHook(() => useAlertLogs({ limit: 5, sidePanelMode: "", resetKey: "x" }));
+    const vacationHook = renderHook(() => useVacationsData());
+
+    await waitFor(() => expect(syncHook.result.current.syncStatus?.running).toBe(false));
+    await waitFor(() => expect(logHook.result.current.alertLogEntries).toHaveLength(1));
+    await waitFor(() => expect(vacationHook.result.current.upcomingVacationTotal).toBe(2));
+
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 60000);
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 120000);
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 300000);
+
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    await waitFor(() => expect(syncHook.result.current.syncStatus?.auto_sync?.enabled).toBe(true));
+    await waitFor(() => expect(logHook.result.current.alertLogEntries[0].issue_key).toBe("SD-2"));
+    await waitFor(() => expect(vacationHook.result.current.upcomingVacationTotal).toBe(3));
+  });
+
   it("loads dashboard data, normalizes arrays, and refreshes meta", async () => {
     global.fetch = createFetchMock({
       "/metrics/volume_weekly?": [{ week: "2026-01-05", request_type: "Incident", tickets: 5 }],

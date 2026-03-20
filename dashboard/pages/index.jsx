@@ -271,7 +271,6 @@ export default function Home() {
   const [clearAlertLogsBusy, setClearAlertLogsBusy] = useState(false);
   const [alertKindFilter, setAlertKindFilter] = useState("ALL");
   const [expandedAlertGroups, setExpandedAlertGroups] = useState({});
-  const [faviconPulseOn, setFaviconPulseOn] = useState(false);
   const [ttrAlertsCollapsed, setTtrAlertsCollapsed] = useState(false);
   const drillPanelRef = useRef(null);
   const drillCloseRef = useRef(null);
@@ -1107,28 +1106,7 @@ export default function Home() {
     }
   }, [sidePanelMode, clearHasNewAlertLogEntry]);
 
-  useEffect(() => {
-    const hasP1 = Array.isArray(liveAlerts?.priority1) && liveAlerts.priority1.length > 0;
-    const hasSla =
-      (Array.isArray(liveAlerts?.first_response_due_warning) && liveAlerts.first_response_due_warning.length > 0) ||
-      (Array.isArray(liveAlerts?.first_response_due_critical) && liveAlerts.first_response_due_critical.length > 0) ||
-      (Array.isArray(liveAlerts?.first_response_overdue) && liveAlerts.first_response_overdue.length > 0);
-    const hasTtr =
-      (Array.isArray(liveAlerts?.time_to_resolution_warning) && liveAlerts.time_to_resolution_warning.length > 0) ||
-      (Array.isArray(liveAlerts?.time_to_resolution_critical) && liveAlerts.time_to_resolution_critical.length > 0) ||
-      (Array.isArray(liveAlerts?.time_to_resolution_overdue) && liveAlerts.time_to_resolution_overdue.length > 0);
-    const shouldShowTtrSignal = hasTtr && !ttrAlertsCollapsed;
-    if (!(hasP1 || hasSla || shouldShowTtrSignal)) {
-      setFaviconPulseOn(false);
-      return;
-    }
-    const t = window.setInterval(() => setFaviconPulseOn((v) => !v), 700);
-    return () => {
-      window.clearInterval(t);
-    };
-  }, [liveAlerts, ttrAlertsCollapsed]);
-
-  const faviconHref = useMemo(() => {
+  const faviconSignal = useMemo(() => {
     const hasP1 = Array.isArray(liveAlerts?.priority1) && liveAlerts.priority1.length > 0;
     const hasSlaWarning = Array.isArray(liveAlerts?.first_response_due_warning) && liveAlerts.first_response_due_warning.length > 0;
     const hasSlaCritical = Array.isArray(liveAlerts?.first_response_due_critical) && liveAlerts.first_response_due_critical.length > 0;
@@ -1139,7 +1117,13 @@ export default function Home() {
     const hasSla = hasSlaWarning || hasSlaCritical || hasOverdue;
     const hasTtr = hasTtrWarning || hasTtrCritical || hasTtrOverdue;
     const showTtrSignal = hasTtr && !ttrAlertsCollapsed;
-    if (!hasP1 && !hasSla && !showTtrSignal) return "/favicon.ico";
+    if (!hasP1 && !hasSla && !showTtrSignal) {
+      return {
+        href: "/favicon.ico",
+        pulseHref: "/favicon.ico",
+        shouldPulse: false,
+      };
+    }
     const color =
       hasP1 || hasSlaCritical || hasOverdue
         ? "#dc2626"
@@ -1147,11 +1131,38 @@ export default function Home() {
           ? "#1e3a8a"
           : showTtrSignal && hasTtrCritical
             ? "#2563eb"
-            : showTtrSignal && hasTtrWarning
+          : showTtrSignal && hasTtrWarning
               ? "#60a5fa"
               : "#f59e0b";
-    return alertFaviconDataUri(color, faviconPulseOn);
-  }, [liveAlerts, faviconPulseOn, ttrAlertsCollapsed]);
+    return {
+      href: alertFaviconDataUri(color, false),
+      pulseHref: alertFaviconDataUri(color, true),
+      shouldPulse: true,
+    };
+  }, [liveAlerts, ttrAlertsCollapsed]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+    let faviconLink = document.querySelector("link[rel='icon']");
+    if (!faviconLink) {
+      faviconLink = document.createElement("link");
+      faviconLink.setAttribute("rel", "icon");
+      document.head.appendChild(faviconLink);
+    }
+    faviconLink.setAttribute("href", faviconSignal.href);
+    if (!faviconSignal.shouldPulse) return undefined;
+
+    let pulsed = false;
+    const t = window.setInterval(() => {
+      pulsed = !pulsed;
+      faviconLink.setAttribute("href", pulsed ? faviconSignal.pulseHref : faviconSignal.href);
+    }, 1400);
+
+    return () => {
+      window.clearInterval(t);
+      faviconLink.setAttribute("href", faviconSignal.href);
+    };
+  }, [faviconSignal.href, faviconSignal.pulseHref, faviconSignal.shouldPulse]);
 
   useEffect(() => {
     if (backendAutoSyncEnabled) return undefined;
@@ -3642,7 +3653,7 @@ export default function Home() {
     <div style={pageStyle}>
       <Head>
         <title>Dashboard Servicedesk Planningsagenda</title>
-        <link rel="icon" href={faviconHref} />
+        <link rel="icon" href={faviconSignal.href} />
       </Head>
       <Toast message={syncMessage} kind={syncMessageKind} onClose={() => setSyncMessage("")} />
       <LiveAlertStack
