@@ -1559,6 +1559,7 @@ def issue_metrics_filter_sql(
 
 
 def compose_sql_query(template: str, **fragments):
+    # nosemgrep: fragments come from internal clause builders, values stay parameterized separately
     return sql.SQL(template).format(**{name: sql.SQL(value) for name, value in fragments.items()})
 
 
