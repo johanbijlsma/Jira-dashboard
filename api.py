@@ -709,7 +709,10 @@ def ensure_schema():  # pragma: no cover
         cur.execute("alter table dashboard_config add column if not exists servicedesk_team_members text[] not null default '{}';")
         cur.execute("alter table dashboard_config add column if not exists servicedesk_onderwerpen text[] not null default '{}';")
         cur.execute(
-            f"alter table dashboard_config add column if not exists ai_insight_threshold_pct integer not null default {DEFAULT_AI_INSIGHT_THRESHOLD_PCT};"
+            sql.SQL(
+                "alter table dashboard_config add column if not exists "
+                "ai_insight_threshold_pct integer not null default {};"
+            ).format(sql.Literal(DEFAULT_AI_INSIGHT_THRESHOLD_PCT))
         )
         cur.execute("alter table dashboard_config add column if not exists servicedesk_onderwerpen_customized boolean not null default false;")
         cur.execute("alter table dashboard_config add column if not exists updated_at timestamptz not null default now();")
@@ -730,7 +733,9 @@ def ensure_schema():  # pragma: no cover
         cur.execute("alter table ai_insights_log add column if not exists feedback_at timestamptz;")
         cur.execute("alter table ai_insights_log add column if not exists removed_at timestamptz;")
         cur.execute(
-            f"update ai_insights_log set expires_at = coalesce(expires_at, detected_at + interval '{AI_INSIGHT_TTL_HOURS} hours');"
+            "update ai_insights_log "
+            "set expires_at = coalesce(expires_at, detected_at + (%s * interval '1 hour'));",
+            (AI_INSIGHT_TTL_HOURS,),
         )
         cur.execute("create unique index if not exists ai_insights_log_insight_key_idx on ai_insights_log(insight_key);")
         cur.execute(
