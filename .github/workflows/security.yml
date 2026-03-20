@@ -99,7 +99,7 @@ jobs:
               file_ranges = {}
               current_file = None
               for line in diff_text.splitlines():
-                  if line.startswith("+++ b/"):
+                  if line.startswith("+++ b/"):  # nosemgrep: path comes from git-generated diff metadata
                       current_file = line[6:]
                       file_ranges.setdefault(current_file, [])
                       continue
