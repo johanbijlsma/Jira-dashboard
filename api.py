@@ -220,43 +220,32 @@ def _weekly_insights_payload(servicedesk_only: bool = True) -> Dict[str, Any]:
     week_start, week_end = _previous_full_week_range()
     date_from = week_start.isoformat()
     date_to = week_end.isoformat()
+    servicedesk_scope_sql = servicedesk_filter_clause()
+    servicedesk_scope_sql_i = servicedesk_filter_clause("i")
 
     with conn() as c, c.cursor() as cur:
         cur.execute(
+            compose_sql_query(
             """
             with incoming as (
               select count(*) as count
               from issues
               where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
-                and (
-                  not %s
-                  or (
-                    assignee is not null
-                    and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-                    and onderwerp_logging is not null
-                    and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-                  )
-                )
+                and {servicedesk_scope_sql}
             ),
             closed as (
               select count(*) as count
               from issues
               where resolved_at is not null
                 and resolved_at >= %s::timestamptz and resolved_at < (%s::timestamptz + interval '1 day')
-                and (
-                  not %s
-                  or (
-                    assignee is not null
-                    and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-                    and onderwerp_logging is not null
-                    and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-                  )
-                )
+                and {servicedesk_scope_sql}
             )
             select
               coalesce((select count from incoming), 0) as incoming_count,
               coalesce((select count from closed), 0) as closed_count;
             """,
+            servicedesk_scope_sql=servicedesk_scope_sql,
+            ),
             (date_from, date_to, servicedesk_only, date_from, date_to, servicedesk_only),
         )
         totals_row = cur.fetchone() or (0, 0)
@@ -264,122 +253,98 @@ def _weekly_insights_payload(servicedesk_only: bool = True) -> Dict[str, Any]:
         closed_count = int(totals_row[1] or 0)
 
         cur.execute(
+            compose_sql_query(
             """
             select request_type, count(*) as tickets
             from issues
             where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
               and request_type is not null and request_type <> ''
-              and (
-                not %s
-                or (
-                  assignee is not null
-                  and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-                  and onderwerp_logging is not null
-                  and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-                )
-              )
+              and {servicedesk_scope_sql}
             group by 1
             order by 2 desc, 1
             limit 5;
             """,
+            servicedesk_scope_sql=servicedesk_scope_sql,
+            ),
             (date_from, date_to, servicedesk_only),
         )
         request_type_rows = cur.fetchall()
 
         cur.execute(
+            compose_sql_query(
             """
             select onderwerp_logging as onderwerp, count(*) as tickets
             from issues
             where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
               and onderwerp_logging is not null and onderwerp_logging <> ''
-              and (
-                not %s
-                or (
-                  assignee is not null
-                  and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-                  and onderwerp_logging is not null
-                  and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-                )
-              )
+              and {servicedesk_scope_sql}
             group by 1
             order by 2 desc, 1
             limit 5;
             """,
+            servicedesk_scope_sql=servicedesk_scope_sql,
+            ),
             (date_from, date_to, servicedesk_only),
         )
         onderwerp_rows = cur.fetchall()
 
         cur.execute(
+            compose_sql_query(
             """
             select priority, count(*) as tickets
             from issues
             where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
               and priority is not null and priority <> ''
-              and (
-                not %s
-                or (
-                  assignee is not null
-                  and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-                  and onderwerp_logging is not null
-                  and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-                )
-              )
+              and {servicedesk_scope_sql}
             group by 1
             order by 2 desc, 1
             limit 5;
             """,
+            servicedesk_scope_sql=servicedesk_scope_sql,
+            ),
             (date_from, date_to, servicedesk_only),
         )
         priority_rows = cur.fetchall()
 
         cur.execute(
+            compose_sql_query(
             """
             select assignee, count(*) as tickets
             from issues
             where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
               and assignee is not null and assignee <> ''
-              and (
-                not %s
-                or (
-                  assignee is not null
-                  and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-                  and onderwerp_logging is not null
-                  and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-                )
-              )
+              and {servicedesk_scope_sql}
             group by 1
             order by 2 desc, 1
             limit 5;
             """,
+            servicedesk_scope_sql=servicedesk_scope_sql,
+            ),
             (date_from, date_to, servicedesk_only),
         )
         assignee_rows = cur.fetchall()
 
         cur.execute(
+            compose_sql_query(
             """
             select org.org_name as organization, count(*) as tickets
             from issues i
             cross join lateral unnest(i.organizations) as org(org_name)
             where i.created_at >= %s::timestamptz and i.created_at < (%s::timestamptz + interval '1 day')
               and org.org_name is not null and org.org_name <> ''
-              and (
-                not %s
-                or (
-                  i.assignee is not null
-                  and i.assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-                  and i.onderwerp_logging is not null
-                  and i.onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-                )
-              )
+              and {servicedesk_scope_sql}
             group by 1
             order by 2 desc, 1
             limit 5;
             """,
+            servicedesk_scope_sql=servicedesk_scope_sql_i,
+            ),
             (date_from, date_to, servicedesk_only),
         )
         organization_rows = cur.fetchall()
 
         cur.execute(
+            compose_sql_query(
             """
             select
               avg(extract(epoch from (updated_at - created_at))/3600.0) as avg_hours,
@@ -389,21 +354,16 @@ def _weekly_insights_payload(servicedesk_only: bool = True) -> Dict[str, Any]:
             where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
               and updated_at is not null
               and updated_at >= created_at
-              and (
-                not %s
-                or (
-                  assignee is not null
-                  and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-                  and onderwerp_logging is not null
-                  and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-                )
-              );
+              and {servicedesk_scope_sql};
             """,
+            servicedesk_scope_sql=servicedesk_scope_sql,
+            ),
             (date_from, date_to, servicedesk_only),
         )
         first_response_row = cur.fetchone() or (None, None, 0)
 
         cur.execute(
+            compose_sql_query(
             """
             select
               avg(extract(epoch from (resolved_at - created_at))/3600.0) as avg_hours,
@@ -413,16 +373,10 @@ def _weekly_insights_payload(servicedesk_only: bool = True) -> Dict[str, Any]:
             where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
               and resolved_at is not null
               and resolved_at >= created_at
-              and (
-                not %s
-                or (
-                  assignee is not null
-                  and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-                  and onderwerp_logging is not null
-                  and onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
-                )
-              );
+              and {servicedesk_scope_sql};
             """,
+            servicedesk_scope_sql=servicedesk_scope_sql,
+            ),
             (date_from, date_to, servicedesk_only),
         )
         resolution_row = cur.fetchone() or (None, None, 0)
@@ -1504,9 +1458,7 @@ def servicedesk_filter_clause(alias: str = ""):
       (
         not %s
         or (
-          {prefix}assignee is not null
-          and {prefix}assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
-          and {prefix}onderwerp_logging is not null
+          {prefix}onderwerp_logging is not null
           and {prefix}onderwerp_logging = any(coalesce((select servicedesk_onderwerpen from dashboard_config where id=1), array[]::text[]))
         )
       )

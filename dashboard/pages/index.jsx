@@ -35,6 +35,7 @@ import {
   fmtDateWithWeekday,
   hasDataPoints,
   isTextEntryTarget,
+  isCurrentPartialWeek,
   isoDate,
   num,
   pct,
@@ -88,6 +89,14 @@ const AUTO_SYNC_RETRY_THROTTLE_MS = Math.max(AUTO_SYNC_INTERVAL_MS, 60 * 1000);
 const AUTO_RESET_IDLE_MS = Math.max(
   0,
   (Number(process.env.NEXT_PUBLIC_AUTO_RESET_IDLE_SECONDS) || 120) * 1000
+);
+const CHART_RENDER_TIMEOUT_MS = Math.max(
+  600,
+  (Number(process.env.NEXT_PUBLIC_CHART_RENDER_TIMEOUT_MS) || 900)
+);
+const CHART_RENDER_OVERLAY_MAX_MS = Math.max(
+  CHART_RENDER_TIMEOUT_MS + 1000,
+  (Number(process.env.NEXT_PUBLIC_CHART_RENDER_OVERLAY_MAX_MS) || 7000)
 );
 
 function alertFaviconDataUri(color, ring = false) {
@@ -213,6 +222,19 @@ export default function Home() {
     d.setMonth(d.getMonth() - 1);
     return d;
   }, []);
+  const getStandardDateRange = useCallback(() => {
+    const end = new Date();
+    const start = new Date(end);
+    start.setMonth(start.getMonth() - 1);
+    const fromIso = isoDate(start);
+    const toIso = isoDate(end);
+    return {
+      fromIso,
+      toIso,
+      fromLabel: fmtDate(fromIso),
+      toLabel: fmtDate(toIso),
+    };
+  }, []);
 
   const [dateFrom, setDateFrom] = useState(isoDate(defaultFrom));
   const [dateTo, setDateTo] = useState(isoDate(today));
@@ -314,16 +336,19 @@ export default function Home() {
   const DRILL_LIMIT = 100;
   const ALERT_LOG_LIMIT = 300;
   const sidePanelOpen = sidePanelMode === "alerts" || sidePanelMode === "insights" || !!selectedWeek;
-  const filtersAreDefault = useMemo(
-    () =>
+  const filtersAreDefault = useMemo(() => {
+    const { fromIso, toIso } = getStandardDateRange();
+    return (
+      dateFrom === fromIso &&
+      dateTo === toIso &&
       !requestType &&
       !onderwerp &&
       !priority &&
       !assignee &&
       !organization &&
-      servicedeskOnly === DEFAULT_SERVICEDESK_ONLY,
-    [requestType, onderwerp, priority, assignee, organization, servicedeskOnly]
-  );
+      servicedeskOnly === DEFAULT_SERVICEDESK_ONLY
+    );
+  }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee, organization, servicedeskOnly, getStandardDateRange]);
   const { syncStatus, refreshSyncStatus } = useSyncStatus();
   const syncBusy = syncLoading || !!syncStatus?.running;
   const backendAutoSyncEnabled = !!syncStatus?.auto_sync?.enabled;
@@ -562,7 +587,11 @@ export default function Home() {
   }, []);
 
   const resetFilters = useCallback((showToast = true) => {
-    applyDateRange({ months: 1 });
+    const { fromIso, toIso, fromLabel, toLabel } = getStandardDateRange();
+    setDateFrom(fromIso);
+    setDateTo(toIso);
+    setDateFromUi(fromLabel);
+    setDateToUi(toLabel);
     setRequestType("");
     setOnderwerp("");
     setPriority("");
@@ -570,7 +599,7 @@ export default function Home() {
     setOrganization("");
     setServicedeskOnly(DEFAULT_SERVICEDESK_ONLY);
     if (showToast) flashToast("Filters en datumrange gereset (laatste maand)");
-  }, [applyDateRange, flashToast]);
+  }, [flashToast, getStandardDateRange]);
 
   const toggleTvMode = useCallback(() => {
     setIsTvMode((prev) => {
@@ -1504,8 +1533,64 @@ export default function Home() {
     return trimLeadingPartialWeek(fullWeeks, dateFrom);
   }, [dateFrom, dateTo]);
   const weeksOnderwerp = weeks;
-  const releaseCadencePlugin = useMemo(() => ({ weeks }), [weeks]);
-  const releaseCadenceOnderwerpPlugin = useMemo(() => ({ weeks: weeksOnderwerp }), [weeksOnderwerp]);
+  const trailingPartialWeekIndex = useMemo(() => {
+    if (!weeks.length || !dateTo) return -1;
+    return isCurrentPartialWeek(dateTo) ? weeks.length - 1 : -1;
+  }, [weeks, dateTo]);
+  const weeklyLabels = useCallback(
+    (sourceWeeks) =>
+      sourceWeeks.map((w, idx) => {
+        const label = fmtDate(w);
+        return idx === trailingPartialWeekIndex ? `${label} *` : label;
+      }),
+    [trailingPartialWeekIndex]
+  );
+  const weeklyScopeHint = useMemo(() => {
+    if (trailingPartialWeekIndex < 0 || !weeks[trailingPartialWeekIndex]) return "";
+    return `* Laatste week is nog onvolledig (${fmtDate(weeks[trailingPartialWeekIndex])}) en kan lager uitvallen.`;
+  }, [trailingPartialWeekIndex, weeks]);
+  const weeklyPartialCardKeys = useMemo(
+    () => new Set(["volume", "onderwerp", "inflowVsClosed", "incidentResolution", "firstResponseAll", "organizationWeekly"]),
+    []
+  );
+  const [slowChartCards, setSlowChartCards] = useState({});
+  const slowChartTimersRef = useRef(new Map());
+  const clearSlowChartTimer = useCallback((cardKey) => {
+    const timers = slowChartTimersRef.current.get(cardKey);
+    if (timers?.showTimer) {
+      window.clearTimeout(timers.showTimer);
+    }
+    if (timers?.hideTimer) {
+      window.clearTimeout(timers.hideTimer);
+    }
+    if (timers) {
+      slowChartTimersRef.current.delete(cardKey);
+    }
+  }, []);
+  const armSlowChart = useCallback((cardKey) => {
+    clearSlowChartTimer(cardKey);
+    setSlowChartCards((prev) => (prev?.[cardKey] ? { ...prev, [cardKey]: false } : prev));
+    const showTimer = window.setTimeout(() => {
+      setSlowChartCards((prev) => ({ ...prev, [cardKey]: true }));
+    }, CHART_RENDER_TIMEOUT_MS);
+    const hideTimer = window.setTimeout(() => {
+      setSlowChartCards((prev) => (prev?.[cardKey] ? { ...prev, [cardKey]: false } : prev));
+      slowChartTimersRef.current.delete(cardKey);
+    }, CHART_RENDER_OVERLAY_MAX_MS);
+    slowChartTimersRef.current.set(cardKey, { showTimer, hideTimer });
+  }, [clearSlowChartTimer]);
+  const markChartRendered = useCallback((cardKey) => {
+    clearSlowChartTimer(cardKey);
+    setSlowChartCards((prev) => (prev?.[cardKey] ? { ...prev, [cardKey]: false } : prev));
+  }, [clearSlowChartTimer]);
+  const releaseCadencePlugin = useMemo(
+    () => ({ weeks, partialWeekIndex: trailingPartialWeekIndex }),
+    [weeks, trailingPartialWeekIndex]
+  );
+  const releaseCadenceOnderwerpPlugin = useMemo(
+    () => ({ weeks: weeksOnderwerp, partialWeekIndex: trailingPartialWeekIndex }),
+    [weeksOnderwerp, trailingPartialWeekIndex]
+  );
   const fullWeekInfo = useMemo(() => {
     const currentWeek = weekStartIsoFromDate();
     const indices = weeks
@@ -1572,7 +1657,7 @@ export default function Home() {
 
   const lineData = useMemo(
     () => {
-      const labels = weeks.map((w) => fmtDate(w));
+      const labels = weeklyLabels(weeks);
       const datasets = series.map((s) => ({
         label: s.label,
         data: s.data,
@@ -1627,7 +1712,7 @@ export default function Home() {
 
       return { labels, datasets };
     },
-    [weeks, series, requestType, typeColor]
+    [weeks, weeklyLabels, series, requestType, typeColor]
   );
 
   const onderwerpLineData = useMemo(
@@ -1663,12 +1748,9 @@ export default function Home() {
         }
       }
 
-      return {
-        labels: weeksOnderwerp.map((w) => fmtDate(w)),
-        datasets,
-      };
+      return { labels: weeklyLabels(weeksOnderwerp), datasets };
     },
-    [weeksOnderwerp, onderwerpSeries, onderwerp]
+    [weeksOnderwerp, weeklyLabels, onderwerpSeries, onderwerp]
   );
 
   const priorityColors = useMemo(
@@ -1747,7 +1829,7 @@ export default function Home() {
 
   const inflowVsClosedLineData = useMemo(() => {
     const rows = Array.isArray(inflowVsClosedWeekly) ? inflowVsClosedWeekly : [];
-    const labels = weeks.map((w) => fmtDate(w));
+    const labels = weeklyLabels(weeks);
     const incomingData = weeks.map((w) => {
       const row = rows.find((x) => String(x?.week || "").slice(0, 10) === w);
       return row?.incoming_count != null ? Number(row.incoming_count) : 0;
@@ -1779,11 +1861,11 @@ export default function Home() {
         },
       ],
     };
-  }, [inflowVsClosedWeekly, weeks]);
+  }, [inflowVsClosedWeekly, weeks, weeklyLabels]);
 
   const incidentResolutionLineData = useMemo(() => {
     const rows = Array.isArray(incidentResolutionWeekly) ? incidentResolutionWeekly : [];
-    const labels = weeks.map((w) => fmtDate(w));
+    const labels = weeklyLabels(weeks);
     const allTypes = (Array.isArray(meta.request_types) ? meta.request_types : []).filter(Boolean);
     const typeSetFromRows = Array.from(
       new Set(rows.map((x) => String(x?.request_type || "").trim()).filter(Boolean))
@@ -1836,11 +1918,11 @@ export default function Home() {
       labels,
       datasets,
     };
-  }, [incidentResolutionWeekly, weeks, meta.request_types, typeColor]);
+  }, [incidentResolutionWeekly, weeks, weeklyLabels, meta.request_types, typeColor]);
 
   const firstResponseLineData = useMemo(() => {
     const rows = Array.isArray(firstResponseWeekly) ? firstResponseWeekly : [];
-    const labels = weeks.map((w) => fmtDate(w));
+    const labels = weeklyLabels(weeks);
     const avgData = weeks.map((w) => {
       const row = rows.find((x) => String(x?.week || "").slice(0, 10) === w);
       return row?.avg_hours != null ? Number(row.avg_hours) : null;
@@ -1874,11 +1956,11 @@ export default function Home() {
         },
       ],
     };
-  }, [firstResponseWeekly, weeks]);
+  }, [firstResponseWeekly, weeks, weeklyLabels]);
 
   const organizationBarData = useMemo(() => {
     const rows = Array.isArray(organizationVolume) ? organizationVolume : [];
-    const labels = weeks.map((w) => fmtDate(w));
+    const labels = weeklyLabels(weeks);
     const totalsByOrganization = new Map();
     rows.forEach((row) => {
       const org = String(row?.organization || "");
@@ -1904,7 +1986,37 @@ export default function Home() {
         borderColor: uniqueChartColor(index, topOrganizations.length, 68, 35),
       })),
     };
-  }, [organizationVolume, weeks]);
+  }, [organizationVolume, weeks, weeklyLabels]);
+
+  useEffect(() => {
+    const cards = [
+      ["volume", hasDataPoints(lineData)],
+      ["onderwerp", hasDataPoints(onderwerpLineData)],
+      ["inflowVsClosed", hasDataPoints(inflowVsClosedLineData)],
+      ["incidentResolution", hasDataPoints(incidentResolutionLineData)],
+      ["firstResponseAll", hasDataPoints(firstResponseLineData)],
+      ["organizationWeekly", hasDataPoints(organizationBarData)],
+    ];
+
+    cards.forEach(([cardKey, active]) => {
+      if (active) armSlowChart(cardKey);
+      else markChartRendered(cardKey);
+    });
+  }, [
+    armSlowChart,
+    lineData,
+    onderwerpLineData,
+    inflowVsClosedLineData,
+    incidentResolutionLineData,
+    firstResponseLineData,
+    organizationBarData,
+    markChartRendered,
+  ]);
+
+  useEffect(() => () => {
+    slowChartTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    slowChartTimersRef.current.clear();
+  }, []);
 
   const kpiStats = useMemo(() => {
     const indices = fullWeekInfo.indices;
@@ -2300,6 +2412,11 @@ export default function Home() {
     color: "var(--text-main)",
     width: "100%",
   };
+  const compactInputStyle = {
+    ...inputBaseStyle,
+    width: 120,
+    maxWidth: "100%",
+  };
   const buttonBaseStyle = {
     height: 36,
     padding: "0 12px",
@@ -2350,11 +2467,63 @@ export default function Home() {
     minHeight: 0,
     position: "relative",
   };
+  const renderSlowChartOverlay = useCallback(
+    (cardKey) => {
+      if (!slowChartCards?.[cardKey]) return null;
+      const overlayStyle = {
+        position: "absolute",
+        inset: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        pointerEvents: "none",
+        background: "color-mix(in srgb, var(--surface) 76%, transparent)",
+        zIndex: 2,
+      };
+      const badgeStyle = {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "10px 14px",
+        borderRadius: 999,
+        border: "1px solid color-mix(in srgb, var(--accent) 28%, var(--border))",
+        background: "color-mix(in srgb, var(--surface) 92%, transparent)",
+        boxShadow: "0 8px 24px color-mix(in srgb, #0f172a 12%, transparent)",
+        color: "var(--text-main)",
+        fontSize: 12,
+        fontWeight: 700,
+      };
+      const spinnerStyle = {
+        width: 16,
+        height: 16,
+        borderRadius: 999,
+        border: "2px solid color-mix(in srgb, var(--accent) 20%, transparent)",
+        borderTopColor: "var(--accent)",
+        animation: "spin 800ms linear infinite",
+        flexShrink: 0,
+      };
+      return (
+        <div style={overlayStyle}>
+          <div style={badgeStyle}>
+            <span style={spinnerStyle} aria-hidden="true" />
+            <span>Grafiek wordt geladen…</span>
+          </div>
+        </div>
+      );
+    },
+    [slowChartCards]
+  );
+  const slowChartAnimation = useCallback((cardKey) => (slowChartCards?.[cardKey] ? false : undefined), [slowChartCards]);
   const interactionDisabledStyle = isLayoutEditing ? { pointerEvents: "none", userSelect: "none" } : null;
+  const pagePaddingX = isTvMode ? "clamp(8px, 1dvh, 12px)" : "clamp(8px, 1.2dvh, 14px)";
+  const pagePaddingTop = pagePaddingX;
+  const pagePaddingBottom = "clamp(20px, 3dvh, 40px)";
   const pageStyle = {
     fontFamily: "system-ui",
-    padding: isTvMode ? "clamp(8px, 1dvh, 12px)" : "clamp(8px, 1.2dvh, 14px)",
-    paddingBottom: isTvMode ? "clamp(20px, 3dvh, 40px)" : "clamp(20px, 3dvh, 40px)",
+    paddingTop: pagePaddingTop,
+    paddingRight: pagePaddingX,
+    paddingBottom: pagePaddingBottom,
+    paddingLeft: pagePaddingX,
     maxWidth: "100%",
     margin: "0 auto",
     background: "var(--page-bg)",
@@ -2488,7 +2657,7 @@ export default function Home() {
     verticalAlign: "middle",
   };
   const chartTitleStyle = {
-    margin: "0 0 8px",
+    margin: 0,
     fontSize: 18,
     lineHeight: 1.2,
   };
@@ -2760,7 +2929,10 @@ export default function Home() {
   const modalBodyStyle = {
     flex: 1,
     minHeight: 0,
-    padding: 14,
+    paddingTop: 14,
+    paddingRight: 14,
+    paddingBottom: 14,
+    paddingLeft: 14,
     overflow: "auto",
   };
   const modalCloseStyle = {
@@ -3150,9 +3322,6 @@ export default function Home() {
     if (cardKey === "topOnderwerpen") {
       return (
         <div style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
-          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4 }}>
-            <span style={fixedMetricBadgeStyle}>Periode: laatste week</span>
-          </div>
           <p style={topListHintStyle}>Tickets en trend per laatste volledige week ({fullWeekInfo.periodLabel})</p>
           <div style={topListTableWrapStyle}>
             {topOnderwerpRows.length ? (
@@ -3218,6 +3387,7 @@ export default function Home() {
               options={{
                 responsive: true,
                 maintainAspectRatio: false,
+                animation: slowChartAnimation("volume"),
                 onClick: (_evt, elements) => {
                   const el = elements?.[0];
                   if (!el) return;
@@ -3232,6 +3402,7 @@ export default function Home() {
                   legend: { display: false },
                   tooltip: { mode: "nearest", intersect: false },
                   releaseCadence: releaseCadencePlugin,
+                  renderWatch: { onReady: () => markChartRendered("volume") },
                   simpleDataLabels: { mode: "line", maxLabels: expanded ? 24 : 12 },
                 },
                 interaction: { mode: "nearest", intersect: false },
@@ -3240,6 +3411,7 @@ export default function Home() {
           ) : (
             <EmptyChartState filterLabel="Request type" style={emptyStyle} />
           )}
+          {renderSlowChartOverlay("volume")}
         </div>
       );
     }
@@ -3257,6 +3429,7 @@ export default function Home() {
                 options={{
                   responsive: true,
                   maintainAspectRatio: false,
+                  animation: slowChartAnimation("onderwerp"),
                   onClick: (_evt, elements) => {
                     const el = elements?.[0];
                     if (!el) return;
@@ -3271,6 +3444,7 @@ export default function Home() {
                     legend: { display: false },
                     tooltip: { mode: "nearest", intersect: false },
                     releaseCadence: releaseCadenceOnderwerpPlugin,
+                    renderWatch: { onReady: () => markChartRendered("onderwerp") },
                     simpleDataLabels: { mode: "line", maxLabels: expanded ? 24 : 12 },
                   },
                   interaction: { mode: "nearest", intersect: false },
@@ -3279,6 +3453,7 @@ export default function Home() {
             ) : (
               <EmptyChartState filterLabel="Onderwerp" style={emptyStyle} />
             )}
+            {renderSlowChartOverlay("onderwerp")}
           </div>
         </div>
       );
@@ -3405,13 +3580,14 @@ export default function Home() {
     if (cardKey === "inflowVsClosed") {
       return (
         <div style={bodyStyle}>
-          {hasDataPoints(inflowVsClosedLineData) ? (
-            <Line
-              data={inflowVsClosedLineData}
-              options={{
-                responsive: true,
-                maintainAspectRatio: false,
-                onClick: (_evt, elements) => {
+            {hasDataPoints(inflowVsClosedLineData) ? (
+              <Line
+                data={inflowVsClosedLineData}
+                options={{
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  animation: slowChartAnimation("inflowVsClosed"),
+                  onClick: (_evt, elements) => {
                   const el = elements?.[0];
                   if (!el) return;
                   const weekStart = weeks[el.index];
@@ -3428,36 +3604,38 @@ export default function Home() {
                     }
                   );
                 },
-                plugins: {
-                  legend: { display: true, position: "top" },
-                  tooltip: {
-                    mode: "nearest",
-                    intersect: false,
-                    callbacks: {
-                      label: (ctx) => `${ctx.dataset.label}: ${num(ctx.parsed.y)} tickets`,
+                  plugins: {
+                    legend: { display: true, position: "top" },
+                    renderWatch: { onReady: () => markChartRendered("inflowVsClosed") },
+                    tooltip: {
+                      mode: "nearest",
+                      intersect: false,
+                      callbacks: {
+                        label: (ctx) => `${ctx.dataset.label}: ${num(ctx.parsed.y)} tickets`,
+                      },
+                    },
+                    releaseCadence: releaseCadencePlugin,
+                    simpleDataLabels: false,
+                  },
+                  interaction: { mode: "nearest", intersect: false },
+                  scales: {
+                    x: {
+                      ticks: { color: "var(--text-muted)" },
+                    },
+                    y: {
+                      title: { display: true, text: "Aantal tickets", color: "var(--text-muted)" },
+                      ticks: {
+                        color: "var(--text-muted)",
+                        callback: (value) => num(value),
+                      },
                     },
                   },
-                  releaseCadence: releaseCadencePlugin,
-                  simpleDataLabels: false,
-                },
-                interaction: { mode: "nearest", intersect: false },
-                scales: {
-                  x: {
-                    ticks: { color: "var(--text-muted)" },
-                  },
-                  y: {
-                    title: { display: true, text: "Aantal tickets", color: "var(--text-muted)" },
-                    ticks: {
-                      color: "var(--text-muted)",
-                      callback: (value) => num(value),
-                    },
-                  },
-                },
-              }}
-            />
-          ) : (
-            <EmptyChartState filterLabel="Binnengekomen/Afgesloten" style={emptyStyle} />
-          )}
+                }}
+              />
+            ) : (
+              <EmptyChartState filterLabel="Binnengekomen/Afgesloten" style={emptyStyle} />
+            )}
+          {renderSlowChartOverlay("inflowVsClosed")}
         </div>
       );
     }
@@ -3465,39 +3643,42 @@ export default function Home() {
     if (cardKey === "incidentResolution") {
       return (
         <div style={bodyStyle}>
-          {hasDataPoints(incidentResolutionLineData) ? (
-            <Line
-              data={incidentResolutionLineData}
-              options={{
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                  legend: { display: true, position: "top" },
-                  tooltip: {
-                    mode: "nearest",
-                    intersect: false,
-                    callbacks: {
-                      label: (ctx) => `${ctx.dataset.label}: ${formatDurationHoursForTooltip(ctx.parsed.y)}`,
+            {hasDataPoints(incidentResolutionLineData) ? (
+              <Line
+                data={incidentResolutionLineData}
+                options={{
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  animation: slowChartAnimation("incidentResolution"),
+                  plugins: {
+                    legend: { display: true, position: "top" },
+                    renderWatch: { onReady: () => markChartRendered("incidentResolution") },
+                    tooltip: {
+                      mode: "nearest",
+                      intersect: false,
+                      callbacks: {
+                        label: (ctx) => `${ctx.dataset.label}: ${formatDurationHoursForTooltip(ctx.parsed.y)}`,
+                      },
+                    },
+                    releaseCadence: releaseCadencePlugin,
+                    simpleDataLabels: false,
+                  },
+                  interaction: { mode: "nearest", intersect: false },
+                  scales: {
+                    x: {
+                      ticks: { color: "var(--text-muted)" },
+                    },
+                    y: {
+                      title: { display: true, text: "Uren", color: "var(--text-muted)" },
+                      ticks: { color: "var(--text-muted)" },
                     },
                   },
-                  releaseCadence: releaseCadencePlugin,
-                  simpleDataLabels: false,
-                },
-                interaction: { mode: "nearest", intersect: false },
-                scales: {
-                  x: {
-                    ticks: { color: "var(--text-muted)" },
-                  },
-                  y: {
-                    title: { display: true, text: "Uren", color: "var(--text-muted)" },
-                    ticks: { color: "var(--text-muted)" },
-                  },
-                },
-              }}
-            />
-          ) : (
-            <EmptyChartState filterLabel="Time to Resolution" style={emptyStyle} />
-          )}
+                }}
+              />
+            ) : (
+              <EmptyChartState filterLabel="Time to Resolution" style={emptyStyle} />
+            )}
+          {renderSlowChartOverlay("incidentResolution")}
         </div>
       );
     }
@@ -3505,33 +3686,36 @@ export default function Home() {
     if (cardKey === "firstResponseAll") {
       return (
         <div style={bodyStyle}>
-          {hasDataPoints(firstResponseLineData) ? (
-            <Line
-              data={firstResponseLineData}
-              options={{
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                  legend: { display: true, position: "top" },
-                  tooltip: { mode: "nearest", intersect: false },
-                  releaseCadence: releaseCadencePlugin,
-                  simpleDataLabels: false,
-                },
-                interaction: { mode: "nearest", intersect: false },
-                scales: {
-                  x: {
-                    ticks: { color: "var(--text-muted)" },
+            {hasDataPoints(firstResponseLineData) ? (
+              <Line
+                data={firstResponseLineData}
+                options={{
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  animation: slowChartAnimation("firstResponseAll"),
+                  plugins: {
+                    legend: { display: true, position: "top" },
+                    renderWatch: { onReady: () => markChartRendered("firstResponseAll") },
+                    tooltip: { mode: "nearest", intersect: false },
+                    releaseCadence: releaseCadencePlugin,
+                    simpleDataLabels: false,
                   },
-                  y: {
-                    title: { display: true, text: "Uren", color: "var(--text-muted)" },
-                    ticks: { color: "var(--text-muted)" },
+                  interaction: { mode: "nearest", intersect: false },
+                  scales: {
+                    x: {
+                      ticks: { color: "var(--text-muted)" },
+                    },
+                    y: {
+                      title: { display: true, text: "Uren", color: "var(--text-muted)" },
+                      ticks: { color: "var(--text-muted)" },
+                    },
                   },
-                },
-              }}
-            />
-          ) : (
-            <EmptyChartState filterLabel="Time to First Response" style={emptyStyle} />
-          )}
+                }}
+              />
+            ) : (
+              <EmptyChartState filterLabel="Time to First Response" style={emptyStyle} />
+            )}
+          {renderSlowChartOverlay("firstResponseAll")}
         </div>
       );
     }
@@ -3539,32 +3723,36 @@ export default function Home() {
     if (cardKey === "organizationWeekly") {
       return (
         <div style={bodyStyle}>
-          {hasDataPoints(organizationBarData) ? (
-            <Bar
-              data={organizationBarData}
-              options={{
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                  legend: { display: true, position: "top" },
-                  tooltip: { mode: "nearest", intersect: false },
-                  simpleDataLabels: false,
-                },
-                interaction: { mode: "nearest", intersect: false },
-                scales: {
-                  x: {
-                    ticks: { color: "var(--text-muted)" },
+            {hasDataPoints(organizationBarData) ? (
+              <Bar
+                data={organizationBarData}
+                options={{
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  animation: slowChartAnimation("organizationWeekly"),
+                  plugins: {
+                    legend: { display: true, position: "top" },
+                    renderWatch: { onReady: () => markChartRendered("organizationWeekly") },
+                    tooltip: { mode: "nearest", intersect: false },
+                    releaseCadence: releaseCadencePlugin,
+                    simpleDataLabels: false,
                   },
-                  y: {
-                    title: { display: true, text: "Aantal tickets", color: "var(--text-muted)" },
-                    ticks: { color: "var(--text-muted)" },
+                  interaction: { mode: "nearest", intersect: false },
+                  scales: {
+                    x: {
+                      ticks: { color: "var(--text-muted)" },
+                    },
+                    y: {
+                      title: { display: true, text: "Aantal tickets", color: "var(--text-muted)" },
+                      ticks: { color: "var(--text-muted)" },
+                    },
                   },
-                },
-              }}
-            />
-          ) : (
-            <EmptyChartState filterLabel="Partners" style={emptyStyle} />
-          )}
+                }}
+              />
+            ) : (
+              <EmptyChartState filterLabel="Partners" style={emptyStyle} />
+            )}
+          {renderSlowChartOverlay("organizationWeekly")}
         </div>
       );
     }
@@ -4428,13 +4616,18 @@ export default function Home() {
 
           <label style={fieldStyle} title="Sluit uit: Koppelingen, datadump, Rest-endpoints, migratie, SSO-koppeling">
             <span style={labelStyle}>Scope</span>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", height: 36, padding: "0 4px" }}>
-              <input
-                type="checkbox"
-                checked={servicedeskOnly}
-                onChange={(e) => setServicedeskOnly(e.target.checked)}
-              />
-              <span>Alleen servicedesk</span>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "4px" }}>
+              <label style={{ display: "flex", gap: 8, alignItems: "center", minHeight: 28 }}>
+                <input
+                  type="checkbox"
+                  checked={servicedeskOnly}
+                  onChange={(e) => setServicedeskOnly(e.target.checked)}
+                />
+                <span>Alleen servicedesk</span>
+              </label>
+              <span style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.4 }}>
+                Voor tickettellingen wordt servicedesk bepaald door de geselecteerde onderwerpen.
+              </span>
             </div>
           </label>
         </div>
@@ -4444,6 +4637,9 @@ export default function Home() {
 
           <details style={configDetailsStyle}>
             <summary style={configSummaryStyle}>Servicedesk teamleden</summary>
+            <div style={{ marginTop: 8, color: "var(--text-muted)", fontSize: 12, lineHeight: 1.5 }}>
+              Gebruikt voor `Tickets per assignee`, `Vakantie Servicedesk` en operationele alerts.
+            </div>
             <div style={configListStyle}>
               {meta.assignees.map((name) => (
                 <label key={`cfg-team-${name}`} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 24 }}>
@@ -4477,7 +4673,10 @@ export default function Home() {
           </details>
 
           <details style={configDetailsStyle}>
-            <summary style={configSummaryStyle}>Servicedesk Onderwerpen</summary>
+            <summary style={configSummaryStyle}>Servicedesk onderwerpen</summary>
+            <div style={{ marginTop: 8, color: "var(--text-muted)", fontSize: 12, lineHeight: 1.5 }}>
+              Bepaalt welke tickets meetellen als servicedesk in grafieken, drilldowns en AI-insights.
+            </div>
             <div style={configListStyle}>
               {meta.onderwerpen.map((name) => (
                 <label key={`cfg-onderwerp-${name}`} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 24 }}>
@@ -4535,7 +4734,7 @@ export default function Home() {
                   step="1"
                   value={aiInsightThresholdDraft}
                   onChange={(e) => setAiInsightThresholdDraft(Number(e.target.value || 75))}
-                  style={inputBaseStyle}
+                  style={compactInputStyle}
                 />
               </label>
               <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
@@ -4712,6 +4911,8 @@ export default function Home() {
                 const aiInsight = aiInsightByCardKey.get(cardKey);
                 const isLocked = lockedCardKeys.includes(cardKey);
                 const displayTitle = aiInsight ? aiInsight.title : cardTitleByKey(cardKey);
+                const showPartialWeekBadge = !aiInsight && Boolean(weeklyScopeHint) && weeklyPartialCardKeys.has(cardKey);
+                const showLastWeekBadge = !aiInsight && cardKey === "topOnderwerpen";
                 return (
                   <div
                     key={cardKey}
@@ -4748,7 +4949,7 @@ export default function Home() {
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
                       {isLayoutEditing ? (
                         <div style={{ ...cardTitleButtonStyle, cursor: "default", marginBottom: 0 }}>
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ display: "inline-flex", alignItems: "baseline", gap: 6 }}>
                             <span style={dragHandleStyle} aria-hidden>
                               <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
                                 <circle cx="2" cy="2" r="1" />
@@ -4761,6 +4962,10 @@ export default function Home() {
                             </span>
                             <span style={chartTitleStyle}>{aiInsight ? aiInsight.title : cardTitleByKey(cardKey)}</span>
                             {aiInsight ? <span style={fixedMetricBadgeStyle}>AI</span> : null}
+                            {showLastWeekBadge ? <span style={fixedMetricBadgeStyle}>Periode: laatste week</span> : null}
+                            {showPartialWeekBadge ? (
+                              <span style={fixedMetricBadgeStyle} title={weeklyScopeHint}>Lopende week*</span>
+                            ) : null}
                           </span>
                         </div>
                       ) : (
@@ -4772,9 +4977,13 @@ export default function Home() {
                           title="Vergroot kaart"
                           aria-label={`${displayTitle} vergroten`}
                         >
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ display: "inline-flex", alignItems: "baseline", gap: 6 }}>
                             <span style={chartTitleStyle}>{displayTitle}</span>
                             {aiInsight ? <span style={fixedMetricBadgeStyle}>AI</span> : null}
+                            {showLastWeekBadge ? <span style={fixedMetricBadgeStyle}>Periode: laatste week</span> : null}
+                            {showPartialWeekBadge ? (
+                              <span style={fixedMetricBadgeStyle} title={weeklyScopeHint}>Lopende week*</span>
+                            ) : null}
                           </span>
                           <span style={cardTitleHintStyle} aria-hidden="true">
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
@@ -5689,6 +5898,14 @@ export default function Home() {
           }
           100% {
             background-position: -20% 0;
+          }
+        }
+        @keyframes spin {
+          from {
+            transform: rotate(0deg);
+          }
+          to {
+            transform: rotate(360deg);
           }
         }
         @keyframes dropPulse {

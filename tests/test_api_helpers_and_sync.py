@@ -94,7 +94,8 @@ def test_issue_metrics_filter_sql_builds_default_conditions():
     assert "priority = %s" in sql
     assert "assignee = %s" in sql
     assert "organizations @> array[%s]::text[]" in sql
-    assert "servicedesk_team_members" in sql
+    assert "servicedesk_onderwerpen" in sql
+    assert "servicedesk_team_members" not in sql
     assert params == (
         "Incident",
         "Incident",
@@ -127,7 +128,8 @@ def test_issue_metrics_filter_sql_supports_alias_and_custom_org_condition():
     assert "i.priority = %s" in sql
     assert "i.assignee = %s" in sql
     assert "org.org_name = %s" in sql
-    assert "i.assignee = any" in sql
+    assert "i.onderwerp_logging = any" in sql
+    assert "i.assignee = any" not in sql
     assert params == (
         "Vraag",
         "Vraag",
@@ -139,6 +141,38 @@ def test_issue_metrics_filter_sql_supports_alias_and_custom_org_condition():
         "Org B",
         False,
     )
+
+
+def test_weekly_insights_payload_uses_onderwerp_based_servicedesk_scope(monkeypatch):
+    cursor = CursorStub(
+        fetchall_values=[
+            [("Incident", 2)],
+            [("Koppelingen", 2)],
+            [("P1", 2)],
+            [("Johan", 2)],
+            [("Org A", 2)],
+            [("priority1", 1)],
+        ],
+        fetchone_values=[
+            (5, 3),
+            (1.5, 1.0, 2),
+            (4.0, 3.5, 2),
+        ],
+    )
+    patch_conn(monkeypatch, cursor)
+    monkeypatch.setattr(
+        api,
+        "_previous_full_week_range",
+        lambda now_utc=None: (date(2026, 2, 16), date(2026, 2, 22)),
+    )
+
+    payload = api._weekly_insights_payload(servicedesk_only=True)
+
+    assert payload["scope"] == "alleen servicedesk"
+    issue_queries = [_query_text(query) for query, _params in cursor.executed if "from issues" in _query_text(query).lower()]
+    assert issue_queries
+    assert any("servicedesk_onderwerpen" in query for query in issue_queries)
+    assert all("servicedesk_team_members" not in query for query in issue_queries)
 
 
 def test_ensure_schema_filters_non_servicedesk_onderwerpen_case_insensitive(monkeypatch):

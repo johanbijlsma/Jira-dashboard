@@ -168,6 +168,41 @@ describe("dashboard hooks", () => {
     expect(global.fetch.mock.calls.some(([url]) => String(url).includes("leadtime_p90_by_type"))).toBe(false);
   });
 
+  it("falls back to empty dashboard data when metric requests fail", async () => {
+    global.fetch = vi.fn((url) => {
+      if (String(url).includes("/meta")) {
+        return jsonResponse({ request_types: ["Incident"], onderwerpen: ["Email"], priorities: [], assignees: [], organizations: [] });
+      }
+      return Promise.reject(new TypeError("Failed to fetch"));
+    });
+
+    const { result } = renderHook(() =>
+      useDashboardData({
+        dateFrom: "2026-01-01",
+        dateTo: "2026-01-31",
+        requestType: "",
+        onderwerp: "",
+        priority: "",
+        assignee: "",
+        organization: "",
+        servicedeskOnly: true,
+        p90Period: { hasData: true, dateFrom: "2026-01-01", dateTo: "2026-01-31" },
+      })
+    );
+
+    await waitFor(() => expect(result.current.meta.request_types).toEqual(["Incident"]));
+    await waitFor(() => expect(result.current.volume).toEqual([]));
+    expect(result.current.onderwerpVolume).toEqual([]);
+    expect(result.current.priorityVolume).toEqual([]);
+    expect(result.current.assigneeVolume).toEqual([]);
+    expect(result.current.organizationVolume).toEqual([]);
+    expect(result.current.inflowVsClosedWeekly).toEqual([]);
+    expect(result.current.incidentResolutionWeekly).toEqual([]);
+    expect(result.current.firstResponseWeekly).toEqual([]);
+    expect(result.current.ttfrOverdueWeekly).toEqual([]);
+    expect(result.current.p90).toEqual([]);
+  });
+
   it("loads sync status, registers polling, and refreshes it manually", async () => {
     const setIntervalSpy = vi.spyOn(window, "setInterval");
     global.fetch = vi

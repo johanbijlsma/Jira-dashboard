@@ -133,6 +133,9 @@ export function setupChartDefaults(ChartJS) {
         lineColor: null,
         lineWidth: 1,
         dash: [6, 4],
+        partialWeekIndex: -1,
+        partialWeekFill: null,
+        partialWeekBorder: null,
         ...pluginOptions,
       };
 
@@ -163,9 +166,38 @@ export function setupChartDefaults(ChartJS) {
 
       const computed = typeof window !== "undefined" ? getComputedStyle(document.documentElement) : null;
       const stroke = opts.lineColor || computed?.getPropertyValue("--accent")?.trim() || "#2563eb";
+      const partialWeekFill =
+        opts.partialWeekFill || computed?.getPropertyValue("--surface-muted")?.trim() || "#f8fafc";
+      const partialWeekBorder =
+        opts.partialWeekBorder || computed?.getPropertyValue("--text-muted")?.trim() || "#64748b";
 
       const ctx = chart.ctx;
       ctx.save();
+
+      const partialWeekIndex = Number.isInteger(opts.partialWeekIndex) ? opts.partialWeekIndex : -1;
+      if (partialWeekIndex >= 0 && partialWeekIndex < weeks.length) {
+        const xCenter = xScale.getPixelForValue(partialWeekIndex);
+        const xPrev = partialWeekIndex > 0 ? xScale.getPixelForValue(partialWeekIndex - 1) : xCenter;
+        const xNext = partialWeekIndex < weeks.length - 1 ? xScale.getPixelForValue(partialWeekIndex + 1) : xCenter;
+        const halfLeft = partialWeekIndex > 0 ? (xCenter - xPrev) / 2 : (xNext - xCenter) / 2 || 24;
+        const halfRight = partialWeekIndex < weeks.length - 1 ? (xNext - xCenter) / 2 : (xCenter - xPrev) / 2 || 24;
+        const left = xCenter - Math.max(halfLeft, 18);
+        const right = xCenter + Math.max(halfRight, 18);
+
+        ctx.fillStyle = `color-mix(in srgb, ${partialWeekFill} 72%, transparent)`;
+        ctx.fillRect(left, yScale.top, right - left, yScale.bottom - yScale.top);
+
+        ctx.strokeStyle = `color-mix(in srgb, ${partialWeekBorder} 42%, transparent)`;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(left, yScale.top);
+        ctx.lineTo(left, yScale.bottom);
+        ctx.moveTo(right, yScale.top);
+        ctx.lineTo(right, yScale.bottom);
+        ctx.stroke();
+      }
+
       ctx.strokeStyle = stroke;
       ctx.lineWidth = Number(opts.lineWidth) || 1;
       ctx.setLineDash(Array.isArray(opts.dash) ? opts.dash : [6, 4]);
@@ -206,11 +238,24 @@ export function setupChartDefaults(ChartJS) {
     },
   };
 
+  const RenderWatchPlugin = {
+    id: "renderWatch",
+    afterRender(_chart, _args, pluginOptions) {
+      if (!pluginOptions || pluginOptions === false) return;
+      if (typeof pluginOptions.onReady === "function") {
+        pluginOptions.onReady();
+      }
+    },
+  };
+
   if (!ChartJS.registry.plugins.get("simpleDataLabels")) {
     ChartJS.register(SimpleDataLabelsPlugin);
   }
   if (!ChartJS.registry.plugins.get("releaseCadence")) {
     ChartJS.register(ReleaseCadencePlugin);
+  }
+  if (!ChartJS.registry.plugins.get("renderWatch")) {
+    ChartJS.register(RenderWatchPlugin);
   }
 
   ChartJS.defaults.plugins.legend.onClick = legendNoopHandler;

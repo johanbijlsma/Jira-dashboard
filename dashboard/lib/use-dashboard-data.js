@@ -10,7 +10,14 @@ const DEFAULT_META = {
 };
 
 function fetchJson(url) {
-  return fetch(url).then((r) => r.json());
+  return fetch(url).then(async (r) => {
+    const data = await r.json().catch(() => null);
+    if (!r.ok) {
+      const detail = data && typeof data === "object" ? data.detail : null;
+      throw new Error(detail || `Request failed for ${url}`);
+    }
+    return data;
+  });
 }
 
 function setArrayState(setter) {
@@ -64,32 +71,37 @@ export function useDashboardData({
   const refreshMetrics = useCallback(() => {
     const params = buildMetricParams();
     const metricRequests = [
-      { endpoint: "volume_weekly", setter: setVolume, transform: false },
-      { endpoint: "volume_weekly_by_onderwerp", setter: setOnderwerpVolume, transform: true },
-      { endpoint: "volume_by_priority", setter: setPriorityVolume, transform: true },
-      { endpoint: "volume_by_assignee", setter: setAssigneeVolume, transform: true },
-      { endpoint: "volume_weekly_by_organization", setter: setOrganizationVolume, transform: true },
-      { endpoint: "inflow_vs_closed_weekly", setter: setInflowVsClosedWeekly, transform: true },
-      { endpoint: "time_to_first_response_weekly", setter: setFirstResponseWeekly, transform: true },
-      { endpoint: "ttfr_overdue_weekly", setter: setTtfrOverdueWeekly, transform: true },
+      { endpoint: "volume_weekly", setter: setVolume, transform: false, fallback: [] },
+      { endpoint: "volume_weekly_by_onderwerp", setter: setOnderwerpVolume, transform: true, fallback: [] },
+      { endpoint: "volume_by_priority", setter: setPriorityVolume, transform: true, fallback: [] },
+      { endpoint: "volume_by_assignee", setter: setAssigneeVolume, transform: true, fallback: [] },
+      { endpoint: "volume_weekly_by_organization", setter: setOrganizationVolume, transform: true, fallback: [] },
+      { endpoint: "inflow_vs_closed_weekly", setter: setInflowVsClosedWeekly, transform: true, fallback: [] },
+      { endpoint: "time_to_first_response_weekly", setter: setFirstResponseWeekly, transform: true, fallback: [] },
+      { endpoint: "ttfr_overdue_weekly", setter: setTtfrOverdueWeekly, transform: true, fallback: [] },
     ];
 
-    metricRequests.forEach(({ endpoint, setter, transform }) => {
-      fetchJson(`${API}/metrics/${endpoint}?` + params.toString()).then(transform ? setArrayState(setter) : setter);
+    metricRequests.forEach(({ endpoint, setter, transform, fallback }) => {
+      fetchJson(`${API}/metrics/${endpoint}?` + params.toString())
+        .then(transform ? setArrayState(setter) : setter)
+        .catch(() => {
+          if (transform) setArrayState(setter)(fallback);
+          else setter(fallback);
+        });
     });
 
     const ttrParams = new URLSearchParams(params);
     ttrParams.delete("request_type");
     fetchJson(`${API}/metrics/time_to_resolution_weekly_by_type?` + ttrParams.toString()).then(
       setArrayState(setIncidentResolutionWeekly)
-    );
+    ).catch(() => setIncidentResolutionWeekly([]));
 
     if (!p90Period.hasData) {
       setP90([]);
     } else {
       const p = buildP90Params();
 
-      fetchJson(`${API}/metrics/leadtime_p90_by_type?` + p.toString()).then(setP90);
+      fetchJson(`${API}/metrics/leadtime_p90_by_type?` + p.toString()).then(setP90).catch(() => setP90([]));
     }
   }, [
     buildMetricParams,
@@ -101,11 +113,11 @@ export function useDashboardData({
 
   const refreshDashboard = useCallback(async () => {
     refreshMetrics();
-    fetchJson(`${API}/meta`).then(setMeta);
+    fetchJson(`${API}/meta`).then(setMeta).catch(() => setMeta(DEFAULT_META));
   }, [refreshMetrics]);
 
   useEffect(() => {
-    fetchJson(`${API}/meta`).then(setMeta);
+    fetchJson(`${API}/meta`).then(setMeta).catch(() => setMeta(DEFAULT_META));
   }, []);
 
   useEffect(() => {

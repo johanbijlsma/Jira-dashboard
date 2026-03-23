@@ -303,6 +303,8 @@ def test_metrics_volume_weekly_uses_shared_filter_params(monkeypatch):
     query = _query_text(query)
     assert "request_type = %s" in query
     assert "organizations @> array[%s]::text[]" in query
+    assert "servicedesk_onderwerpen" in query
+    assert "servicedesk_team_members" not in query
     assert params == (
         "2026-01-19",
         "2026-01-26",
