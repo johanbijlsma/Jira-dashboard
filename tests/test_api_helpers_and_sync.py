@@ -226,6 +226,70 @@ def test_validate_vacation_payload_branches(monkeypatch):
     ) == ("Johan", date.fromisoformat(tomorrow), date.fromisoformat(day_after))
 
 
+def test_weekly_range_ratio_pdf_escape_and_pdf_builder():
+    week_start, week_end = api._previous_full_week_range(datetime(2026, 3, 18, 12, 0, tzinfo=timezone.utc))
+
+    assert week_start.isoformat() == "2026-03-09"
+    assert week_end.isoformat() == "2026-03-15"
+    assert api._safe_ratio_pct(3, 4) == 75.0
+    assert api._safe_ratio_pct(1, 0) is None
+    assert api._pdf_escape(r"Test \(demo)") == r"Test \\\(demo\)"
+
+    pdf = api._build_text_pdf(["Regel 1", "Regel 2"])
+
+    assert pdf.startswith(b"%PDF-1.4")
+    assert b"Regel 1" in pdf
+    assert b"Regel 2" in pdf
+    assert b"%%EOF" in pdf
+
+
+def test_weekly_insights_pdf_lines_formats_breakdowns_and_empty_states():
+    lines = api._weekly_insights_pdf_lines(
+        {
+            "generated_at": "2026-03-20T10:00:00Z",
+            "week": {"label": "2026-03-09 t/m 2026-03-15"},
+            "scope": "alleen servicedesk",
+            "summary": {
+                "incoming_tickets": 12,
+                "closed_tickets": 9,
+                "close_rate_pct": 75.0,
+                "open_delta": 3,
+            },
+            "service_levels": {
+                "first_response_avg_hours": 1.5,
+                "first_response_p50_hours": None,
+                "first_response_n": 6,
+                "resolution_avg_hours": 8.25,
+                "resolution_p50_hours": 7.0,
+                "resolution_n": 4,
+            },
+            "alerts": {
+                "total_events": 5,
+                "by_kind": [{"kind": "ttr_overdue", "events": 2}],
+            },
+            "breakdowns": {
+                "request_types": [{"name": "Incident", "tickets": 4}],
+                "onderwerpen": [],
+                "priorities": [{"name": "High", "tickets": 3}],
+                "assignees": [{"name": "Alice", "tickets": 2}],
+                "organizations": [{"name": "Org A", "tickets": 1}],
+            },
+        }
+    )
+
+    assert "Weekly insights rapport" in lines
+    assert "Periode: 2026-03-09 t/m 2026-03-15" in lines
+    assert "Scope: alleen servicedesk" in lines
+    assert "- Sluitratio: 75.0%" in lines
+    assert "- First response gemiddeld: 1.5 uur" in lines
+    assert "- First response mediaan: n.v.t." in lines
+    assert "  - ttr_overdue: 2" in lines
+    assert "Top onderwerpen" in lines
+    assert "- Geen data" in lines
+    assert "- Incident: 4" in lines
+    assert "- Alice: 2" in lines
+
+
 def test_to_utc_z_with_none_naive_and_aware():
     assert api._to_utc_z(None) is None
     assert api._to_utc_z(datetime(2026, 2, 25, 10, 0, 0)) == "2026-02-25T10:00:00Z"

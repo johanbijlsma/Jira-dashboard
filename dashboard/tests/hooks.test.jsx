@@ -330,6 +330,140 @@ describe("dashboard hooks", () => {
     expect(result.current.insightLogEntries[0].feedback_status).toBe("downvoted");
   });
 
+  it("includes active filters in AI insight requests and keeps defaults on empty API payloads", async () => {
+    global.fetch = createFetchMock({
+      "/insights/live?": [
+        {
+          threshold_pct: "invalid",
+          ttl_hours: undefined,
+          items: [],
+        },
+      ],
+      "/insights/logs?": [{}],
+    });
+
+    const { result } = renderHook(() =>
+      useAiInsights({
+        dateFrom: "2026-01-01",
+        dateTo: "2026-01-31",
+        requestType: "Incident",
+        onderwerp: "Email",
+        priority: "High",
+        assignee: "Alice",
+        organization: "Org A",
+        servicedeskOnly: false,
+      })
+    );
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2));
+
+    const liveCall = global.fetch.mock.calls.find(([url]) => String(url).includes("/insights/live?"))[0];
+    const logCall = global.fetch.mock.calls.find(([url]) => String(url).includes("/insights/logs?"))[0];
+
+    expect(liveCall).toContain("request_type=Incident");
+    expect(liveCall).toContain("onderwerp=Email");
+    expect(liveCall).toContain("priority=High");
+    expect(liveCall).toContain("assignee=Alice");
+    expect(liveCall).toContain("organization=Org+A");
+    expect(liveCall).toContain("servicedesk_only=false");
+    expect(logCall).toContain("limit=200");
+    expect(result.current.liveInsights).toEqual([]);
+    expect(result.current.insightLogEntries).toEqual([]);
+    expect(result.current.thresholdPct).toBe(75);
+    expect(result.current.ttlHours).toBe(8);
+  });
+
+  it("surfaces API feedback errors for non-mock AI insights", async () => {
+    global.fetch = vi.fn((url) => {
+      if (String(url).includes("/insights/live?")) {
+        return jsonResponse({
+          threshold_pct: 80,
+          ttl_hours: 12,
+          items: [
+            {
+              id: 21,
+              title: "AI-signaal",
+              target_card_key: "organizationWeekly",
+              score_pct: 90,
+              source_payload: {},
+              feedback_status: "pending",
+              is_mock: false,
+            },
+          ],
+        });
+      }
+      if (String(url).includes("/insights/logs?")) {
+        return jsonResponse([
+          {
+            id: 21,
+            title: "AI-signaal",
+            target_card_key: "organizationWeekly",
+            score_pct: 90,
+            source_payload: {},
+            feedback_status: "pending",
+            is_mock: false,
+          },
+        ]);
+      }
+      if (String(url).includes("/insights/21/feedback")) {
+        return Promise.resolve({
+          ok: false,
+          json: async () => ({ detail: "Feedback opslaan mislukt door API." }),
+        });
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+
+    const { result } = renderHook(() =>
+      useAiInsights({
+        dateFrom: "2026-01-01",
+        dateTo: "2026-01-31",
+        requestType: "",
+        onderwerp: "",
+        priority: "",
+        assignee: "",
+        organization: "",
+        servicedeskOnly: true,
+      })
+    );
+
+    await waitFor(() => expect(result.current.liveInsights).toHaveLength(1));
+
+    await expect(
+      result.current.submitInsightFeedback({
+        insightId: 21,
+        vote: "up",
+        reason: "",
+      })
+    ).rejects.toThrow("Feedback opslaan mislukt door API.");
+
+    expect(result.current.liveInsights[0].feedback_status).toBe("pending");
+    expect(result.current.insightLogEntries[0].feedback_status).toBe("pending");
+  });
+
+  it("falls back cleanly when AI insight endpoints throw", async () => {
+    global.fetch = vi.fn(() => Promise.reject(new Error("network down")));
+
+    const { result } = renderHook(() =>
+      useAiInsights({
+        dateFrom: "2026-01-01",
+        dateTo: "2026-01-31",
+        requestType: "",
+        onderwerp: "",
+        priority: "",
+        assignee: "",
+        organization: "",
+        servicedeskOnly: true,
+      })
+    );
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2));
+    expect(result.current.liveInsights).toEqual([]);
+    expect(result.current.insightLogEntries).toEqual([]);
+    expect(result.current.thresholdPct).toBe(75);
+    expect(result.current.ttlHours).toBe(8);
+  });
+
   it("loads vacation aggregates, registers polling, and supports manual refresh", async () => {
     const setIntervalSpy = vi.spyOn(window, "setInterval");
     global.fetch = createFetchMock({
