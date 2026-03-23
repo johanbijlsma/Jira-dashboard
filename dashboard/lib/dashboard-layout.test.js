@@ -13,6 +13,20 @@ import {
 import { createDefaultDashboardLayout } from "./dashboard-constants";
 
 describe("dashboard-layout", () => {
+  it("ships the customized default layout", () => {
+    expect(createDefaultDashboardLayout()).toEqual({
+      kpiRow: ["totalTickets", "latestTickets", "avgPerWeek", "ttfrOverdue", "topType", "topSubject", "topPartner"],
+      hiddenKpis: [],
+      cardRows: [
+        ["topOnderwerpen", "volume", "assignee", "priority", "organizationWeekly"],
+        ["incidentResolution", "onderwerp", "inflowVsClosed", "vacationServicedesk"],
+      ],
+      hiddenCards: ["p90", "firstResponseAll"],
+      expandedByRow: [null, "onderwerp"],
+      lockedCards: ["volume", "organizationWeekly", "onderwerp", "vacationServicedesk"],
+    });
+  });
+
   it("returns fallback for invalid input", () => {
     expect(normalizeDashboardLayout(null)).toEqual(createDefaultDashboardLayout());
   });
@@ -62,14 +76,15 @@ describe("dashboard-layout", () => {
     const base = createDefaultDashboardLayout();
     const moved = moveCardToRowLayout(base, "firstResponseAll", 0, "priority", "after");
     expect(moved.cardRows[0]).toContain("firstResponseAll");
+    expect(moved.hiddenCards).not.toContain("firstResponseAll");
     const compact = { ...moved, cardRows: [moved.cardRows[0].slice(0, 4), moved.cardRows[1]], expandedByRow: [null, null] };
     const toggled = toggleRowExpandCardLayout(compact, 0, "volume");
     expect(toggled.expandedByRow[0]).toBe("volume");
-    const locked = toggleCardLockLayout(toggled, "volume");
-    expect(locked.lockedCards).toContain("volume");
-    const hidden = hideCardLayout(locked, "volume");
-    expect(hidden.hiddenCards).toContain("volume");
-    expect(hidden.lockedCards).not.toContain("volume");
+    const locked = toggleCardLockLayout(toggled, "assignee");
+    expect(locked.lockedCards).toContain("assignee");
+    const hidden = hideCardLayout(locked, "assignee");
+    expect(hidden.hiddenCards).toContain("assignee");
+    expect(hidden.lockedCards).not.toContain("assignee");
     expect(moveCardToRowLayout(base, "volume", -1)).toBe(base);
   });
 

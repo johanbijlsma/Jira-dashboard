@@ -45,11 +45,11 @@ export function createDefaultDashboardLayout() {
     kpiRow: [...KPI_KEYS],
     hiddenKpis: [],
     cardRows: [
-      ["topOnderwerpen", "volume", "priority", "organizationWeekly", "vacationServicedesk"],
-      ["assignee", "onderwerp", "p90", "inflowVsClosed", "incidentResolution", "firstResponseAll"],
+      ["topOnderwerpen", "volume", "assignee", "priority", "organizationWeekly"],
+      ["incidentResolution", "onderwerp", "inflowVsClosed", "vacationServicedesk"],
     ],
-    hiddenCards: [],
-    expandedByRow: [null, null],
-    lockedCards: [],
+    hiddenCards: ["p90", "firstResponseAll"],
+    expandedByRow: [null, "onderwerp"],
+    lockedCards: ["volume", "organizationWeekly", "onderwerp", "vacationServicedesk"],
   };
 }

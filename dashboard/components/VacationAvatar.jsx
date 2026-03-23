@@ -33,6 +33,9 @@ export default function VacationAvatar({ name, avatarUrl, style }) {
         <Image
           src={avatarUrl}
           alt={name || "Assignee avatar"}
+          unoptimized
+          width={34}
+          height={34}
           onError={() => setImgFailed(true)}
           style={{ width: "100%", height: "100%", objectFit: "cover" }}
         />
