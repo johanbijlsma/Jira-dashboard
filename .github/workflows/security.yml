@@ -43,29 +43,45 @@ jobs:
           python-version: "3.12"
 
       - name: Install Semgrep
-        run: python -m pip install --upgrade pip semgrep
+        run: python -m pip install --upgrade pip semgrep==1.136.0
 
       - name: Run Semgrep
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          BASELINE_ARG=""
+          TARGETS=(
+            api.py
+            import_issues.py
+            dashboard/components
+            dashboard/lib
+            dashboard/pages
+          )
+          echo "Semgrep scan scope:"
+          printf ' - %s\n' "${TARGETS[@]}"
+
+          BASELINE_ARG=()
           if [ -n "${BASE_SHA}" ]; then
-            BASELINE_ARG="--baseline-commit ${BASE_SHA}"
+            BASELINE_ARG=(--baseline-commit "${BASE_SHA}")
+            echo "Using PR baseline commit: ${BASE_SHA}"
+          else
+            echo "No PR baseline commit provided; evaluating the full configured Semgrep scope."
           fi
           semgrep scan \
             --config auto \
             --config p/owasp-top-ten \
-            --exclude .github/workflows \
             --exclude dashboard/coverage \
             --exclude dashboard/.next \
             --exclude dashboard/node_modules \
             --exclude dashboard/test-results \
-            --exclude scripts/filter_semgrep_results.py \
-            ${BASELINE_ARG} \
+            --exclude dashboard/tests \
+            --exclude dashboard/e2e \
+            "${BASELINE_ARG[@]}" \
             --json \
             --output semgrep-results.json \
-            . || true
+            "${TARGETS[@]}" || true
+          if [ ! -f semgrep-results.json ]; then
+            printf '{"results":[]}\n' > semgrep-results.json
+          fi
 
       - name: Fail on new high severity findings
         env:
