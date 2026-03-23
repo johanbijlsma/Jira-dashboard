@@ -2467,49 +2467,51 @@ export default function Home() {
     minHeight: 0,
     position: "relative",
   };
-  const slowChartOverlayStyle = {
-    position: "absolute",
-    inset: 0,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    pointerEvents: "none",
-    background: "color-mix(in srgb, var(--surface) 76%, transparent)",
-    zIndex: 2,
-  };
-  const slowChartBadgeStyle = {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 10,
-    padding: "10px 14px",
-    borderRadius: 999,
-    border: "1px solid color-mix(in srgb, var(--accent) 28%, var(--border))",
-    background: "color-mix(in srgb, var(--surface) 92%, transparent)",
-    boxShadow: "0 8px 24px color-mix(in srgb, #0f172a 12%, transparent)",
-    color: "var(--text-main)",
-    fontSize: 12,
-    fontWeight: 700,
-  };
-  const slowChartSpinnerStyle = {
-    width: 16,
-    height: 16,
-    borderRadius: 999,
-    border: "2px solid color-mix(in srgb, var(--accent) 20%, transparent)",
-    borderTopColor: "var(--accent)",
-    animation: "spin 800ms linear infinite",
-    flexShrink: 0,
-  };
   const renderSlowChartOverlay = useCallback(
-    (cardKey) =>
-      slowChartCards?.[cardKey] ? (
-        <div style={slowChartOverlayStyle}>
-          <div style={slowChartBadgeStyle}>
-            <span style={slowChartSpinnerStyle} aria-hidden="true" />
+    (cardKey) => {
+      if (!slowChartCards?.[cardKey]) return null;
+      const overlayStyle = {
+        position: "absolute",
+        inset: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        pointerEvents: "none",
+        background: "color-mix(in srgb, var(--surface) 76%, transparent)",
+        zIndex: 2,
+      };
+      const badgeStyle = {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "10px 14px",
+        borderRadius: 999,
+        border: "1px solid color-mix(in srgb, var(--accent) 28%, var(--border))",
+        background: "color-mix(in srgb, var(--surface) 92%, transparent)",
+        boxShadow: "0 8px 24px color-mix(in srgb, #0f172a 12%, transparent)",
+        color: "var(--text-main)",
+        fontSize: 12,
+        fontWeight: 700,
+      };
+      const spinnerStyle = {
+        width: 16,
+        height: 16,
+        borderRadius: 999,
+        border: "2px solid color-mix(in srgb, var(--accent) 20%, transparent)",
+        borderTopColor: "var(--accent)",
+        animation: "spin 800ms linear infinite",
+        flexShrink: 0,
+      };
+      return (
+        <div style={overlayStyle}>
+          <div style={badgeStyle}>
+            <span style={spinnerStyle} aria-hidden="true" />
             <span>Grafiek wordt geladen…</span>
           </div>
         </div>
-      ) : null,
-    [slowChartCards, slowChartOverlayStyle, slowChartBadgeStyle, slowChartSpinnerStyle]
+      );
+    },
+    [slowChartCards]
   );
   const slowChartAnimation = useCallback((cardKey) => (slowChartCards?.[cardKey] ? false : undefined), [slowChartCards]);
   const interactionDisabledStyle = isLayoutEditing ? { pointerEvents: "none", userSelect: "none" } : null;
