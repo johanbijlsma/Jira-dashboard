@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { useAlertLogs } from "../lib/use-alert-logs";
+import { useAiInsights } from "../lib/use-ai-insights";
 import { useDashboardData } from "../lib/use-dashboard-data";
 import { useLiveAlerts } from "../lib/use-live-alerts";
 import { useServicedeskConfig } from "../lib/use-servicedesk-config";
@@ -34,6 +35,52 @@ describe("dashboard hooks", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+  });
+
+  it("uses slower polling for hidden pages and refreshes when page becomes visible again", async () => {
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+
+    global.fetch = createFetchMock({
+      "/sync/status": [
+        { running: false, auto_sync: { enabled: false } },
+        { running: false, auto_sync: { enabled: true } },
+      ],
+      "/alerts/logs?": [
+        [{ id: 1, issue_key: "SD-1", kind: "P1", detected_at: "2026-01-01T10:00:00Z", status: "OPEN", meta: "" }],
+        [{ id: 2, issue_key: "SD-2", kind: "P1", detected_at: "2026-01-01T11:00:00Z", status: "OPEN", meta: "" }],
+      ],
+      "/vacations/upcoming?limit=3": [[{ id: 2, member_name: "Bob" }], [{ id: 3, member_name: "Carol" }]],
+      "/vacations/today": [[{ id: 4, member_name: "Dana" }], [{ id: 5, member_name: "Erin" }]],
+      "/vacations": [[{ id: 1 }, { id: 2 }], [{ id: 1 }, { id: 2 }, { id: 3 }]],
+    });
+
+    const syncHook = renderHook(() => useSyncStatus());
+    const logHook = renderHook(() => useAlertLogs({ limit: 5, sidePanelMode: "", resetKey: "x" }));
+    const vacationHook = renderHook(() => useVacationsData());
+
+    await waitFor(() => expect(syncHook.result.current.syncStatus?.running).toBe(false));
+    await waitFor(() => expect(logHook.result.current.alertLogEntries).toHaveLength(1));
+    await waitFor(() => expect(vacationHook.result.current.upcomingVacationTotal).toBe(2));
+
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 60000);
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 120000);
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 300000);
+
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    await waitFor(() => expect(syncHook.result.current.syncStatus?.auto_sync?.enabled).toBe(true));
+    await waitFor(() => expect(logHook.result.current.alertLogEntries[0].issue_key).toBe("SD-2"));
+    await waitFor(() => expect(vacationHook.result.current.upcomingVacationTotal).toBe(3));
   });
 
   it("loads dashboard data, normalizes arrays, and refreshes meta", async () => {
@@ -208,6 +255,213 @@ describe("dashboard hooks", () => {
 
     rerender({ limit: 5, sidePanelMode: "alerts", resetKey: "b" });
     await waitFor(() => expect(result.current.hasNewAlertLogEntry).toBe(false));
+  });
+
+  it("loads AI insights, logs, and applies feedback updates", async () => {
+    global.fetch = createFetchMock({
+      "/insights/live?": [
+        {
+          threshold_pct: 75,
+          ttl_hours: 8,
+          items: [
+            {
+              id: 11,
+              title: "AI-signaal",
+              target_card_key: "inflowVsClosed",
+              score_pct: 88,
+              source_payload: { current: { tickets: 12 } },
+              feedback_status: "pending",
+            },
+          ],
+        },
+      ],
+      "/insights/logs?": [
+        [
+          {
+            id: 11,
+            title: "AI-signaal",
+            target_card_key: "inflowVsClosed",
+            score_pct: 88,
+            source_payload: { current: { tickets: 12 } },
+            feedback_status: "pending",
+          },
+        ],
+      ],
+      "/insights/11/feedback": [
+        {
+          id: 11,
+          title: "AI-signaal",
+          target_card_key: "inflowVsClosed",
+          score_pct: 88,
+          source_payload: { current: { tickets: 12 } },
+          feedback_status: "downvoted",
+          feedback_reason: "niet relevant genoeg",
+          removed_at: "2026-01-01T10:00:00Z",
+        },
+      ],
+    });
+
+    const { result } = renderHook(() =>
+      useAiInsights({
+        dateFrom: "2026-01-01",
+        dateTo: "2026-01-31",
+        requestType: "",
+        onderwerp: "",
+        priority: "",
+        assignee: "",
+        organization: "",
+        servicedeskOnly: true,
+      })
+    );
+
+    await waitFor(() => expect(result.current.liveInsights).toHaveLength(1));
+    await waitFor(() => expect(result.current.insightLogEntries).toHaveLength(1));
+    expect(result.current.thresholdPct).toBe(75);
+
+    await act(async () => {
+      await result.current.submitInsightFeedback({
+        insightId: 11,
+        vote: "down",
+        reason: "niet relevant genoeg",
+      });
+    });
+
+    expect(result.current.liveInsights).toHaveLength(0);
+    expect(result.current.insightLogEntries[0].feedback_status).toBe("downvoted");
+  });
+
+  it("includes active filters in AI insight requests and keeps defaults on empty API payloads", async () => {
+    global.fetch = createFetchMock({
+      "/insights/live?": [
+        {
+          threshold_pct: "invalid",
+          ttl_hours: undefined,
+          items: [],
+        },
+      ],
+      "/insights/logs?": [{}],
+    });
+
+    const { result } = renderHook(() =>
+      useAiInsights({
+        dateFrom: "2026-01-01",
+        dateTo: "2026-01-31",
+        requestType: "Incident",
+        onderwerp: "Email",
+        priority: "High",
+        assignee: "Alice",
+        organization: "Org A",
+        servicedeskOnly: false,
+      })
+    );
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2));
+
+    const liveCall = global.fetch.mock.calls.find(([url]) => String(url).includes("/insights/live?"))[0];
+    const logCall = global.fetch.mock.calls.find(([url]) => String(url).includes("/insights/logs?"))[0];
+
+    expect(liveCall).toContain("request_type=Incident");
+    expect(liveCall).toContain("onderwerp=Email");
+    expect(liveCall).toContain("priority=High");
+    expect(liveCall).toContain("assignee=Alice");
+    expect(liveCall).toContain("organization=Org+A");
+    expect(liveCall).toContain("servicedesk_only=false");
+    expect(logCall).toContain("limit=200");
+    expect(result.current.liveInsights).toEqual([]);
+    expect(result.current.insightLogEntries).toEqual([]);
+    expect(result.current.thresholdPct).toBe(75);
+    expect(result.current.ttlHours).toBe(8);
+  });
+
+  it("surfaces API feedback errors for non-mock AI insights", async () => {
+    global.fetch = vi.fn((url) => {
+      if (String(url).includes("/insights/live?")) {
+        return jsonResponse({
+          threshold_pct: 80,
+          ttl_hours: 12,
+          items: [
+            {
+              id: 21,
+              title: "AI-signaal",
+              target_card_key: "organizationWeekly",
+              score_pct: 90,
+              source_payload: {},
+              feedback_status: "pending",
+              is_mock: false,
+            },
+          ],
+        });
+      }
+      if (String(url).includes("/insights/logs?")) {
+        return jsonResponse([
+          {
+            id: 21,
+            title: "AI-signaal",
+            target_card_key: "organizationWeekly",
+            score_pct: 90,
+            source_payload: {},
+            feedback_status: "pending",
+            is_mock: false,
+          },
+        ]);
+      }
+      if (String(url).includes("/insights/21/feedback")) {
+        return Promise.resolve({
+          ok: false,
+          json: async () => ({ detail: "Feedback opslaan mislukt door API." }),
+        });
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+
+    const { result } = renderHook(() =>
+      useAiInsights({
+        dateFrom: "2026-01-01",
+        dateTo: "2026-01-31",
+        requestType: "",
+        onderwerp: "",
+        priority: "",
+        assignee: "",
+        organization: "",
+        servicedeskOnly: true,
+      })
+    );
+
+    await waitFor(() => expect(result.current.liveInsights).toHaveLength(1));
+
+    await expect(
+      result.current.submitInsightFeedback({
+        insightId: 21,
+        vote: "up",
+        reason: "",
+      })
+    ).rejects.toThrow("Feedback opslaan mislukt door API.");
+
+    expect(result.current.liveInsights[0].feedback_status).toBe("pending");
+    expect(result.current.insightLogEntries[0].feedback_status).toBe("pending");
+  });
+
+  it("falls back cleanly when AI insight endpoints throw", async () => {
+    global.fetch = vi.fn(() => Promise.reject(new Error("network down")));
+
+    const { result } = renderHook(() =>
+      useAiInsights({
+        dateFrom: "2026-01-01",
+        dateTo: "2026-01-31",
+        requestType: "",
+        onderwerp: "",
+        priority: "",
+        assignee: "",
+        organization: "",
+        servicedeskOnly: true,
+      })
+    );
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2));
+    expect(result.current.liveInsights).toEqual([]);
+    expect(result.current.insightLogEntries).toEqual([]);
+    expect(result.current.thresholdPct).toBe(75);
+    expect(result.current.ttlHours).toBe(8);
   });
 
   it("loads vacation aggregates, registers polling, and supports manual refresh", async () => {

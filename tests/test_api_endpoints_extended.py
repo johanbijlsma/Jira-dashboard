@@ -123,6 +123,7 @@ def test_update_servicedesk_config_success(monkeypatch):
             "onderwerpen": ["Onderwerp A"],
             "onderwerpen_baseline": ["Onderwerp A", "Onderwerp B"],
             "onderwerpen_customized": True,
+            "ai_insight_threshold_pct": 82,
             "updated_at": "2026-02-25T10:00:00Z",
             "team_member_avatars": {},
         },
@@ -130,10 +131,78 @@ def test_update_servicedesk_config_success(monkeypatch):
 
     response = client.put(
         "/config/servicedesk",
-        json={"team_members": ["Johan"], "onderwerpen": ["Onderwerp A"]},
+        json={"team_members": ["Johan"], "onderwerpen": ["Onderwerp A"], "ai_insight_threshold_pct": 82},
     )
     assert response.status_code == 200
     assert response.json()["team_members"] == ["Johan"]
+    assert response.json()["ai_insight_threshold_pct"] == 82
+
+
+def test_insights_logs_returns_mapped_rows(monkeypatch):
+    cursor = _CursorStub(
+        fetchall_values=[
+            [
+                (
+                    7,
+                    "scope|insight",
+                    "AI-signaal",
+                    "Samenvatting",
+                    "Actie",
+                    "backlog_pressure",
+                    "inflowVsClosed",
+                    88.0,
+                    24.0,
+                    datetime(2026, 2, 1, 10, 0),
+                    datetime(2026, 2, 1, 18, 0),
+                    {"current": {"inflow": 10}, "previous": {"inflow": 6}},
+                    "pending",
+                    None,
+                    None,
+                    None,
+                )
+            ]
+        ]
+    )
+    _patch_conn(monkeypatch, cursor)
+
+    response = client.get("/insights/logs?limit=5&servicedesk_only=true")
+    assert response.status_code == 200
+    data = response.json()
+    assert data[0]["id"] == 7
+    assert data[0]["target_card_key"] == "inflowVsClosed"
+    assert data[0]["source_payload"]["current"]["inflow"] == 10
+
+
+def test_submit_insight_feedback_updates_row(monkeypatch):
+    cursor = _CursorStub(
+        fetchone_values=[
+            (
+                7,
+                "scope|insight",
+                "AI-signaal",
+                "Samenvatting",
+                "Actie",
+                "backlog_pressure",
+                "inflowVsClosed",
+                88.0,
+                24.0,
+                datetime(2026, 2, 1, 10, 0),
+                datetime(2026, 2, 1, 18, 0),
+                {"current": {"inflow": 10}, "previous": {"inflow": 6}},
+                "downvoted",
+                "niet relevant genoeg",
+                datetime(2026, 2, 1, 10, 5),
+                datetime(2026, 2, 1, 10, 5),
+            )
+        ]
+    )
+    _patch_conn(monkeypatch, cursor)
+
+    response = client.post("/insights/7/feedback", json={"vote": "down", "reason": "niet relevant genoeg"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["feedback_status"] == "downvoted"
+    assert data["feedback_reason"] == "niet relevant genoeg"
 
 
 def test_vacations_upcoming_returns_mapped_rows(monkeypatch):
@@ -200,6 +269,23 @@ def test_metrics_volume_weekly_maps_rows(monkeypatch):
     data = response.json()
     assert data[0]["request_type"] == "Incident"
     assert data[0]["tickets"] == 5
+
+
+def test_issues_invalid_date_field_falls_back_to_created(monkeypatch):
+    cursor = _CursorStub(
+        fetchall_values=[[( "SD-10", "Incident", "Koppelingen", datetime(2026, 1, 19, 0, 0), None, "P1", "Johan", "Open")]]
+    )
+    _patch_conn(monkeypatch, cursor)
+
+    response = client.get(
+        "/issues?date_from=2026-01-01&date_to=2026-02-28&date_field=invalid&limit=5&offset=0"
+    )
+
+    assert response.status_code == 200
+    query, _params = cursor.executed[0]
+    query = _query_text(query)
+    assert "from issues" in query
+    assert "created_at >=" in query
 
 
 def test_metrics_volume_weekly_uses_shared_filter_params(monkeypatch):
