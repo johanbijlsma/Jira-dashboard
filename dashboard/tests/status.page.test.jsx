@@ -2,8 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import StatusPage from "../pages/status";
 
+let mockPageVisible = true;
+
+vi.mock("../lib/use-page-visibility", () => ({
+  usePageVisibility: () => mockPageVisible,
+}));
+
 describe("Status page", () => {
   beforeEach(() => {
+    mockPageVisible = true;
     global.fetch = vi.fn();
   });
 
@@ -92,6 +99,23 @@ describe("Status page", () => {
     render(<StatusPage />);
     await waitFor(() => expect(screen.getByText("Geen syncs gevonden.")).toBeInTheDocument());
     expect(intervalSpy).toHaveBeenCalledWith(expect.any(Function), 15000);
+  });
+
+  it("polls at the background interval when the page is hidden", async () => {
+    mockPageVisible = false;
+    const intervalSpy = vi.spyOn(window, "setInterval");
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        running: true,
+        successful_runs: [],
+      }),
+    });
+
+    render(<StatusPage />);
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/status"));
+    await waitFor(() => expect(intervalSpy).toHaveBeenCalled());
+    expect(intervalSpy).toHaveBeenCalledWith(expect.any(Function), 60000);
   });
 
   it("shows API error when status fetch fails", async () => {
@@ -260,5 +284,52 @@ describe("Status page", () => {
       )
     );
     await waitFor(() => expect(screen.getByText("Test alert is verwijderd.")).toBeInTheDocument());
+  });
+
+  it("triggers a test alert and refreshes the state", async () => {
+    global.fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          running: false,
+          successful_runs: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ keys: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ triggered: true }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ priority1: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          running: false,
+          successful_runs: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ keys: ["SD-11079"] }),
+      });
+
+    render(<StatusPage />);
+
+    const triggerButton = await waitFor(() => screen.getByRole("button", { name: "Test alert" }));
+    fireEvent.click(triggerButton);
+
+    await waitFor(() =>
+      expect(global.fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/dev/alerts/trigger", { method: "POST" })
+    );
+    await waitFor(() =>
+      expect(global.fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/alerts/live?servicedesk_only=true")
+    );
+    await waitFor(() => expect(screen.getByText("Test alert is gezet.")).toBeInTheDocument());
   });
 });

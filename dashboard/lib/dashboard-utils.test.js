@@ -7,6 +7,7 @@ import {
   fmtDateWithWeekday,
   hasDataPoints,
   initialsFromName,
+  isCurrentPartialWeek,
   isTextEntryTarget,
   isoDate,
   num,
@@ -40,6 +41,9 @@ describe("dashboard-utils", () => {
     expect(buildWeekStartsFromRange("", "2026-02-02")).toEqual([]);
     expect(buildWeekStartsFromRange("bad", "2026-02-02")).toEqual([]);
     expect(weekStartIsoFromDate(new Date("2026-01-21"))).toBe("2026-01-19");
+    expect(isCurrentPartialWeek("2026-03-23", new Date("2026-03-23T09:00:00Z"))).toBe(true);
+    expect(isCurrentPartialWeek("2026-03-29", new Date("2026-03-23T09:00:00Z"))).toBe(false);
+    expect(isCurrentPartialWeek("2026-03-13", new Date("2026-03-23T09:00:00Z"))).toBe(false);
   });
 
   it("handles list/numeric helpers", () => {

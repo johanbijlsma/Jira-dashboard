@@ -51,6 +51,17 @@ export function weekStartIsoFromDate(d = new Date()) {
   return dt.toISOString().slice(0, 10);
 }
 
+export function isCurrentPartialWeek(dateIso, now = new Date()) {
+  if (!dateIso) return false;
+  const [y, m, d] = String(dateIso).split("-").map(Number);
+  const selected = new Date(Date.UTC(y, m - 1, d));
+  if (Number.isNaN(selected.getTime())) return false;
+  const selectedWeek = weekStartIsoFromDate(selected);
+  const currentWeek = weekStartIsoFromDate(now);
+  if (selectedWeek !== currentWeek) return false;
+  return selected.getUTCDay() !== 0;
+}
+
 export function buildWeekStartsFromRange(fromIso, toIso) {
   if (!fromIso || !toIso) return [];
   const [fy, fm, fd] = fromIso.split("-").map(Number);
