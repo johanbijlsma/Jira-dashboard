@@ -1,4 +1,6 @@
+import Image from "next/image";
 import { useState } from "react";
+
 import { initialsFromName } from "../lib/dashboard-utils";
 
 export default function VacationAvatar({ name, avatarUrl, style }) {
@@ -28,7 +30,7 @@ export default function VacationAvatar({ name, avatarUrl, style }) {
       aria-label={name || "Onbekend"}
     >
       {showImage ? (
-        <img
+        <Image
           src={avatarUrl}
           alt={name || "Assignee avatar"}
           onError={() => setImgFailed(true)}
