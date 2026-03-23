@@ -24,8 +24,10 @@ describe("dashboard-constants", () => {
     const layout = createDefaultDashboardLayout();
     expect(layout.kpiRow).toEqual(KPI_KEYS);
     expect(layout.hiddenKpis).toEqual([]);
-    expect(layout.hiddenCards).toEqual([]);
+    expect(layout.hiddenCards).toEqual(["p90", "firstResponseAll"]);
     expect(layout.cardRows.length).toBe(2);
+    expect(layout.expandedByRow).toEqual([null, "onderwerp"]);
+    expect(layout.lockedCards).toEqual(["volume", "organizationWeekly", "onderwerp", "vacationServicedesk"]);
     expect(NON_KPI_CARD_KEYS).toContain("topOnderwerpen");
   });
 });
