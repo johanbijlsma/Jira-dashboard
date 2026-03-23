@@ -9,10 +9,9 @@ import sys
 HIGH_LEVELS = {"HIGH", "CRITICAL", "ERROR"}
 
 
-def load_results(path: str) -> list[dict]:
+def load_results(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as handle:
-        data = json.load(handle)
-    return data.get("results", [])
+        return json.load(handle)
 
 
 def changed_line_ranges(base_sha: str) -> dict[str, list[tuple[int, int]]]:
@@ -70,8 +69,33 @@ def is_new_finding(item: dict, ranges_by_file: dict[str, list[tuple[int, int]]])
     return any(lo <= line_number <= hi for lo, hi in ranges_by_file[path])
 
 
+def format_finding(item: dict) -> str:
+    extra = item.get("extra", {}) if isinstance(item, dict) else {}
+    severity = str(extra.get("severity", "")).upper() or "UNKNOWN"
+    path = item.get("path") or "<unknown>"
+    line = ((item.get("start") or {}).get("line")) or "?"
+    rule_id = item.get("check_id") or "<unknown>"
+    message = extra.get("message") or "<no message>"
+    return f"[{severity}] {path}:{line} {rule_id} :: {message}"
+
+
+def print_findings(findings: list[dict], heading: str) -> None:
+    print(heading)
+    for item in findings:
+        print(format_finding(item))
+
+
 def main() -> int:
-    results = load_results("semgrep-results.json")
+    try:
+        payload = load_results("semgrep-results.json")
+    except FileNotFoundError:
+        print("Semgrep did not produce semgrep-results.json. Failing because findings cannot be diagnosed.")
+        return 1
+    except json.JSONDecodeError as exc:
+        print(f"Could not parse semgrep-results.json: {exc}. Failing because findings cannot be diagnosed.")
+        return 1
+
+    results = payload.get("results", [])
     if not results:
         print("No Semgrep findings.")
         return 0
@@ -79,7 +103,10 @@ def main() -> int:
     changed_ranges = changed_line_ranges(os.environ.get("BASE_SHA", "").strip())
     scoped_results = [item for item in results if is_new_finding(item, changed_ranges)]
     if changed_ranges and not scoped_results:
-        print("Semgrep findings exist, but none land on lines changed by this PR. Passing.")
+        print(
+            f"Semgrep reported {len(results)} findings in the configured scan scope, "
+            "but none land on lines changed by this PR. Passing."
+        )
         return 0
 
     severities = []
@@ -92,25 +119,22 @@ def main() -> int:
     if severities:
         high = [severity for severity in severities if severity in HIGH_LEVELS]
         if high:
+            blocking_findings = []
             for item in scoped_results:
                 extra = item.get("extra", {}) if isinstance(item, dict) else {}
                 severity = str(extra.get("severity", "")).upper() or "UNKNOWN"
-                if severity not in HIGH_LEVELS:
-                    continue
-                path = item.get("path") or "<unknown>"
-                line = ((item.get("start") or {}).get("line")) or "?"
-                rule_id = item.get("check_id") or "<unknown>"
-                message = extra.get("message") or "<no message>"
-                print(f"[{severity}] {path}:{line} {rule_id}")
-                print(message)
+                if severity in HIGH_LEVELS:
+                    blocking_findings.append(item)
+            print_findings(blocking_findings, "Blocking Semgrep findings:")
             print(
                 f"Semgrep found {len(scoped_results)} findings on PR-changed lines; "
-                f"{len(high)} are high/critical/error. Failing."
+                f"{len(blocking_findings)} are high/critical/error. Failing."
             )
             return 1
         print(f"Semgrep found {len(scoped_results)} findings on PR-changed lines; none are high/critical/error. Passing.")
         return 0
 
+    print_findings(scoped_results, "Blocking Semgrep findings with missing severity metadata:")
     print("Semgrep findings on PR-changed lines do not include severity metadata; failing on any findings.")
     return 1
 

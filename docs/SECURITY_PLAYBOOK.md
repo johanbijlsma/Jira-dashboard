@@ -60,3 +60,21 @@ git push --force --tags
 2. Run local history scan before major releases:
    `gitleaks git --config .gitleaks.toml --redact`
 3. Ensure CI security workflow is green before merge.
+
+## 6) Reading Semgrep failures in CI
+
+The Semgrep gate only scans the repository's application code:
+
+- `api.py`
+- `import_issues.py`
+- `dashboard/components`
+- `dashboard/lib`
+- `dashboard/pages`
+
+On pull requests, only findings that land on changed lines should block the gate. A failing job prints one line per blocking finding in this shape:
+
+```text
+[SEVERITY] path:line rule-id :: message
+```
+
+Use the `path`, `line`, and `rule-id` directly from the log to inspect the code and decide whether the right fix is code cleanup, rule tuning, or a reviewed false-positive suppression.

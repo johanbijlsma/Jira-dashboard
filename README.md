@@ -27,6 +27,10 @@ This repository includes baseline security checks for secrets, SAST, and depende
    ```bash
    pre-commit run --all-files
    ```
+4. Install Python dev tools, including Semgrep for local SAST checks:
+   ```bash
+   python3 -m pip install -r requirements.txt -r requirements-dev.txt
+   ```
 
 ### Local security scans
 
@@ -38,6 +42,10 @@ This repository includes baseline security checks for secrets, SAST, and depende
   ```bash
   gitleaks git --config .gitleaks.toml --redact
   ```
+- Semgrep against the same default app-code scope as CI:
+  ```bash
+  make semgrep-local
+  ```
 
 ### CI security workflow
 
@@ -47,6 +55,8 @@ GitHub Actions workflow `.github/workflows/security.yml` runs:
 - Semgrep (`auto` + `p/owasp-top-ten`)
 - Dependency scans (`npm audit` and `pip-audit`)
 
-Semgrep is configured to fail on high/critical severity findings when severity metadata is available; otherwise it fails on any findings. Tune rules over time by adjusting configs and ignoring only reviewed false positives.
+Semgrep is scoped to application code only: `api.py`, `import_issues.py`, `dashboard/components`, `dashboard/lib`, and `dashboard/pages`. Workflow files, CI helpers, generated assets, and test fixtures stay outside the default scan scope unless we intentionally expand it.
+
+On pull requests, the Semgrep gate only blocks on findings that land on lines changed by the PR. When it fails, the job logs each blocking finding with file, line, rule id, severity, and message so the fix is directly diagnosable from CI output.
 
 See `docs/SECURITY_PLAYBOOK.md` for remediation procedures.
