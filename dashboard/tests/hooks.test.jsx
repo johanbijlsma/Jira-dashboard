@@ -4,6 +4,7 @@ import { useAlertLogs } from "../lib/use-alert-logs";
 import { useAiInsights } from "../lib/use-ai-insights";
 import { useDashboardData } from "../lib/use-dashboard-data";
 import { useLiveAlerts } from "../lib/use-live-alerts";
+import { usePageVisibility } from "../lib/use-page-visibility";
 import { useServicedeskConfig } from "../lib/use-servicedesk-config";
 import { useSyncStatus } from "../lib/use-sync-status";
 import { useVacationsData } from "../lib/use-vacations-data";
@@ -225,6 +226,19 @@ describe("dashboard hooks", () => {
     expect(result.current.liveAlerts.time_to_resolution_critical[0].issue_key).toBe("SD-21");
   });
 
+  it("normalizes empty live alert payloads to empty arrays", async () => {
+    global.fetch = createFetchMock({
+      "/alerts/live?": [{ priority1: null, first_response_due_warning: null, time_to_resolution_overdue: null }],
+    });
+
+    const { result } = renderHook(() => useLiveAlerts());
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
+    expect(result.current.liveAlerts.priority1).toEqual([]);
+    expect(result.current.liveAlerts.first_response_due_warning).toEqual([]);
+    expect(result.current.liveAlerts.time_to_resolution_overdue).toEqual([]);
+  });
+
   it("loads alert logs, tracks unseen entries, registers polling, and resets the badge", async () => {
     const setIntervalSpy = vi.spyOn(window, "setInterval");
     global.fetch = createFetchMock({
@@ -255,6 +269,48 @@ describe("dashboard hooks", () => {
 
     rerender({ limit: 5, sidePanelMode: "alerts", resetKey: "b" });
     await waitFor(() => expect(result.current.hasNewAlertLogEntry).toBe(false));
+  });
+
+  it("does not raise a new alert badge while the alerts panel is already open", async () => {
+    global.fetch = createFetchMock({
+      "/alerts/logs?": [
+        [{ id: 1, issue_key: "SD-1", kind: "P1", detected_at: "2026-01-01T10:00:00Z", status: "OPEN", meta: "" }],
+        [{ id: 2, issue_key: "SD-2", kind: "P1", detected_at: "2026-01-01T11:00:00Z", status: "OPEN", meta: "" }],
+      ],
+    });
+
+    const { result } = renderHook(() => useAlertLogs({ limit: 5, sidePanelMode: "alerts", resetKey: "x" }));
+
+    await waitFor(() => expect(result.current.alertLogEntries).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.refreshAlertLogs();
+    });
+
+    expect(result.current.alertLogEntries[0].issue_key).toBe("SD-2");
+    expect(result.current.hasNewAlertLogEntry).toBe(false);
+  });
+
+  it("tracks page visibility changes", async () => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+
+    const { result } = renderHook(() => usePageVisibility());
+
+    expect(result.current).toBe(false);
+
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
+
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    await waitFor(() => expect(result.current).toBe(true));
   });
 
   it("loads AI insights, logs, and applies feedback updates", async () => {
@@ -493,6 +549,22 @@ describe("dashboard hooks", () => {
 
     expect(result.current.upcomingVacationTotal).toBe(3);
     expect(result.current.todayVacations).toEqual([{ id: 5, member_name: "Erin" }]);
+  });
+
+  it("normalizes vacation endpoints when they return non-array payloads", async () => {
+    global.fetch = createFetchMock({
+      "/vacations/upcoming?limit=3": [{ unexpected: true }],
+      "/vacations/today": [{ unexpected: true }],
+      "/vacations": [{ unexpected: true }],
+    });
+
+    const { result } = renderHook(() => useVacationsData());
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(3));
+    expect(result.current.upcomingVacationTotal).toBe(0);
+    expect(result.current.allVacations).toEqual([]);
+    expect(result.current.upcomingVacations).toEqual([]);
+    expect(result.current.todayVacations).toEqual([]);
   });
 
   it("loads servicedesk config and applies normalized drafts", async () => {

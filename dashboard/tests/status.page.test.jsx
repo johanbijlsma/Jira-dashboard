@@ -137,4 +137,128 @@ describe("Status page", () => {
     );
     await waitFor(() => expect(screen.getByText("Full sync is gestart.")).toBeInTheDocument());
   });
+
+  it("renders recent runs, badges, and updates selected run details on row click", async () => {
+    global.fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          running: false,
+          recent_runs: [
+            {
+              started_at: "2026-03-20T08:00:00Z",
+              finished_at: "2026-03-20T08:05:00Z",
+              mode: "incremental",
+              trigger_type: "automatic",
+              success: true,
+              upserts: 14,
+              set_last_sync: "2026-03-20T08:05:00Z",
+              error: null,
+            },
+            {
+              started_at: "2026-03-20T07:00:00Z",
+              finished_at: "2026-03-20T07:02:00Z",
+              mode: null,
+              trigger_type: "manual",
+              success: false,
+              upserts: null,
+              set_last_sync: null,
+              error: "Queue timeout",
+            },
+          ],
+          last_full_sync: {
+            trigger_type: "automatic",
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ keys: [] }),
+      });
+
+    render(<StatusPage />);
+
+    await waitFor(() => expect(screen.getByText("⚙️ Automatisch")).toBeInTheDocument());
+    expect(screen.getByText("👤 Handmatig")).toBeInTheDocument();
+    expect(screen.getAllByText("✅ Succes").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByText("❌ Fout"));
+
+    await waitFor(() => expect(screen.getByText("Foutmelding: Queue timeout")).toBeInTheDocument());
+    expect(screen.getByText("Type: —")).toBeInTheDocument();
+    expect(screen.getAllByText("Upserts: —").length).toBeGreaterThan(0);
+  });
+
+  it("falls back to successful runs when recent runs are missing", async () => {
+    global.fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          running: false,
+          successful_runs: [
+            {
+              started_at: "2026-03-20T06:00:00Z",
+              finished_at: "2026-03-20T06:10:00Z",
+              mode: "full",
+              trigger_type: "automatic",
+              upserts: 42,
+              set_last_sync: "2026-03-20T06:10:00Z",
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ keys: [] }),
+      });
+
+    render(<StatusPage />);
+
+    await waitFor(() => expect(screen.getByText("Type: full")).toBeInTheDocument());
+    expect(screen.getByText("Foutmelding: Geen")).toBeInTheDocument();
+    expect(screen.getAllByText("✅ Succes").length).toBeGreaterThan(0);
+  });
+
+  it("clears the first available dev alert and refreshes the state", async () => {
+    global.fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          running: false,
+          successful_runs: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ keys: ["SD-11079"] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ cleared: true }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          running: false,
+          successful_runs: [],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ keys: [] }),
+      });
+
+    render(<StatusPage />);
+
+    const clearButton = await waitFor(() => screen.getByRole("button", { name: "Verwijder test" }));
+    fireEvent.click(clearButton);
+
+    await waitFor(() =>
+      expect(global.fetch).toHaveBeenCalledWith(
+        "http://127.0.0.1:8000/dev/alerts/clear?issue_key=SD-11079",
+        { method: "POST" }
+      )
+    );
+    await waitFor(() => expect(screen.getByText("Test alert is verwijderd.")).toBeInTheDocument());
+  });
 });
