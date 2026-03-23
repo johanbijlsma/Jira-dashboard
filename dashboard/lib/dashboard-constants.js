@@ -5,6 +5,12 @@ export const DEFAULT_SERVICEDESK_ONLY = true;
 export const DASHBOARD_CONFIG_STORAGE_KEY = "jsm_dashboard_layout_v2";
 export const TV_MODE_STORAGE_KEY = "jsm_dashboard_tv_mode";
 export const VACATION_TEAM_MEMBERS = ["Johan", "Ashley", "Jarno"];
+export const AI_INSIGHT_DOWNVOTE_REASONS = [
+  "niet relevant genoeg",
+  "threshold te laag",
+  "onduidelijke formulering",
+  "actie niet beïnvloedbaar",
+];
 
 export const TYPE_COLORS = {
   rfc: "#2e7d32",
@@ -44,5 +50,6 @@ export function createDefaultDashboardLayout() {
     ],
     hiddenCards: [],
     expandedByRow: [null, null],
+    lockedCards: [],
   };
 }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { API } from "./dashboard-constants";
+import { usePageVisibility } from "./use-page-visibility";
 
 function normalizeAlertLogs(data) {
   return Array.isArray(data)
@@ -19,6 +20,8 @@ export function useAlertLogs({ limit, sidePanelMode, resetKey }) {
   const [hasNewAlertLogEntry, setHasNewAlertLogEntry] = useState(false);
   const latestMarkerRef = useRef("");
   const bootstrappedRef = useRef(false);
+  const isPageVisible = usePageVisibility();
+  const wasPageVisibleRef = useRef(isPageVisible);
 
   const clearHasNewAlertLogEntry = useCallback(() => {
     setHasNewAlertLogEntry(false);
@@ -50,11 +53,24 @@ export function useAlertLogs({ limit, sidePanelMode, resetKey }) {
   }, [refreshAlertLogs]);
 
   useEffect(() => {
+    let timer = null;
+    if (!wasPageVisibleRef.current && isPageVisible) {
+      timer = window.setTimeout(() => {
+        refreshAlertLogs().catch(() => {});
+      }, 0);
+    }
+    wasPageVisibleRef.current = isPageVisible;
+    return () => {
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [isPageVisible, refreshAlertLogs]);
+
+  useEffect(() => {
     const timer = setInterval(() => {
       refreshAlertLogs().catch(() => {});
-    }, 30000);
+    }, isPageVisible ? 30000 : 120000);
     return () => clearInterval(timer);
-  }, [refreshAlertLogs]);
+  }, [isPageVisible, refreshAlertLogs]);
 
   useEffect(() => {
     latestMarkerRef.current = "";
