@@ -1,6 +1,7 @@
 import Link from "next/link";
 import Head from "next/head";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePageVisibility } from "../lib/use-page-visibility";
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
 
@@ -38,6 +39,8 @@ function triggerBadge(triggerType) {
 }
 
 export default function StatusPage() {
+  const isPageVisible = usePageVisibility();
+  const wasPageVisibleRef = useRef(isPageVisible);
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -131,13 +134,21 @@ export default function StatusPage() {
   }, [fetchStatus, fetchTestAlertState]);
 
   useEffect(() => {
-    const intervalMs = status?.running ? 3000 : 15000;
+    if (!wasPageVisibleRef.current && isPageVisible) {
+      fetchStatus();
+      fetchTestAlertState();
+    }
+    wasPageVisibleRef.current = isPageVisible;
+  }, [fetchStatus, fetchTestAlertState, isPageVisible]);
+
+  useEffect(() => {
+    const intervalMs = isPageVisible ? (status?.running ? 3000 : 15000) : 60000;
     const timer = window.setInterval(() => {
       fetchStatus();
       fetchTestAlertState();
     }, intervalMs);
     return () => window.clearInterval(timer);
-  }, [fetchStatus, fetchTestAlertState, status?.running]);
+  }, [fetchStatus, fetchTestAlertState, isPageVisible, status?.running]);
 
   const recentRuns = useMemo(
     () =>
