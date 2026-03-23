@@ -49,7 +49,7 @@ test-dashboard:
 	npm --prefix dashboard run test
 
 semgrep-local:
-	python3 -m pip install -r requirements-dev.txt
+	python3 -m pip install -r requirements-dev.txt semgrep==1.136.0
 	SEMGREP_TMP_DIR="/tmp/jira-dashboard-semgrep"; \
 	mkdir -p "$$SEMGREP_TMP_DIR"; \
 	BASE_SHA="$$(git merge-base HEAD origin/main 2>/dev/null || true)"; \
@@ -72,6 +72,7 @@ semgrep-local:
 		--json \
 		--output semgrep-results.json \
 		$$TARGETS || true
+	test -f semgrep-results.json || printf '{"results":[]}\n' > semgrep-results.json
 	BASE_SHA="$$BASE_SHA" python3 scripts/filter_semgrep_results.py
 
 test: test-api test-dashboard

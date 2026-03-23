@@ -27,7 +27,7 @@ This repository includes baseline security checks for secrets, SAST, and depende
    ```bash
    pre-commit run --all-files
    ```
-4. Install Python dev tools, including Semgrep for local SAST checks:
+4. Install Python dev tools:
    ```bash
    python3 -m pip install -r requirements.txt -r requirements-dev.txt
    ```
@@ -46,6 +46,7 @@ This repository includes baseline security checks for secrets, SAST, and depende
   ```bash
   make semgrep-local
   ```
+  This target installs the pinned Semgrep CLI automatically before scanning.
 
 ### CI security workflow
 
