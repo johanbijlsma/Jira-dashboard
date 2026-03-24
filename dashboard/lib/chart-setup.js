@@ -1,9 +1,65 @@
 import { RELEASE_ANCHOR_ISO } from "./dashboard-constants";
-import { num } from "./dashboard-utils";
+import {
+  addDaysIso,
+  AMSTERDAM_TIME_ZONE,
+  fmtDate,
+  num,
+  weekStartIsoFromIsoDate,
+  zonedDateTimeParts,
+} from "./dashboard-utils";
 
 export const legendNoopHandler = () => {};
 
 export function setupChartDefaults(ChartJS) {
+  function getReleaseMarkers(weeks, opts, xScale) {
+    const anchor = zonedDateTimeParts(opts.anchorIso, opts.timeZone);
+    if (!anchor) return [];
+
+    const intervalDays = Math.max(1, Number(opts.intervalDays) || 14);
+    const dayMs = 24 * 60 * 60 * 1000;
+    const startIso = weeks[0];
+    const endExclusiveIso = addDaysIso(weeks[weeks.length - 1], 7);
+    const secondsSinceMidnight = anchor.hour * 60 * 60 + anchor.minute * 60 + anchor.second;
+
+    let releaseIso = anchor.isoDate;
+    if (releaseIso < startIso) {
+      const steps = Math.ceil((Date.parse(`${startIso}T00:00:00Z`) - Date.parse(`${releaseIso}T00:00:00Z`)) / dayMs / intervalDays);
+      releaseIso = addDaysIso(releaseIso, steps * intervalDays);
+    } else {
+      const steps = Math.floor((Date.parse(`${releaseIso}T00:00:00Z`) - Date.parse(`${startIso}T00:00:00Z`)) / dayMs / intervalDays);
+      releaseIso = addDaysIso(releaseIso, -steps * intervalDays);
+      while (releaseIso < startIso) releaseIso = addDaysIso(releaseIso, intervalDays);
+    }
+
+    const markers = [];
+    while (releaseIso < endExclusiveIso) {
+      const weekIso = weekStartIsoFromIsoDate(releaseIso);
+      const weekIdx = weeks.indexOf(weekIso);
+
+      if (weekIdx >= 0) {
+        const xBase = xScale.getPixelForValue(weekIdx);
+        const xNeighbor =
+          weekIdx < weeks.length - 1
+            ? xScale.getPixelForValue(weekIdx + 1)
+            : weekIdx > 0
+              ? xBase + (xBase - xScale.getPixelForValue(weekIdx - 1))
+              : xBase;
+        const daysSinceMonday =
+          (Date.parse(`${releaseIso}T00:00:00Z`) - Date.parse(`${weekIso}T00:00:00Z`)) / dayMs;
+        const fractionOfWeek = (daysSinceMonday * 24 * 60 * 60 + secondsSinceMidnight) / (7 * 24 * 60 * 60);
+        const rawX = xBase + fractionOfWeek * (xNeighbor - xBase);
+        markers.push({
+          isoDate: releaseIso,
+          x: Math.max(xScale.left + 1, Math.min(xScale.right - 1, rawX)),
+        });
+      }
+
+      releaseIso = addDaysIso(releaseIso, intervalDays);
+    }
+
+    return markers;
+  }
+
   const SimpleDataLabelsPlugin = {
     id: "simpleDataLabels",
     afterDatasetsDraw(chart, _args, pluginOptions) {
@@ -130,6 +186,7 @@ export function setupChartDefaults(ChartJS) {
         weeks: [],
         anchorIso: RELEASE_ANCHOR_ISO,
         intervalDays: 14,
+        timeZone: AMSTERDAM_TIME_ZONE,
         lineColor: null,
         lineWidth: 1,
         dash: [6, 4],
@@ -141,24 +198,6 @@ export function setupChartDefaults(ChartJS) {
 
       const weeks = Array.isArray(opts.weeks) ? opts.weeks.filter(Boolean) : [];
       if (!weeks.length) return;
-
-      const anchor = new Date(opts.anchorIso);
-      if (Number.isNaN(anchor.getTime())) return;
-
-      const start = new Date(`${weeks[0]}T00:00:00Z`);
-      const lastWeek = new Date(`${weeks[weeks.length - 1]}T00:00:00Z`);
-      const end = new Date(lastWeek.getTime() + 7 * 24 * 60 * 60 * 1000);
-      const intervalMs = Math.max(1, Number(opts.intervalDays) || 14) * 24 * 60 * 60 * 1000;
-
-      let releaseTs = anchor.getTime();
-      if (releaseTs < start.getTime()) {
-        const steps = Math.ceil((start.getTime() - releaseTs) / intervalMs);
-        releaseTs += steps * intervalMs;
-      } else {
-        const steps = Math.floor((releaseTs - start.getTime()) / intervalMs);
-        releaseTs -= steps * intervalMs;
-        while (releaseTs < start.getTime()) releaseTs += intervalMs;
-      }
 
       const xScale = chart.scales?.x;
       const yScale = chart.scales?.y;
@@ -204,37 +243,95 @@ export function setupChartDefaults(ChartJS) {
 
       const yTop = yScale.top;
       const yBottom = yScale.bottom;
+      const markers = getReleaseMarkers(weeks, opts, xScale);
+      chart.$releaseCadence = {
+        markers,
+        activeMarkerIndex: chart.$releaseCadence?.activeMarkerIndex ?? -1,
+      };
 
-      while (releaseTs <= end.getTime()) {
-        const releaseDate = new Date(releaseTs);
-        const monday = new Date(releaseDate);
-        const day = monday.getUTCDay();
-        const diff = (day + 6) % 7;
-        monday.setUTCDate(monday.getUTCDate() - diff);
-        const weekIso = monday.toISOString().slice(0, 10);
-        const weekIdx = weeks.indexOf(weekIso);
-
-        if (weekIdx >= 0) {
-          const xBase = xScale.getPixelForValue(weekIdx);
-          const xNeighbor =
-            weekIdx < weeks.length - 1
-              ? xScale.getPixelForValue(weekIdx + 1)
-              : weekIdx > 0
-                ? xBase + (xBase - xScale.getPixelForValue(weekIdx - 1))
-                : xBase;
-          const daysSinceMonday = (releaseDate.getUTCDay() + 6) % 7;
-          const x = xBase + (daysSinceMonday / 7) * (xNeighbor - xBase);
-
-          ctx.beginPath();
-          ctx.moveTo(x, yTop);
-          ctx.lineTo(x, yBottom);
-          ctx.stroke();
+      markers.forEach((marker) => {
+        const isActive = chart.$releaseCadence?.activeMarkerIndex >= 0
+          && markers[chart.$releaseCadence.activeMarkerIndex]?.isoDate === marker.isoDate;
+        if (isActive) {
+          ctx.save();
+          ctx.lineWidth = Math.max(2, Number(opts.lineWidth) || 1);
+          ctx.setLineDash(Array.isArray(opts.dash) ? opts.dash : [6, 4]);
         }
+          ctx.beginPath();
+          ctx.moveTo(marker.x, yTop);
+          ctx.lineTo(marker.x, yBottom);
+          ctx.stroke();
+        if (isActive) ctx.restore();
+      });
 
-        releaseTs += intervalMs;
+      const activeMarker = markers[chart.$releaseCadence?.activeMarkerIndex] || null;
+      if (activeMarker) {
+        const label = `Release ${fmtDate(activeMarker.isoDate)}`;
+        ctx.save();
+        ctx.setLineDash([]);
+        ctx.font = "600 12px system-ui";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        const metrics = ctx.measureText(label);
+        const padX = 8;
+        const padY = 6;
+        const width = Math.ceil(metrics.width) + padX * 2;
+        const height = 24;
+        const centerX = Math.max(
+          xScale.left + width / 2 + 4,
+          Math.min(xScale.right - width / 2 - 4, activeMarker.x)
+        );
+        const centerY = yTop + height / 2 + padY;
+        const left = centerX - width / 2;
+        const top = centerY - height / 2;
+
+        ctx.fillStyle = "color-mix(in srgb, var(--surface, #ffffff) 94%, #0f172a 6%)";
+        ctx.strokeStyle = "color-mix(in srgb, var(--border, #cbd5e1) 88%, transparent)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(left, top, width, height, 8);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = computed?.getPropertyValue("--text-main")?.trim() || "#111827";
+        ctx.fillText(label, centerX, centerY);
+        ctx.restore();
       }
 
       ctx.restore();
+    },
+    afterEvent(chart, args, pluginOptions) {
+      if (pluginOptions === false) return;
+      const evt = args?.event;
+      const markers = chart.$releaseCadence?.markers || [];
+      if (!evt || !markers.length) return;
+
+      const opts = {
+        hoverTolerance: 8,
+        ...pluginOptions,
+      };
+      const xScale = chart.scales?.x;
+      const yScale = chart.scales?.y;
+      if (!xScale || !yScale) return;
+
+      const insideY = evt.y >= yScale.top && evt.y <= yScale.bottom;
+      const nextIndex = insideY
+        ? markers.findIndex((marker) => Math.abs(evt.x - marker.x) <= Number(opts.hoverTolerance || 8))
+        : -1;
+      const currentIndex = chart.$releaseCadence?.activeMarkerIndex ?? -1;
+
+      if (evt.type === "mouseout") {
+        if (currentIndex !== -1) {
+          chart.$releaseCadence.activeMarkerIndex = -1;
+          args.changed = true;
+        }
+        return;
+      }
+
+      if (nextIndex !== currentIndex) {
+        chart.$releaseCadence.activeMarkerIndex = nextIndex;
+        args.changed = true;
+      }
     },
   };
 

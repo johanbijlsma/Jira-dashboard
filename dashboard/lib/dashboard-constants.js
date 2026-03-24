@@ -1,6 +1,7 @@
 export const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
 export const JIRA_BASE = "https://planningsagenda.atlassian.net";
-export const RELEASE_ANCHOR_ISO = process.env.NEXT_PUBLIC_RELEASE_ANCHOR_ISO || "2026-01-21T00:00:00Z";
+// Default to a known Tuesday release at 17:00 Amsterdam time so the marker splits office hours from after-hours.
+export const RELEASE_ANCHOR_ISO = process.env.NEXT_PUBLIC_RELEASE_ANCHOR_ISO || "2026-01-27T16:00:00Z";
 export const DEFAULT_SERVICEDESK_ONLY = true;
 export const DASHBOARD_CONFIG_STORAGE_KEY = "jsm_dashboard_layout_v2";
 export const TV_MODE_STORAGE_KEY = "jsm_dashboard_tv_mode";

@@ -2,6 +2,8 @@ export function isoDate(d) {
   return d.toISOString().slice(0, 10);
 }
 
+export const AMSTERDAM_TIME_ZONE = "Europe/Amsterdam";
+
 export function fmtDate(value) {
   if (!value) return "";
   const dt = value instanceof Date ? value : new Date(value);
@@ -39,7 +41,7 @@ export function fmtDateTime(value) {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
-    timeZone: "Europe/Amsterdam",
+    timeZone: AMSTERDAM_TIME_ZONE,
   }).format(dt);
 }
 
@@ -49,6 +51,54 @@ export function weekStartIsoFromDate(d = new Date()) {
   const diff = (day + 6) % 7;
   dt.setUTCDate(dt.getUTCDate() - diff);
   return dt.toISOString().slice(0, 10);
+}
+
+export function weekStartIsoFromIsoDate(yyyyMmDd) {
+  if (!yyyyMmDd) return "";
+  const [y, m, d] = String(yyyyMmDd).split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (Number.isNaN(dt.getTime())) return "";
+  const day = dt.getUTCDay();
+  const diff = (day + 6) % 7;
+  dt.setUTCDate(dt.getUTCDate() - diff);
+  return dt.toISOString().slice(0, 10);
+}
+
+export function zonedDateTimeParts(value, timeZone = AMSTERDAM_TIME_ZONE) {
+  if (!value) return null;
+  const dt = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(dt.getTime())) return null;
+
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(dt);
+
+  const lookup = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  const year = Number(lookup.year);
+  const month = Number(lookup.month);
+  const day = Number(lookup.day);
+  const hour = Number(lookup.hour);
+  const minute = Number(lookup.minute);
+  const second = Number(lookup.second);
+
+  if ([year, month, day, hour, minute, second].some((part) => Number.isNaN(part))) return null;
+
+  return {
+    year,
+    month,
+    day,
+    hour,
+    minute,
+    second,
+    isoDate: `${lookup.year}-${lookup.month}-${lookup.day}`,
+  };
 }
 
 export function isCurrentPartialWeek(dateIso, now = new Date()) {
