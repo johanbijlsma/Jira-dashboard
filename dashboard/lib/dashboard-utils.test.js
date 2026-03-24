@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AMSTERDAM_TIME_ZONE,
   addDaysIso,
   buildWeekStartsFromRange,
   fmtDate,
@@ -15,6 +16,8 @@ import {
   sameStringSet,
   trimLeadingPartialWeek,
   weekStartIsoFromDate,
+  weekStartIsoFromIsoDate,
+  zonedDateTimeParts,
 } from "./dashboard-utils";
 
 describe("dashboard-utils", () => {
@@ -41,9 +44,26 @@ describe("dashboard-utils", () => {
     expect(buildWeekStartsFromRange("", "2026-02-02")).toEqual([]);
     expect(buildWeekStartsFromRange("bad", "2026-02-02")).toEqual([]);
     expect(weekStartIsoFromDate(new Date("2026-01-21"))).toBe("2026-01-19");
+    expect(weekStartIsoFromIsoDate("2026-03-10")).toBe("2026-03-09");
+    expect(weekStartIsoFromIsoDate("bad")).toBe("");
     expect(isCurrentPartialWeek("2026-03-23", new Date("2026-03-23T09:00:00Z"))).toBe(true);
     expect(isCurrentPartialWeek("2026-03-29", new Date("2026-03-23T09:00:00Z"))).toBe(false);
     expect(isCurrentPartialWeek("2026-03-13", new Date("2026-03-23T09:00:00Z"))).toBe(false);
+  });
+
+  it("keeps release markers aligned to Amsterdam local time", () => {
+    expect(AMSTERDAM_TIME_ZONE).toBe("Europe/Amsterdam");
+    expect(zonedDateTimeParts("2026-01-27T16:00:00Z")).toMatchObject({
+      isoDate: "2026-01-27",
+      hour: 17,
+      minute: 0,
+    });
+    expect(zonedDateTimeParts("2026-06-09T15:00:00Z")).toMatchObject({
+      isoDate: "2026-06-09",
+      hour: 17,
+      minute: 0,
+    });
+    expect(zonedDateTimeParts("", AMSTERDAM_TIME_ZONE)).toBeNull();
   });
 
   it("handles list/numeric helpers", () => {

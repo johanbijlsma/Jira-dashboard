@@ -3734,7 +3734,6 @@ export default function Home() {
                     legend: { display: true, position: "top" },
                     renderWatch: { onReady: () => markChartRendered("organizationWeekly") },
                     tooltip: { mode: "nearest", intersect: false },
-                    releaseCadence: releaseCadencePlugin,
                     simpleDataLabels: false,
                   },
                   interaction: { mode: "nearest", intersect: false },
