@@ -3,7 +3,7 @@ import os
 import time
 import threading
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -1520,6 +1520,51 @@ def _parse_iso_date_or_raise(value: str, field_name: str):
         raise ValueError(f"Ongeldige datum voor {field_name}. Gebruik YYYY-MM-DD.") from exc
 
 
+def _parse_iso_datetime_or_raise(value: str, field_name: str) -> datetime:
+    try:
+        normalized = str(value or "").strip().replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+    except Exception as exc:
+        raise ValueError(f"Ongeldige datum/tijd voor {field_name}. Gebruik ISO-8601.") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _release_followup_dates(
+    *,
+    anchor_iso: str,
+    interval_days: int,
+    date_from: str,
+    date_to: str,
+    followup_offset_days: int = 1,
+) -> List[Dict[str, date]]:
+    start_date = _parse_iso_date_or_raise(date_from, "date_from")
+    end_date = _parse_iso_date_or_raise(date_to, "date_to")
+    if end_date < start_date:
+        raise ValueError("date_to mag niet voor date_from liggen.")
+
+    anchor_dt = _parse_iso_datetime_or_raise(anchor_iso, "anchor_iso").astimezone(REPORT_TIMEZONE)
+    cadence_days = max(1, int(interval_days or 14))
+    followup_date = anchor_dt.date() + timedelta(days=max(0, int(followup_offset_days)))
+
+    if followup_date < start_date:
+        delta_days = (start_date - followup_date).days
+        steps = (delta_days + cadence_days - 1) // cadence_days
+        followup_date = followup_date + timedelta(days=steps * cadence_days)
+
+    rows: List[Dict[str, date]] = []
+    while followup_date <= end_date:
+        rows.append(
+            {
+                "release_date": followup_date - timedelta(days=max(0, int(followup_offset_days))),
+                "followup_date": followup_date,
+            }
+        )
+        followup_date = followup_date + timedelta(days=cadence_days)
+    return rows
+
+
 def _validate_vacation_payload(payload: VacationPayload):
     member_name = (payload.member_name or "").strip()
     team_members = get_servicedesk_config().get("team_members") or []
@@ -3018,6 +3063,68 @@ def ttfr_overdue_weekly(
             "tickets": int(r[1] or 0),
         }
         for r in rows
+    ]
+
+
+@app.get("/metrics/release_followup_workload")
+def release_followup_workload(
+    date_from: str = Query(..., description="ISO date, e.g. 2026-01-01"),
+    date_to: str = Query(..., description="ISO date, e.g. 2026-12-31"),
+    anchor_iso: str = Query(..., description="ISO datetime for the release cadence anchor"),
+    interval_days: int = Query(14, ge=1, le=365),
+    request_type: Optional[str] = None,
+    onderwerp: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee: Optional[str] = None,
+    organization: Optional[str] = None,
+    servicedesk_only: bool = False,
+):
+    ensure_schema()
+    try:
+        followup_rows = _release_followup_dates(
+            anchor_iso=anchor_iso,
+            interval_days=interval_days,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not followup_rows:
+        return []
+
+    filter_sql, filter_params = issue_metrics_filter_sql(
+        request_type=request_type,
+        onderwerp=onderwerp,
+        priority=priority,
+        assignee=assignee,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+    )
+    target_dates = [row["followup_date"] for row in followup_rows]
+    q = compose_sql_query(
+        """
+    select
+      (created_at at time zone 'Europe/Amsterdam')::date as local_date,
+      count(*) as tickets
+    from issues
+    where (created_at at time zone 'Europe/Amsterdam')::date = any(%s::date[])
+      and {filter_sql}
+    group by 1
+    order by 1;
+    """,
+        filter_sql=filter_sql,
+    )
+    with conn() as c, c.cursor() as cur:
+        cur.execute(q, (target_dates, *filter_params))
+        counts = {row[0]: int(row[1] or 0) for row in cur.fetchall()}
+
+    return [
+        {
+            "release_date": row["release_date"].isoformat(),
+            "followup_date": row["followup_date"].isoformat(),
+            "tickets": int(counts.get(row["followup_date"], 0)),
+        }
+        for row in followup_rows
     ]
 
 

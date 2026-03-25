@@ -15,7 +15,7 @@ import { createDefaultDashboardLayout } from "./dashboard-constants";
 describe("dashboard-layout", () => {
   it("ships the customized default layout", () => {
     expect(createDefaultDashboardLayout()).toEqual({
-      kpiRow: ["totalTickets", "latestTickets", "avgPerWeek", "ttfrOverdue", "topType", "topSubject", "topPartner"],
+      kpiRow: ["totalTickets", "latestTickets", "releaseWednesdayWorkload", "ttfrOverdue", "topType", "topSubject", "topPartner"],
       hiddenKpis: [],
       cardRows: [
         ["topOnderwerpen", "volume", "assignee", "priority", "organizationWeekly"],
@@ -34,14 +34,14 @@ describe("dashboard-layout", () => {
   it("normalizes legacy/invalid layout input", () => {
     const normalized = normalizeDashboardLayout({
       kpiRow: ["totalTickets", "totalTickets", "invalid"],
-      hiddenKpis: ["avgPerWeek", "avgPerWeek"],
+      hiddenKpis: ["latestTickets", "latestTickets"],
       cardRows: [["volume", "invalid"], ["priority", "volume"]],
       hiddenCards: ["assignee"],
       expandedByRow: ["volume", "missing"],
       lockedCards: ["volume", "missing"],
     });
     expect(normalized.kpiRow).toContain("totalTickets");
-    expect(normalized.hiddenKpis).toContain("avgPerWeek");
+    expect(normalized.hiddenKpis).toContain("latestTickets");
     expect(normalized.cardRows[0]).toContain("volume");
     expect(normalized.cardRows[1]).not.toContain("volume");
     expect(normalized.expandedByRow[0]).toBe("volume");

@@ -525,6 +525,57 @@ def test_metrics_ttfr_overdue_weekly_maps_rows(monkeypatch):
     assert response.json() == [{"week": "2026-01-19T00:00:00", "tickets": 3}]
 
 
+def test_metrics_release_followup_workload_maps_rows(monkeypatch):
+    cursor = _CursorStub(
+        fetchall_values=[[(date(2026, 3, 25), 7), (date(2026, 3, 11), 5)]]
+    )
+    _patch_conn(monkeypatch, cursor)
+
+    response = client.get(
+        "/metrics/release_followup_workload?date_from=2026-03-01&date_to=2026-03-31"
+        "&anchor_iso=2026-01-27T16:00:00Z&interval_days=14"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {"release_date": "2026-03-10", "followup_date": "2026-03-11", "tickets": 5},
+        {"release_date": "2026-03-24", "followup_date": "2026-03-25", "tickets": 7},
+    ]
+
+
+def test_metrics_release_followup_workload_uses_shared_filter_params(monkeypatch):
+    cursor = _CursorStub(fetchall_values=[[]])
+    _patch_conn(monkeypatch, cursor)
+
+    response = client.get(
+        "/metrics/release_followup_workload?date_from=2026-03-01&date_to=2026-03-31"
+        "&anchor_iso=2026-01-27T16:00:00Z&interval_days=14"
+        "&request_type=Incident&onderwerp=Email&priority=High&assignee=Alice"
+        "&organization=Org%20A&servicedesk_only=true"
+    )
+
+    assert response.status_code == 200
+    query, params = cursor.executed[0]
+    query = _query_text(query)
+    assert "at time zone 'Europe/Amsterdam'" in query
+    assert "request_type = %s" in query
+    assert "organizations @> array[%s]::text[]" in query
+    assert params == (
+        [date(2026, 3, 11), date(2026, 3, 25)],
+        "Incident",
+        "Incident",
+        "Email",
+        "Email",
+        "High",
+        "High",
+        "Alice",
+        "Alice",
+        "Org A",
+        "Org A",
+        True,
+    )
+
+
 def test_metrics_volume_by_priority_maps_rows(monkeypatch):
     cursor = _CursorStub(fetchall_values=[[("P1", 3)]])
     _patch_conn(monkeypatch, cursor)
