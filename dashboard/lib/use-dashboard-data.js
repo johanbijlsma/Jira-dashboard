@@ -46,6 +46,7 @@ export function useDashboardData({
   const [incidentResolutionWeekly, setIncidentResolutionWeekly] = useState([]);
   const [firstResponseWeekly, setFirstResponseWeekly] = useState([]);
   const [ttfrOverdueWeekly, setTtfrOverdueWeekly] = useState([]);
+  const [releaseFollowupWorkload, setReleaseFollowupWorkload] = useState([]);
 
   const buildMetricParams = useCallback(() => {
     const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
@@ -96,6 +97,13 @@ export function useDashboardData({
       setArrayState(setIncidentResolutionWeekly)
     ).catch(() => setIncidentResolutionWeekly([]));
 
+    const releaseParams = new URLSearchParams(params);
+    releaseParams.set("anchor_iso", process.env.NEXT_PUBLIC_RELEASE_ANCHOR_ISO || "2026-01-27T16:00:00Z");
+    releaseParams.set("interval_days", "14");
+    fetchJson(`${API}/metrics/release_followup_workload?` + releaseParams.toString())
+      .then(setArrayState(setReleaseFollowupWorkload))
+      .catch(() => setReleaseFollowupWorkload([]));
+
     if (!p90Period.hasData) {
       setP90([]);
     } else {
@@ -139,6 +147,7 @@ export function useDashboardData({
     incidentResolutionWeekly,
     firstResponseWeekly,
     ttfrOverdueWeekly,
+    releaseFollowupWorkload,
     refreshDashboard,
   };
 }

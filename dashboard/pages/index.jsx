@@ -28,6 +28,7 @@ import {
   createDefaultDashboardLayout,
 } from "../lib/dashboard-constants";
 import {
+  AMSTERDAM_TIME_ZONE,
   addDaysIso,
   buildWeekStartsFromRange,
   fmtDate,
@@ -42,6 +43,7 @@ import {
   sameStringSet,
   trimLeadingPartialWeek,
   weekStartIsoFromDate,
+  zonedDateTimeParts,
 } from "../lib/dashboard-utils";
 import { legendNoopHandler, setupChartDefaults } from "../lib/chart-setup";
 import { useAlertLogs } from "../lib/use-alert-logs";
@@ -432,6 +434,7 @@ export default function Home() {
     incidentResolutionWeekly,
     firstResponseWeekly,
     ttfrOverdueWeekly,
+    releaseFollowupWorkload,
     refreshDashboard,
   } = useDashboardData({
     dateFrom,
@@ -2103,6 +2106,20 @@ export default function Home() {
       ttfrOverduePrevious && ttfrOverduePrevious > 0
         ? ((ttfrOverdueLatest - ttfrOverduePrevious) / ttfrOverduePrevious) * 100
         : null;
+    const releaseRows = (Array.isArray(releaseFollowupWorkload) ? releaseFollowupWorkload : [])
+      .filter((row) => row?.followup_date)
+      .sort((a, b) => String(a.followup_date).localeCompare(String(b.followup_date)));
+    const amsterdamNow = zonedDateTimeParts(new Date(), AMSTERDAM_TIME_ZONE);
+    const latestReleaseIndex = releaseRows.length - 1;
+    const holdLatestRelease =
+      latestReleaseIndex >= 0
+      && releaseRows[latestReleaseIndex]?.followup_date === amsterdamNow?.isoDate
+      && Number(amsterdamNow?.hour) < 12
+      && releaseRows.length > 1;
+    const effectiveLatestIndex = holdLatestRelease ? latestReleaseIndex - 1 : latestReleaseIndex;
+    const latestReleaseRow = effectiveLatestIndex >= 0 ? releaseRows[effectiveLatestIndex] : null;
+    const previousReleaseRow = effectiveLatestIndex > 0 ? releaseRows[effectiveLatestIndex - 1] : null;
+    const releaseTrend = trendInfo(latestReleaseRow?.tickets, previousReleaseRow?.tickets);
 
     return {
       totalTickets,
@@ -2122,10 +2139,19 @@ export default function Home() {
       ttfrOverdueTotal,
       ttfrOverdueLatest,
       ttfrOverdueWowPct,
+      releaseWednesdayLatestTickets: Number(latestReleaseRow?.tickets) || 0,
+      releaseWednesdayPreviousTickets: previousReleaseRow ? Number(previousReleaseRow?.tickets) || 0 : null,
+      releaseWednesdayLatestDateLabel: latestReleaseRow?.followup_date ? fmtDateWithWeekday(latestReleaseRow.followup_date) : "—",
+      releaseWednesdayLatestReleaseLabel: latestReleaseRow?.release_date ? fmtDate(latestReleaseRow.release_date) : "—",
+      releaseWednesdayPreviousDateLabel: previousReleaseRow?.followup_date ? fmtDateWithWeekday(previousReleaseRow.followup_date) : "—",
+      releaseWednesdayPreviousReleaseLabel: previousReleaseRow?.release_date ? fmtDate(previousReleaseRow.release_date) : "—",
+      releaseWednesdayTrendText: previousReleaseRow ? releaseTrend.text : "—",
+      releaseWednesdayTrendSymbol: previousReleaseRow ? releaseTrend.symbol : "",
+      releaseWednesdayTrendColor: previousReleaseRow ? releaseTrend.color : "var(--text-main)",
       periodLabel: fullWeekInfo.periodLabel,
       completeWeeksCount: fullWeekInfo.count,
     };
-  }, [series, weeks, onderwerpVolume, organizationVolume, fullWeekInfo, ttfrOverdueWeekly]);
+  }, [series, weeks, onderwerpVolume, organizationVolume, fullWeekInfo, ttfrOverdueWeekly, releaseFollowupWorkload]);
 
   const topOnderwerpRows = useMemo(() => {
     if (!fullWeekInfo.count) return [];
@@ -4011,8 +4037,19 @@ export default function Home() {
   const kpiTiles = useMemo(
     () => ({
       totalTickets: {
-        label: "Totaal tickets (volledige weken)",
-        value: num(kpiStats.totalTickets),
+        label: "Tickets (volledige weken)",
+        value: (
+          <span style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, width: "100%" }}>
+            <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", lineHeight: 1.2 }}>Totaal</span>
+              <span>{num(kpiStats.totalTickets)}</span>
+            </span>
+            <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", lineHeight: 1.2 }}>Gem./week</span>
+              <span>{num(kpiStats.avgPerWeek, 1)}</span>
+            </span>
+          </span>
+        ),
         sub: kpiStats.periodLabel,
       },
       latestTickets: {
@@ -4021,10 +4058,16 @@ export default function Home() {
         sub: `Week van ${kpiStats.lastCompletedWeekLabel} · WoW: ${pct(kpiStats.wowChangePct)}`,
         badge: "Periode: laatste week",
       },
-      avgPerWeek: {
-        label: "Gemiddeld aantal tickets (volledige weken)",
-        value: num(kpiStats.avgPerWeek, 1),
-        sub: `${num(kpiStats.completeWeeksCount)} volledige weken`,
+      releaseWednesdayWorkload: {
+        label: "Workload woensdag na release",
+        value: kpiStats.releaseWednesdayTrendText === "—" ? "—" : `${kpiStats.releaseWednesdayTrendSymbol} ${kpiStats.releaseWednesdayTrendText}`.trim(),
+        sub: `Release (${kpiStats.releaseWednesdayLatestReleaseLabel}): ${num(kpiStats.releaseWednesdayLatestTickets)} tickets`,
+        subSecondary:
+          kpiStats.releaseWednesdayPreviousTickets == null
+            ? "Nog geen vorige release-woensdag in de gekozen periode"
+            : `Vorige release (${kpiStats.releaseWednesdayPreviousReleaseLabel}): ${num(kpiStats.releaseWednesdayPreviousTickets)} tickets`,
+        badge: "Release",
+        valueStyle: { color: kpiStats.releaseWednesdayTrendColor },
       },
       ttfrOverdue: {
         label: "TTFR verlopen (volledige weken)",
@@ -4853,7 +4896,7 @@ export default function Home() {
                   ) : null}
                 </div>
               </div>
-              <div style={{ ...kpiValueStyle, fontSize: key === "topType" || key === "topSubject" ? 20 : 20 }}>{tile.value}</div>
+              <div style={{ ...kpiValueStyle, ...(tile.valueStyle || null), fontSize: key === "topType" || key === "topSubject" ? 20 : 20 }}>{tile.value}</div>
               <div style={kpiSubStyle}>{tile.sub}</div>
               {tile.subSecondary ? <div style={{ ...kpiSubStyle, marginTop: 2, fontSize: 11 }}>{tile.subSecondary}</div> : null}
             </div>

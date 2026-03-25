@@ -95,6 +95,7 @@ describe("dashboard hooks", () => {
       "/metrics/time_to_resolution_weekly_by_type?": [{ request_type: "Incident", week: "2026-01-05", avg_hours: 7 }],
       "/metrics/time_to_first_response_weekly?": [{ week: "2026-01-05", avg_hours: 1 }],
       "/metrics/ttfr_overdue_weekly?": [{ week: "2026-01-05", overdue: 2 }],
+      "/metrics/release_followup_workload?": [[{ release_date: "2026-01-13", followup_date: "2026-01-14", tickets: 4 }]],
       "/metrics/leadtime_p90_by_type?": [{ request_type: "Incident", p90_hours: 12 }],
       "/meta": [
         { request_types: ["Incident"], onderwerpen: ["Email"], priorities: ["High"], assignees: ["A"], organizations: ["Org"] },
@@ -123,6 +124,13 @@ describe("dashboard hooks", () => {
     const metricCall = global.fetch.mock.calls.find(([url]) => String(url).includes("/metrics/volume_weekly?"))[0];
     expect(metricCall).toContain("request_type=Incident");
     expect(metricCall).toContain("servicedesk_only=true");
+    const releaseCall = global.fetch.mock.calls.find(([url]) => String(url).includes("/metrics/release_followup_workload?"))[0];
+    expect(releaseCall).toContain("anchor_iso=");
+    await waitFor(() =>
+      expect(result.current.releaseFollowupWorkload).toEqual([
+        { release_date: "2026-01-13", followup_date: "2026-01-14", tickets: 4 },
+      ])
+    );
 
     const ttrCall = global.fetch.mock.calls.find(([url]) =>
       String(url).includes("/metrics/time_to_resolution_weekly_by_type?")
@@ -147,6 +155,7 @@ describe("dashboard hooks", () => {
       "/metrics/time_to_resolution_weekly_by_type?": [],
       "/metrics/time_to_first_response_weekly?": [],
       "/metrics/ttfr_overdue_weekly?": [],
+      "/metrics/release_followup_workload?": [],
       "/meta": [{ request_types: [], onderwerpen: [], priorities: [], assignees: [], organizations: [] }],
     });
 
@@ -200,6 +209,7 @@ describe("dashboard hooks", () => {
     expect(result.current.incidentResolutionWeekly).toEqual([]);
     expect(result.current.firstResponseWeekly).toEqual([]);
     expect(result.current.ttfrOverdueWeekly).toEqual([]);
+    expect(result.current.releaseFollowupWorkload).toEqual([]);
     expect(result.current.p90).toEqual([]);
   });
 
