@@ -25,6 +25,7 @@ export const TYPE_COLORS = {
 
 export const CARD_TITLES = {
   volume: "Aantal tickets per week",
+  releaseWorkload: "Workload na release",
   onderwerp: "Onderwerp logging",
   priority: "Tickets per priority",
   assignee: "Tickets per assignee",
@@ -36,7 +37,7 @@ export const CARD_TITLES = {
   vacationServicedesk: "Vakantie Servicedesk",
 };
 
-export const KPI_KEYS = ["totalTickets", "latestTickets", "releaseWednesdayWorkload", "ttfrOverdue", "topType", "topSubject", "topPartner"];
+export const KPI_KEYS = ["totalTickets", "latestTickets", "currentWeekFlow", "releaseWednesdayWorkload", "ttfrOverdue", "topType", "topSubject", "topPartner"];
 export const NON_KPI_CARD_KEYS = ["topOnderwerpen", ...Object.keys(CARD_TITLES)];
 export const MAX_CARDS_PER_ROW = 5;
 export const MAX_KPI_TILES = 8;
@@ -47,7 +48,7 @@ export function createDefaultDashboardLayout() {
     hiddenKpis: [],
     cardRows: [
       ["topOnderwerpen", "volume", "assignee", "priority", "organizationWeekly"],
-      ["incidentResolution", "onderwerp", "inflowVsClosed", "vacationServicedesk"],
+      ["incidentResolution", "onderwerp", "inflowVsClosed", "releaseWorkload", "vacationServicedesk"],
     ],
     hiddenCards: ["p90", "firstResponseAll"],
     expandedByRow: [null, "onderwerp"],

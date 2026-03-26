@@ -19,6 +19,8 @@ describe("dashboard-constants", () => {
     expect(MAX_KPI_TILES).toBe(8);
     expect(KPI_KEYS).toContain("ttfrOverdue");
     expect(KPI_KEYS).toContain("releaseWednesdayWorkload");
+    expect(KPI_KEYS).toContain("currentWeekFlow");
+    expect(CARD_TITLES.releaseWorkload).toContain("release");
     expect(KPI_KEYS).not.toContain("avgPerWeek");
   });
 

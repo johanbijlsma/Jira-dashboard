@@ -95,7 +95,8 @@ describe("dashboard hooks", () => {
       "/metrics/time_to_resolution_weekly_by_type?": [{ request_type: "Incident", week: "2026-01-05", avg_hours: 7 }],
       "/metrics/time_to_first_response_weekly?": [{ week: "2026-01-05", avg_hours: 1 }],
       "/metrics/ttfr_overdue_weekly?": [{ week: "2026-01-05", overdue: 2 }],
-      "/metrics/release_followup_workload?": [[{ release_date: "2026-01-13", followup_date: "2026-01-14", tickets: 4 }]],
+      "/metrics/release_followup_workload?": [[{ release_date: "2026-01-13", followup_date: "2026-01-14", tickets: 4, issue_keys: ["SD-1"] }]],
+      "/metrics/current_week_flow?": { current_received: 8, previous_received: 5, current_closed: 3, previous_closed: 2 },
       "/metrics/leadtime_p90_by_type?": [{ request_type: "Incident", p90_hours: 12 }],
       "/meta": [
         { request_types: ["Incident"], onderwerpen: ["Email"], priorities: ["High"], assignees: ["A"], organizations: ["Org"] },
@@ -126,11 +127,13 @@ describe("dashboard hooks", () => {
     expect(metricCall).toContain("servicedesk_only=true");
     const releaseCall = global.fetch.mock.calls.find(([url]) => String(url).includes("/metrics/release_followup_workload?"))[0];
     expect(releaseCall).toContain("anchor_iso=");
+    expect(releaseCall).toContain("date_from=2026-01-01");
     await waitFor(() =>
       expect(result.current.releaseFollowupWorkload).toEqual([
-        { release_date: "2026-01-13", followup_date: "2026-01-14", tickets: 4 },
+        { release_date: "2026-01-13", followup_date: "2026-01-14", tickets: 4, issue_keys: ["SD-1"] },
       ])
     );
+    expect(result.current.currentWeekFlow).toEqual({ current_received: 8, previous_received: 5, current_closed: 3, previous_closed: 2 });
 
     const ttrCall = global.fetch.mock.calls.find(([url]) =>
       String(url).includes("/metrics/time_to_resolution_weekly_by_type?")
@@ -156,6 +159,7 @@ describe("dashboard hooks", () => {
       "/metrics/time_to_first_response_weekly?": [],
       "/metrics/ttfr_overdue_weekly?": [],
       "/metrics/release_followup_workload?": [],
+      "/metrics/current_week_flow?": { current_received: 0, previous_received: 0, current_closed: 0, previous_closed: 0 },
       "/meta": [{ request_types: [], onderwerpen: [], priorities: [], assignees: [], organizations: [] }],
     });
 
@@ -210,6 +214,7 @@ describe("dashboard hooks", () => {
     expect(result.current.firstResponseWeekly).toEqual([]);
     expect(result.current.ttfrOverdueWeekly).toEqual([]);
     expect(result.current.releaseFollowupWorkload).toEqual([]);
+    expect(result.current.currentWeekFlow).toBeNull();
     expect(result.current.p90).toEqual([]);
   });
 

@@ -108,6 +108,13 @@ AI_INSIGHT_DOWNVOTE_REASONS = [
     "onduidelijke formulering",
     "actie niet beïnvloedbaar",
 ]
+RELEASE_ANCHOR_ISO = os.environ.get("RELEASE_ANCHOR_ISO", "2026-01-27T16:00:00Z").strip()
+RELEASE_INTERVAL_DAYS = max(1, int(os.environ.get("RELEASE_INTERVAL_DAYS", "14")))
+RELEASE_SPRINT_BOARD_NAME = os.environ.get("RELEASE_SPRINT_BOARD_NAME", "GEN board").strip()
+RELEASE_MANUAL_DATES_RAW = os.environ.get(
+    "RELEASE_MANUAL_DATES",
+    "2026-01-13,2026-01-30,2026-02-24,2026-03-10,2026-03-24",
+).strip()
 
 # Prefer POSTGRES_* and fall back to DB_* for backward compatibility.
 PG_HOST = os.environ.get("POSTGRES_HOST") or os.environ.get("DB_HOST") or "localhost"
@@ -607,6 +614,30 @@ def ensure_schema():  # pragma: no cover
             );
             """
         )
+        cur.execute(
+            """
+            create table if not exists release_workload_snapshots (
+              release_date date primary key,
+              followup_date date not null unique,
+              issue_keys text[] not null default '{}',
+              ticket_count integer not null default 0,
+              refreshed_at timestamptz not null default now()
+            );
+            """
+        )
+        cur.execute(
+            """
+            create table if not exists release_calendar (
+              sprint_id bigint primary key,
+              board_id bigint not null,
+              sprint_name text not null,
+              sprint_start_date date not null,
+              release_date date not null,
+              followup_date date not null unique,
+              refreshed_at timestamptz not null default now()
+            );
+            """
+        )
         cur.execute("insert into sync_state(id, last_sync) values (1, null) on conflict (id) do nothing;")
         cur.execute("alter table issues add column if not exists request_type text;")
         cur.execute("alter table issues add column if not exists issue_summary text;")
@@ -706,6 +737,8 @@ def ensure_schema():  # pragma: no cover
         cur.execute("update alert_logs set status_key = coalesce(status, ''), meta_key = coalesce(meta, '') where status_key = '' and meta_key = '';")
         cur.execute("create index if not exists alert_logs_detected_at_idx on alert_logs(detected_at desc);")
         cur.execute("create index if not exists alert_logs_scope_detected_at_idx on alert_logs(servicedesk_only, detected_at desc, id desc);")
+        cur.execute("create index if not exists release_workload_snapshots_followup_idx on release_workload_snapshots(followup_date desc);")
+        cur.execute("create index if not exists release_calendar_followup_idx on release_calendar(followup_date desc);")
         cur.execute("drop index if exists alert_logs_daily_dedupe_idx;")
         cur.execute(
             """
@@ -1531,6 +1564,132 @@ def _parse_iso_datetime_or_raise(value: str, field_name: str) -> datetime:
     return parsed
 
 
+def _parse_optional_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return _parse_iso_datetime_or_raise(str(value), "datetime")
+    except ValueError:
+        return parse_jira_datetime(str(value))
+
+
+def _manual_release_dates() -> List[date]:
+    values = []
+    seen = set()
+    for raw in str(RELEASE_MANUAL_DATES_RAW or "").split(","):
+        value = raw.strip()
+        if not value:
+            continue
+        parsed = _parse_iso_date_or_raise(value, "RELEASE_MANUAL_DATES")
+        if parsed in seen:
+            continue
+        seen.add(parsed)
+        values.append(parsed)
+    return sorted(values)
+
+
+def _manual_release_calendar_rows() -> List[Dict[str, Any]]:
+    rows = []
+    for idx, release_date in enumerate(_manual_release_dates(), start=1):
+        followup_date = release_date + timedelta(days=1)
+        rows.append(
+            {
+                "sprint_id": -idx,
+                "board_id": 0,
+                "sprint_name": f"Release {release_date.isoformat()}",
+                "sprint_start_date": followup_date,
+                "release_date": release_date,
+                "followup_date": followup_date,
+            }
+        )
+    return rows
+
+
+def _resolve_release_sprint_board_id() -> Optional[int]:
+    start_at = 0
+    while True:
+        data = jira_agile_get("/rest/agile/1.0/board", params={"startAt": start_at, "maxResults": 50})
+        values = data.get("values") or []
+        for board in values:
+            if str(board.get("name") or "").strip().lower() == RELEASE_SPRINT_BOARD_NAME.lower():
+                try:
+                    return int(board["id"])
+                except Exception:
+                    return None
+        if data.get("isLast") or not values:
+            return None
+        start_at += len(values)
+
+
+def _fetch_release_calendar_rows() -> List[Dict[str, Any]]:
+    manual_rows = _manual_release_calendar_rows()
+    if manual_rows:
+        return manual_rows
+
+    board_id = _resolve_release_sprint_board_id()
+    if not board_id:
+        return []
+
+    sprint_rows: List[Dict[str, Any]] = []
+    start_at = 0
+    while True:
+        data = jira_agile_get(
+            f"/rest/agile/1.0/board/{board_id}/sprint",
+            params={"state": "active,future,closed", "startAt": start_at, "maxResults": 50},
+        )
+        values = data.get("values") or []
+        for sprint in values:
+            sprint_start = _parse_optional_iso_datetime(sprint.get("startDate"))
+            if sprint_start is None:
+                continue
+            sprint_start_local = sprint_start.astimezone(REPORT_TIMEZONE).date()
+            sprint_rows.append(
+                {
+                    "sprint_id": int(sprint.get("id")),
+                    "board_id": int(board_id),
+                    "sprint_name": str(sprint.get("name") or f"Sprint {sprint.get('id')}"),
+                    "sprint_start_date": sprint_start_local,
+                    "release_date": sprint_start_local - timedelta(days=1),
+                    "followup_date": sprint_start_local,
+                }
+            )
+        if data.get("isLast") or not values:
+            break
+        start_at += len(values)
+    return sorted(sprint_rows, key=lambda row: (row["followup_date"], row["sprint_id"]))
+
+
+def _refresh_release_calendar(cur):
+    rows = _fetch_release_calendar_rows()
+    cur.execute("delete from release_calendar;")
+    if not rows:
+        return
+    execute_values(
+        cur,
+        """
+        insert into release_calendar (
+          sprint_id,
+          board_id,
+          sprint_name,
+          sprint_start_date,
+          release_date,
+          followup_date
+        ) values %s
+        """,
+        [
+            (
+                row["sprint_id"],
+                row["board_id"],
+                row["sprint_name"],
+                row["sprint_start_date"],
+                row["release_date"],
+                row["followup_date"],
+            )
+            for row in rows
+        ],
+    )
+
+
 def _release_followup_dates(
     *,
     anchor_iso: str,
@@ -1563,6 +1722,158 @@ def _release_followup_dates(
         )
         followup_date = followup_date + timedelta(days=cadence_days)
     return rows
+
+
+def _refresh_release_workload_snapshots(cur):
+    cur.execute("select release_date, followup_date from release_calendar order by followup_date;")
+    release_rows = cur.fetchall()
+    if not release_rows:
+        cur.execute("delete from release_workload_snapshots;")
+        return
+    target_dates = [row[1] for row in release_rows]
+
+    cur.execute(
+        """
+        select
+          (created_at at time zone 'Europe/Amsterdam')::date as local_date,
+          array_agg(issue_key order by issue_key) as issue_keys
+        from issues
+        where created_at is not null
+          and (created_at at time zone 'Europe/Amsterdam')::date = any(%s::date[])
+        group by 1
+        order by 1;
+        """,
+        (target_dates,),
+    )
+    issue_keys_by_date = {
+        row[0]: [str(issue_key) for issue_key in (row[1] or []) if issue_key]
+        for row in cur.fetchall()
+    }
+    snapshot_rows = [
+        (
+            row[0],
+            row[1],
+            issue_keys_by_date.get(row[1], []),
+            len(issue_keys_by_date.get(row[1], [])),
+        )
+        for row in release_rows
+    ]
+    cur.execute("delete from release_workload_snapshots;")
+    if snapshot_rows:
+        execute_values(
+            cur,
+            """
+            insert into release_workload_snapshots (
+              release_date,
+              followup_date,
+              issue_keys,
+              ticket_count
+            ) values %s
+            """,
+            snapshot_rows,
+        )
+
+
+def _ensure_release_workload_snapshots_ready():
+    ensure_schema()
+    with conn() as c, c.cursor() as cur:
+        cur.execute("select count(*) from release_calendar;")
+        release_calendar_count = int((cur.fetchone() or [0])[0] or 0)
+        if release_calendar_count == 0:
+            _refresh_release_calendar(cur)
+            cur.execute("select count(*) from release_calendar;")
+            release_calendar_count = int((cur.fetchone() or [0])[0] or 0)
+        cur.execute(
+            """
+            select
+              coalesce(max(refreshed_at), timestamptz 'epoch'),
+              (select max(updated_at) from issues)
+            from release_workload_snapshots;
+            """
+        )
+        refreshed_at, latest_issue_update = cur.fetchone() or (None, None)
+        needs_refresh = latest_issue_update is not None and (
+            refreshed_at is None or refreshed_at < latest_issue_update
+        )
+        if needs_refresh or release_calendar_count == 0:
+            _refresh_release_workload_snapshots(cur)
+            c.commit()
+
+
+def _release_workload_rows_from_snapshots(
+    *,
+    date_from: str,
+    date_to: str,
+    request_type: Optional[str] = None,
+    onderwerp: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee: Optional[str] = None,
+    organization: Optional[str] = None,
+    servicedesk_only: bool = False,
+) -> List[Dict[str, Any]]:
+    _ensure_release_workload_snapshots_ready()
+    filter_sql, filter_params = issue_metrics_filter_sql(
+        request_type=request_type,
+        onderwerp=onderwerp,
+        priority=priority,
+        assignee=assignee,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+        alias="i",
+    )
+    q = compose_sql_query(
+        """
+        select
+          s.release_date,
+          s.followup_date,
+          count(distinct i.issue_key) as tickets,
+          coalesce(
+            array_agg(distinct i.issue_key order by i.issue_key) filter (where i.issue_key is not null),
+            array[]::text[]
+          ) as issue_keys
+        from release_workload_snapshots s
+        left join lateral unnest(s.issue_keys) as snapshot_issue(issue_key) on true
+        left join issues i
+          on i.issue_key = snapshot_issue.issue_key
+         and {filter_sql}
+        where s.followup_date >= %s::date
+          and s.followup_date <= %s::date
+        group by s.release_date, s.followup_date
+        order by s.followup_date;
+        """,
+        filter_sql=filter_sql,
+    )
+    with conn() as c, c.cursor() as cur:
+        cur.execute(q, (*filter_params, date_from, date_to))
+        rows = cur.fetchall()
+    return [
+        {
+            "release_date": row[0].isoformat(),
+            "followup_date": row[1].isoformat(),
+            "tickets": int(row[2] or 0),
+            "issue_keys": [str(issue_key) for issue_key in (row[3] or []) if issue_key],
+        }
+        for row in rows
+    ]
+
+
+def _local_week_comparison_windows(now_dt: Optional[datetime] = None) -> Dict[str, datetime]:
+    now_local = (now_dt or datetime.now(timezone.utc)).astimezone(REPORT_TIMEZONE)
+    current_week_start = now_local - timedelta(
+        days=now_local.weekday(),
+        hours=now_local.hour,
+        minutes=now_local.minute,
+        seconds=now_local.second,
+        microseconds=now_local.microsecond,
+    )
+    previous_week_start = current_week_start - timedelta(days=7)
+    previous_cutoff = previous_week_start + (now_local - current_week_start)
+    return {
+        "current_week_start": current_week_start,
+        "current_cutoff": now_local,
+        "previous_week_start": previous_week_start,
+        "previous_cutoff": previous_cutoff,
+    }
 
 
 def _validate_vacation_payload(payload: VacationPayload):
@@ -1822,6 +2133,16 @@ def jira_search(jql: str, max_results: int = 100, next_page_token: Optional[str]
         time.sleep(retry)
         return jira_search(jql, max_results=max_results, next_page_token=next_page_token)
 
+    r.raise_for_status()
+    return r.json()
+
+
+def jira_agile_get(path: str, params: Optional[Dict[str, Any]] = None):
+    r = _jira.get(f"{JIRA_BASE}{path}", params=params or {}, timeout=60)
+    if r.status_code == 429:
+        retry = int(r.headers.get("Retry-After", "5"))
+        time.sleep(retry)
+        return jira_agile_get(path, params=params)
     r.raise_for_status()
     return r.json()
 
@@ -2393,6 +2714,11 @@ def run_sync_once(full: bool = False, trigger_type: str = "manual"):
             # Geen resultaten: houd last_sync gelijk om geen updates te missen
             set_ts_dt = last if last.tzinfo else last.replace(tzinfo=timezone.utc)
             set_ts = set_ts_dt.isoformat().replace("+00:00", "Z")
+
+        with conn() as c, c.cursor() as cur:
+            _refresh_release_calendar(cur)
+            _refresh_release_workload_snapshots(cur)
+            c.commit()
 
         _sync_last_result = {"upserts": total, "set_last_sync": set_ts}
         try:
@@ -3079,20 +3405,11 @@ def release_followup_workload(
     organization: Optional[str] = None,
     servicedesk_only: bool = False,
 ):
-    ensure_schema()
-    try:
-        followup_rows = _release_followup_dates(
-            anchor_iso=anchor_iso,
-            interval_days=interval_days,
-            date_from=date_from,
-            date_to=date_to,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if not followup_rows:
-        return []
-
-    filter_sql, filter_params = issue_metrics_filter_sql(
+    if anchor_iso != RELEASE_ANCHOR_ISO or int(interval_days or RELEASE_INTERVAL_DAYS) != RELEASE_INTERVAL_DAYS:
+        raise HTTPException(status_code=400, detail="Aangepaste releasecadans wordt momenteel niet ondersteund.")
+    return _release_workload_rows_from_snapshots(
+        date_from=date_from,
+        date_to=date_to,
         request_type=request_type,
         onderwerp=onderwerp,
         priority=priority,
@@ -3100,32 +3417,79 @@ def release_followup_workload(
         organization=organization,
         servicedesk_only=servicedesk_only,
     )
-    target_dates = [row["followup_date"] for row in followup_rows]
+
+
+@app.get("/metrics/current_week_flow")
+def current_week_flow(
+    request_type: Optional[str] = None,
+    onderwerp: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee: Optional[str] = None,
+    organization: Optional[str] = None,
+    servicedesk_only: bool = False,
+):
+    ensure_schema()
+    windows = _local_week_comparison_windows()
+    filter_sql, filter_params = issue_metrics_filter_sql(
+        request_type=request_type,
+        onderwerp=onderwerp,
+        priority=priority,
+        assignee=assignee,
+        organization=organization,
+        servicedesk_only=servicedesk_only,
+        alias="i",
+    )
     q = compose_sql_query(
         """
-    select
-      (created_at at time zone 'Europe/Amsterdam')::date as local_date,
-      count(*) as tickets
-    from issues
-    where (created_at at time zone 'Europe/Amsterdam')::date = any(%s::date[])
-      and {filter_sql}
-    group by 1
-    order by 1;
-    """,
+        select
+          count(*) filter (
+            where (i.created_at at time zone 'Europe/Amsterdam') >= %s::timestamp
+              and (i.created_at at time zone 'Europe/Amsterdam') < %s::timestamp
+          ) as current_received,
+          count(*) filter (
+            where (i.created_at at time zone 'Europe/Amsterdam') >= %s::timestamp
+              and (i.created_at at time zone 'Europe/Amsterdam') < %s::timestamp
+          ) as previous_received,
+          count(*) filter (
+            where i.resolved_at is not null
+              and (i.resolved_at at time zone 'Europe/Amsterdam') >= %s::timestamp
+              and (i.resolved_at at time zone 'Europe/Amsterdam') < %s::timestamp
+          ) as current_closed,
+          count(*) filter (
+            where i.resolved_at is not null
+              and (i.resolved_at at time zone 'Europe/Amsterdam') >= %s::timestamp
+              and (i.resolved_at at time zone 'Europe/Amsterdam') < %s::timestamp
+          ) as previous_closed
+        from issues i
+        where {filter_sql};
+        """,
         filter_sql=filter_sql,
     )
+    params = (
+        windows["current_week_start"].replace(tzinfo=None),
+        windows["current_cutoff"].replace(tzinfo=None),
+        windows["previous_week_start"].replace(tzinfo=None),
+        windows["previous_cutoff"].replace(tzinfo=None),
+        windows["current_week_start"].replace(tzinfo=None),
+        windows["current_cutoff"].replace(tzinfo=None),
+        windows["previous_week_start"].replace(tzinfo=None),
+        windows["previous_cutoff"].replace(tzinfo=None),
+        *filter_params,
+    )
     with conn() as c, c.cursor() as cur:
-        cur.execute(q, (target_dates, *filter_params))
-        counts = {row[0]: int(row[1] or 0) for row in cur.fetchall()}
+        cur.execute(q, params)
+        row = cur.fetchone() or (0, 0, 0, 0)
 
-    return [
-        {
-            "release_date": row["release_date"].isoformat(),
-            "followup_date": row["followup_date"].isoformat(),
-            "tickets": int(counts.get(row["followup_date"], 0)),
-        }
-        for row in followup_rows
-    ]
+    return {
+        "current_received": int(row[0] or 0),
+        "previous_received": int(row[1] or 0),
+        "current_closed": int(row[2] or 0),
+        "previous_closed": int(row[3] or 0),
+        "current_week_start": windows["current_week_start"].isoformat(),
+        "current_cutoff": windows["current_cutoff"].isoformat(),
+        "previous_week_start": windows["previous_week_start"].isoformat(),
+        "previous_cutoff": windows["previous_cutoff"].isoformat(),
+    }
 
 
 @app.get("/metrics/volume_by_priority")
@@ -3302,6 +3666,7 @@ def issues(
     organization: Optional[str] = None,
     servicedesk_only: bool = False,
     date_field: str = "created",
+    issue_keys: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
 ):
@@ -3312,6 +3677,7 @@ def issues(
 
     date_column = "resolved_at" if date_field_norm == "resolved" else "created_at"
     date_null_guard = "and resolved_at is not null" if date_field_norm == "resolved" else ""
+    issue_key_list = [key.strip() for key in str(issue_keys or "").split(",") if key.strip()] or None
     filter_sql, filter_params = issue_metrics_filter_sql(
         request_type=request_type,
         onderwerp=onderwerp,
@@ -3326,6 +3692,7 @@ def issues(
     from issues
     where {date_column} >= %s::timestamptz and {date_column} < (%s::timestamptz + interval '1 day')
       {date_null_guard}
+      and (%s::text[] is null or issue_key = any(%s::text[]))
       and {filter_sql}
     order by {date_column} desc
     limit %s offset %s;
@@ -3335,7 +3702,7 @@ def issues(
         filter_sql=filter_sql,
     )
     with conn() as c, c.cursor() as cur:
-        cur.execute(q, (date_from, date_to, *filter_params, limit, offset))
+        cur.execute(q, (date_from, date_to, issue_key_list, issue_key_list, *filter_params, limit, offset))
         rows = cur.fetchall()
 
     return [
