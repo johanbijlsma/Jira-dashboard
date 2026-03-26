@@ -441,6 +441,7 @@ export default function Home() {
     ttfrOverdueWeekly,
     releaseFollowupWorkload,
     currentWeekFlow,
+    currentWeekFlowRefreshedAt,
     refreshDashboard,
   } = useDashboardData({
     dateFrom,
@@ -2153,6 +2154,11 @@ export default function Home() {
     const previousReleaseRow = effectiveLatestIndex > 0 ? releaseRows[effectiveLatestIndex - 1] : null;
     const releaseTrend = trendInfo(latestReleaseRow?.tickets, previousReleaseRow?.tickets);
     const currentFlow = currentWeekFlow || {};
+    const currentWeekFlowRefreshedAtDate = currentWeekFlowRefreshedAt ? new Date(currentWeekFlowRefreshedAt) : null;
+    const currentWeekFlowRefreshedMinutes =
+      currentWeekFlowRefreshedAtDate && !Number.isNaN(currentWeekFlowRefreshedAtDate.getTime())
+        ? Math.max(0, Math.floor((Date.now() - currentWeekFlowRefreshedAtDate.getTime()) / 60000))
+        : null;
 
     return {
       totalTickets,
@@ -2188,11 +2194,30 @@ export default function Home() {
       currentWeekClosed: Number(currentFlow.current_closed) || 0,
       previousWeekReceived: Number(currentFlow.previous_received) || 0,
       previousWeekClosed: Number(currentFlow.previous_closed) || 0,
-      currentWeekCutoffLabel: currentFlow.current_cutoff ? fmtDateTime(currentFlow.current_cutoff) : "—",
+      currentWeekCutoffTimeLabel:
+        currentFlow.current_cutoff
+          ? new Intl.DateTimeFormat("nl-NL", {
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: false,
+              timeZone: AMSTERDAM_TIME_ZONE,
+            }).format(new Date(currentFlow.current_cutoff))
+          : "—",
+      currentWeekLiveUpdatedMinutes: currentWeekFlowRefreshedMinutes,
       periodLabel: fullWeekInfo.periodLabel,
       completeWeeksCount: fullWeekInfo.count,
     };
-  }, [series, weeks, onderwerpVolume, organizationVolume, fullWeekInfo, ttfrOverdueWeekly, releaseFollowupWorkload, currentWeekFlow]);
+  }, [
+    series,
+    weeks,
+    onderwerpVolume,
+    organizationVolume,
+    fullWeekInfo,
+    ttfrOverdueWeekly,
+    releaseFollowupWorkload,
+    currentWeekFlow,
+    currentWeekFlowRefreshedAt,
+  ]);
 
   const topOnderwerpRows = useMemo(() => {
     if (!fullWeekInfo.count) return [];
@@ -4219,8 +4244,12 @@ export default function Home() {
             </span>
           </span>
         ),
-        sub: `Nu: ${kpiStats.currentWeekCutoffLabel}`,
-        subSecondary: `Vorige week: ${num(kpiStats.previousWeekReceived)} ontvangen · ${num(kpiStats.previousWeekClosed)} gesloten`,
+        sub: `Vorige week: ${num(kpiStats.previousWeekReceived)} ontvangen · ${num(kpiStats.previousWeekClosed)} gesloten`,
+        subSecondary:
+          kpiStats.currentWeekLiveUpdatedMinutes == null
+            ? `Laatst bijgewerkt (${kpiStats.currentWeekCutoffTimeLabel})`
+            : `Laatst bijgewerkt ${kpiStats.currentWeekLiveUpdatedMinutes} min geleden (${kpiStats.currentWeekCutoffTimeLabel})`,
+        subSecondaryStyle: { whiteSpace: "nowrap" },
         badge: "Live",
       },
       releaseWednesdayWorkload: {
@@ -5077,7 +5106,11 @@ export default function Home() {
               </div>
               <div style={{ ...kpiValueStyle, ...(tile.valueStyle || null), fontSize: key === "topType" || key === "topSubject" ? 20 : 20 }}>{tile.value}</div>
               <div style={kpiSubStyle}>{tile.sub}</div>
-              {tile.subSecondary ? <div style={{ ...kpiSubStyle, marginTop: 2, fontSize: 11 }}>{tile.subSecondary}</div> : null}
+              {tile.subSecondary ? (
+                <div style={{ ...kpiSubStyle, marginTop: 2, fontSize: 11, ...(tile.subSecondaryStyle || null) }}>
+                  {tile.subSecondary}
+                </div>
+              ) : null}
             </div>
           );
         }) : (
