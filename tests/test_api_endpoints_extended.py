@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from fastapi.testclient import TestClient
 import psycopg2
@@ -526,10 +526,14 @@ def test_metrics_ttfr_overdue_weekly_maps_rows(monkeypatch):
 
 
 def test_metrics_release_followup_workload_maps_rows(monkeypatch):
-    cursor = _CursorStub(
-        fetchall_values=[[(date(2026, 3, 25), 7), (date(2026, 3, 11), 5)]]
+    monkeypatch.setattr(
+        api,
+        "_release_workload_rows_from_snapshots",
+        lambda **_kwargs: [
+            {"release_date": "2026-03-10", "followup_date": "2026-03-11", "tickets": 5, "issue_keys": ["SD-1"]},
+            {"release_date": "2026-03-24", "followup_date": "2026-03-25", "tickets": 7, "issue_keys": ["SD-2", "SD-3"]},
+        ],
     )
-    _patch_conn(monkeypatch, cursor)
 
     response = client.get(
         "/metrics/release_followup_workload?date_from=2026-03-01&date_to=2026-03-31"
@@ -538,14 +542,14 @@ def test_metrics_release_followup_workload_maps_rows(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == [
-        {"release_date": "2026-03-10", "followup_date": "2026-03-11", "tickets": 5},
-        {"release_date": "2026-03-24", "followup_date": "2026-03-25", "tickets": 7},
+        {"release_date": "2026-03-10", "followup_date": "2026-03-11", "tickets": 5, "issue_keys": ["SD-1"]},
+        {"release_date": "2026-03-24", "followup_date": "2026-03-25", "tickets": 7, "issue_keys": ["SD-2", "SD-3"]},
     ]
 
 
 def test_metrics_release_followup_workload_uses_shared_filter_params(monkeypatch):
-    cursor = _CursorStub(fetchall_values=[[]])
-    _patch_conn(monkeypatch, cursor)
+    captured = {}
+    monkeypatch.setattr(api, "_release_workload_rows_from_snapshots", lambda **kwargs: captured.setdefault("kwargs", kwargs) or [])
 
     response = client.get(
         "/metrics/release_followup_workload?date_from=2026-03-01&date_to=2026-03-31"
@@ -555,25 +559,37 @@ def test_metrics_release_followup_workload_uses_shared_filter_params(monkeypatch
     )
 
     assert response.status_code == 200
-    query, params = cursor.executed[0]
-    query = _query_text(query)
-    assert "at time zone 'Europe/Amsterdam'" in query
-    assert "request_type = %s" in query
-    assert "organizations @> array[%s]::text[]" in query
-    assert params == (
-        [date(2026, 3, 11), date(2026, 3, 25)],
-        "Incident",
-        "Incident",
-        "Email",
-        "Email",
-        "High",
-        "High",
-        "Alice",
-        "Alice",
-        "Org A",
-        "Org A",
-        True,
+    assert captured["kwargs"] == {
+        "date_from": "2026-03-01",
+        "date_to": "2026-03-31",
+        "request_type": "Incident",
+        "onderwerp": "Email",
+        "priority": "High",
+        "assignee": "Alice",
+        "organization": "Org A",
+        "servicedesk_only": True,
+    }
+
+
+def test_metrics_current_week_flow_maps_row(monkeypatch):
+    cursor = _CursorStub(fetchone_values=[(8, 5, 3, 2)])
+    _patch_conn(monkeypatch, cursor)
+    monkeypatch.setattr(
+        api,
+        "_local_week_comparison_windows",
+        lambda: {
+            "current_week_start": datetime(2026, 3, 23, 0, 0, tzinfo=timezone.utc),
+            "current_cutoff": datetime(2026, 3, 24, 15, 0, tzinfo=timezone.utc),
+            "previous_week_start": datetime(2026, 3, 16, 0, 0, tzinfo=timezone.utc),
+            "previous_cutoff": datetime(2026, 3, 17, 15, 0, tzinfo=timezone.utc),
+        },
     )
+
+    response = client.get("/metrics/current_week_flow")
+
+    assert response.status_code == 200
+    assert response.json()["current_received"] == 8
+    assert response.json()["previous_closed"] == 2
 
 
 def test_metrics_volume_by_priority_maps_rows(monkeypatch):

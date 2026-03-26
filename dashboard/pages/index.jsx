@@ -291,6 +291,11 @@ export default function Home() {
   const [selectedOnderwerp, setSelectedOnderwerp] = useState("");
   const [selectedDrillDateField, setSelectedDrillDateField] = useState("created");
   const [selectedDrillBasisLabel, setSelectedDrillBasisLabel] = useState("Binnengekomen");
+  const [selectedDrillTitle, setSelectedDrillTitle] = useState("");
+  const [selectedDrillMeta, setSelectedDrillMeta] = useState("");
+  const [selectedDrillDateFrom, setSelectedDrillDateFrom] = useState("");
+  const [selectedDrillDateTo, setSelectedDrillDateTo] = useState("");
+  const [selectedDrillIssueKeys, setSelectedDrillIssueKeys] = useState([]);
   const [drillIssues, setDrillIssues] = useState([]);
   const [drillLoading, setDrillLoading] = useState(false);
   const [drillOffset, setDrillOffset] = useState(0);
@@ -435,6 +440,7 @@ export default function Home() {
     firstResponseWeekly,
     ttfrOverdueWeekly,
     releaseFollowupWorkload,
+    currentWeekFlow,
     refreshDashboard,
   } = useDashboardData({
     dateFrom,
@@ -530,6 +536,11 @@ export default function Home() {
     setSelectedOnderwerp("");
     setSelectedDrillDateField("created");
     setSelectedDrillBasisLabel("Binnengekomen");
+    setSelectedDrillTitle("");
+    setSelectedDrillMeta("");
+    setSelectedDrillDateFrom("");
+    setSelectedDrillDateTo("");
+    setSelectedDrillIssueKeys([]);
     setDrillIssues([]);
     setDrillOffset(0);
     setDrillHasNext(false);
@@ -1923,6 +1934,24 @@ export default function Home() {
     };
   }, [incidentResolutionWeekly, weeks, weeklyLabels, meta.request_types, typeColor]);
 
+  const releaseWorkloadLineData = useMemo(() => {
+    const rows = Array.isArray(releaseFollowupWorkload) ? releaseFollowupWorkload : [];
+    return {
+      labels: rows.map((row) => fmtDate(row.release_date)),
+      datasets: [
+        {
+          label: "Tickets na release",
+          data: rows.map((row) => Number(row?.tickets) || 0),
+          tension: 0.2,
+          borderColor: "#0f766e",
+          backgroundColor: "#0f766e",
+          pointBackgroundColor: "#0f766e",
+          pointBorderColor: "#0f766e",
+        },
+      ],
+    };
+  }, [releaseFollowupWorkload]);
+
   const firstResponseLineData = useMemo(() => {
     const rows = Array.isArray(firstResponseWeekly) ? firstResponseWeekly : [];
     const labels = weeklyLabels(weeks);
@@ -2114,12 +2143,16 @@ export default function Home() {
     const holdLatestRelease =
       latestReleaseIndex >= 0
       && releaseRows[latestReleaseIndex]?.followup_date === amsterdamNow?.isoDate
-      && Number(amsterdamNow?.hour) < 12
+      && (
+        Number(amsterdamNow?.hour) < 8
+        || (Number(amsterdamNow?.hour) === 8 && Number(amsterdamNow?.minute) < 30)
+      )
       && releaseRows.length > 1;
     const effectiveLatestIndex = holdLatestRelease ? latestReleaseIndex - 1 : latestReleaseIndex;
     const latestReleaseRow = effectiveLatestIndex >= 0 ? releaseRows[effectiveLatestIndex] : null;
     const previousReleaseRow = effectiveLatestIndex > 0 ? releaseRows[effectiveLatestIndex - 1] : null;
     const releaseTrend = trendInfo(latestReleaseRow?.tickets, previousReleaseRow?.tickets);
+    const currentFlow = currentWeekFlow || {};
 
     return {
       totalTickets,
@@ -2141,6 +2174,7 @@ export default function Home() {
       ttfrOverdueWowPct,
       releaseWednesdayLatestTickets: Number(latestReleaseRow?.tickets) || 0,
       releaseWednesdayPreviousTickets: previousReleaseRow ? Number(previousReleaseRow?.tickets) || 0 : null,
+      releaseWednesdayLatestReleaseDate: latestReleaseRow?.release_date || "",
       releaseWednesdayLatestDateLabel: latestReleaseRow?.followup_date ? fmtDateWithWeekday(latestReleaseRow.followup_date) : "—",
       releaseWednesdayLatestReleaseLabel: latestReleaseRow?.release_date ? fmtDate(latestReleaseRow.release_date) : "—",
       releaseWednesdayPreviousDateLabel: previousReleaseRow?.followup_date ? fmtDateWithWeekday(previousReleaseRow.followup_date) : "—",
@@ -2148,10 +2182,17 @@ export default function Home() {
       releaseWednesdayTrendText: previousReleaseRow ? releaseTrend.text : "—",
       releaseWednesdayTrendSymbol: previousReleaseRow ? releaseTrend.symbol : "",
       releaseWednesdayTrendColor: previousReleaseRow ? releaseTrend.color : "var(--text-main)",
+      releaseWednesdayIssueKeys: Array.isArray(latestReleaseRow?.issue_keys) ? latestReleaseRow.issue_keys : [],
+      releaseWednesdayFollowupDate: latestReleaseRow?.followup_date || "",
+      currentWeekReceived: Number(currentFlow.current_received) || 0,
+      currentWeekClosed: Number(currentFlow.current_closed) || 0,
+      previousWeekReceived: Number(currentFlow.previous_received) || 0,
+      previousWeekClosed: Number(currentFlow.previous_closed) || 0,
+      currentWeekCutoffLabel: currentFlow.current_cutoff ? fmtDateTime(currentFlow.current_cutoff) : "—",
       periodLabel: fullWeekInfo.periodLabel,
       completeWeeksCount: fullWeekInfo.count,
     };
-  }, [series, weeks, onderwerpVolume, organizationVolume, fullWeekInfo, ttfrOverdueWeekly, releaseFollowupWorkload]);
+  }, [series, weeks, onderwerpVolume, organizationVolume, fullWeekInfo, ttfrOverdueWeekly, releaseFollowupWorkload, currentWeekFlow]);
 
   const topOnderwerpRows = useMemo(() => {
     if (!fullWeekInfo.count) return [];
@@ -2336,31 +2377,37 @@ export default function Home() {
     });
   }, [servicedeskTeamMembers]);
 
-  async function fetchDrilldown(
+  const fetchDrilldown = useCallback(async (
     weekStart,
     typeLabel,
     onderwerpLabel,
     offset = 0,
     options = {}
-  ) {
+  ) => {
     if (isLayoutEditing) return;
     setSidePanelMode("drilldown");
     const dateField = options?.dateField === "resolved" ? "resolved" : "created";
     const basisLabel = options?.basisLabel || (dateField === "resolved" ? "Afgesloten" : "Binnengekomen");
-    setSelectedWeek(weekStart);
+    const dateFrom = options?.dateFrom || weekStart;
+    const dateTo = options?.dateTo || addDaysIso(weekStart, 7);
+    const issueKeys = Array.isArray(options?.issueKeys) ? options.issueKeys.filter(Boolean) : [];
+    setSelectedWeek(weekStart || dateFrom);
     setSelectedType(typeLabel || "");
     setSelectedOnderwerp(onderwerpLabel || onderwerp || "");
     setSelectedDrillDateField(dateField);
     setSelectedDrillBasisLabel(basisLabel);
+    setSelectedDrillTitle(options?.title || "");
+    setSelectedDrillMeta(options?.meta || "");
+    setSelectedDrillDateFrom(dateFrom);
+    setSelectedDrillDateTo(dateTo);
+    setSelectedDrillIssueKeys(issueKeys);
     setDrillOffset(offset);
     setDrillLoading(true);
 
     try {
-      const weekEnd = addDaysIso(weekStart, 7);
-
       const params = new URLSearchParams({
-        date_from: weekStart,
-        date_to: weekEnd,
+        date_from: dateFrom,
+        date_to: dateTo,
         date_field: dateField,
         limit: String(DRILL_LIMIT),
         offset: String(offset),
@@ -2373,6 +2420,7 @@ export default function Home() {
       if (assignee) params.set("assignee", assignee);
       if (organization) params.set("organization", organization);
       if (servicedeskOnly) params.set("servicedesk_only", "true");
+      if (issueKeys.length) params.set("issue_keys", issueKeys.join(","));
 
       const res = await fetch(`${API}/issues?` + params.toString());
       const data = await res.json();
@@ -2381,7 +2429,34 @@ export default function Home() {
     } finally {
       setDrillLoading(false);
     }
-  }
+  }, [
+    DRILL_LIMIT,
+    assignee,
+    isLayoutEditing,
+    onderwerp,
+    organization,
+    priority,
+    servicedeskOnly,
+  ]);
+
+  const openReleaseWorkloadDrilldown = useCallback((row) => {
+    if (!row?.followup_date) return;
+    fetchDrilldown(
+      row.followup_date,
+      "",
+      "",
+      0,
+      {
+        dateField: "created",
+        basisLabel: "Na release",
+        dateFrom: row.followup_date,
+        dateTo: row.followup_date,
+        issueKeys: row.issue_keys || [],
+        title: `Release ${fmtDate(row.release_date)}`,
+        meta: `${num(row.tickets)} tickets op de woensdag na release`,
+      }
+    );
+  }, [fetchDrilldown]);
 
   const filterPanelStyle = {
     marginBottom: 12,
@@ -3666,6 +3741,56 @@ export default function Home() {
       );
     }
 
+    if (cardKey === "releaseWorkload") {
+      return (
+        <div style={bodyStyle}>
+          {hasDataPoints(releaseWorkloadLineData) ? (
+            <Line
+              data={releaseWorkloadLineData}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                  legend: { display: false },
+                  tooltip: {
+                    callbacks: {
+                      title: (items) => {
+                        const row = releaseFollowupWorkload[items?.[0]?.dataIndex || 0];
+                        return row ? `Release ${fmtDate(row.release_date)}` : "";
+                      },
+                      label: (ctx) => `${num(ctx.parsed.y)} tickets`,
+                    },
+                  },
+                  simpleDataLabels: { mode: "line", maxLabels: expanded ? 20 : 10 },
+                },
+                onClick: (_evt, elements) => {
+                  const el = elements?.[0];
+                  if (!el) return;
+                  const row = releaseFollowupWorkload[el.index];
+                  if (!row) return;
+                  openReleaseWorkloadDrilldown(row);
+                },
+                scales: {
+                  x: {
+                    ticks: { color: "var(--text-muted)" },
+                  },
+                  y: {
+                    title: { display: true, text: "Tickets", color: "var(--text-muted)" },
+                    ticks: {
+                      color: "var(--text-muted)",
+                      callback: (value) => num(value),
+                    },
+                  },
+                },
+              }}
+            />
+          ) : (
+            <EmptyChartState filterLabel="Release workload" style={emptyStyle} />
+          )}
+        </div>
+      );
+    }
+
     if (cardKey === "incidentResolution") {
       return (
         <div style={bodyStyle}>
@@ -4058,6 +4183,46 @@ export default function Home() {
         sub: `Week van ${kpiStats.lastCompletedWeekLabel} · WoW: ${pct(kpiStats.wowChangePct)}`,
         badge: "Periode: laatste week",
       },
+      currentWeekFlow: {
+        label: "Lopende week",
+        value: (
+          <span style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, width: "100%" }}>
+            <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", lineHeight: 1.2 }}>Ontvangen</span>
+              <span>
+                {num(kpiStats.currentWeekReceived)}{" "}
+                <span
+                  style={{
+                    fontSize: "0.7em",
+                    color: trendInfo(kpiStats.currentWeekReceived, kpiStats.previousWeekReceived).color,
+                    verticalAlign: "middle",
+                  }}
+                >
+                  {trendInfo(kpiStats.currentWeekReceived, kpiStats.previousWeekReceived).symbol}
+                </span>
+              </span>
+            </span>
+            <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", lineHeight: 1.2 }}>Gesloten</span>
+              <span>
+                {num(kpiStats.currentWeekClosed)}{" "}
+                <span
+                  style={{
+                    fontSize: "0.7em",
+                    color: trendInfo(kpiStats.currentWeekClosed, kpiStats.previousWeekClosed).color,
+                    verticalAlign: "middle",
+                  }}
+                >
+                  {trendInfo(kpiStats.currentWeekClosed, kpiStats.previousWeekClosed).symbol}
+                </span>
+              </span>
+            </span>
+          </span>
+        ),
+        sub: `Nu: ${kpiStats.currentWeekCutoffLabel}`,
+        subSecondary: `Vorige week: ${num(kpiStats.previousWeekReceived)} ontvangen · ${num(kpiStats.previousWeekClosed)} gesloten`,
+        badge: "Live",
+      },
       releaseWednesdayWorkload: {
         label: "Workload woensdag na release",
         value: kpiStats.releaseWednesdayTrendText === "—" ? "—" : `${kpiStats.releaseWednesdayTrendSymbol} ${kpiStats.releaseWednesdayTrendText}`.trim(),
@@ -4068,6 +4233,16 @@ export default function Home() {
             : `Vorige release (${kpiStats.releaseWednesdayPreviousReleaseLabel}): ${num(kpiStats.releaseWednesdayPreviousTickets)} tickets`,
         badge: "Release",
         valueStyle: { color: kpiStats.releaseWednesdayTrendColor },
+        onClick:
+          kpiStats.releaseWednesdayFollowupDate
+            ? () =>
+                openReleaseWorkloadDrilldown({
+                  release_date: kpiStats.releaseWednesdayLatestReleaseDate,
+                  followup_date: kpiStats.releaseWednesdayFollowupDate,
+                  tickets: kpiStats.releaseWednesdayLatestTickets,
+                  issue_keys: kpiStats.releaseWednesdayIssueKeys,
+                })
+            : null,
       },
       ttfrOverdue: {
         label: "TTFR verlopen (volledige weken)",
@@ -4102,7 +4277,7 @@ export default function Home() {
         ),
       },
     }),
-    [kpiStats]
+    [kpiStats, openReleaseWorkloadDrilldown]
   );
 
   const visibleKpiKeys = dashboardLayout.kpiRow;
@@ -4840,18 +5015,22 @@ export default function Home() {
           }
           const tile = kpiTiles[key];
           if (!tile) return null;
+          const isClickable = !isLayoutEditing && typeof tile.onClick === "function";
           return (
             <div
               key={key}
               style={{
                 ...kpiCardStyle,
-                cursor: isLayoutEditing ? "grab" : "default",
+                cursor: isLayoutEditing ? "grab" : isClickable ? "pointer" : "default",
                 transform: hintActive ? "scale(0.86)" : "scale(1)",
                 transformOrigin: "center center",
                 transition: "transform 170ms ease, opacity 170ms ease",
                 opacity: hintActive ? 0.94 : 1,
               }}
               draggable={isLayoutEditing}
+              onClick={() => {
+                if (isClickable) tile.onClick();
+              }}
               onDragStart={() => startDrag("kpi", key, { zone: "kpiRow" })}
               onDragEnd={clearDrag}
               onDragOver={(e) => {
@@ -5408,18 +5587,27 @@ export default function Home() {
               <>
                 <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Drilldown</div>
                 <div style={{ fontSize: 16 }}>
-                  Week vanaf <b>{fmtDate(selectedWeek)}</b>
-                  {" "}— basis: <b>{selectedDrillBasisLabel}</b>
-                  {selectedType ? (
+                  {selectedDrillTitle ? (
                     <>
-                      {" "}— type: <b style={{ color: typeColor(selectedType) }}>{selectedType}</b>
+                      <b>{selectedDrillTitle}</b>
+                      {selectedDrillMeta ? <> — {selectedDrillMeta}</> : null}
                     </>
-                  ) : null}
-                  {selectedOnderwerp ? (
+                  ) : (
                     <>
-                      {" "}— onderwerp: <b>{selectedOnderwerp}</b>
+                      Week vanaf <b>{fmtDate(selectedWeek)}</b>
+                      {" "}— basis: <b>{selectedDrillBasisLabel}</b>
+                      {selectedType ? (
+                        <>
+                          {" "}— type: <b style={{ color: typeColor(selectedType) }}>{selectedType}</b>
+                        </>
+                      ) : null}
+                      {selectedOnderwerp ? (
+                        <>
+                          {" "}— onderwerp: <b>{selectedOnderwerp}</b>
+                        </>
+                      ) : null}
                     </>
-                  ) : null}
+                  )}
                 </div>
               </>
             )}
@@ -5519,7 +5707,15 @@ export default function Home() {
                     selectedType,
                     selectedOnderwerp,
                     Math.max(0, drillOffset - DRILL_LIMIT),
-                    { dateField: selectedDrillDateField, basisLabel: selectedDrillBasisLabel }
+                    {
+                      dateField: selectedDrillDateField,
+                      basisLabel: selectedDrillBasisLabel,
+                      dateFrom: selectedDrillDateFrom,
+                      dateTo: selectedDrillDateTo,
+                      title: selectedDrillTitle,
+                      meta: selectedDrillMeta,
+                      issueKeys: selectedDrillIssueKeys,
+                    }
                   )
                 }
                 disabled={!selectedWeek || drillOffset === 0 || drillLoading}
@@ -5533,7 +5729,15 @@ export default function Home() {
                     selectedType,
                     selectedOnderwerp,
                     drillOffset + DRILL_LIMIT,
-                    { dateField: selectedDrillDateField, basisLabel: selectedDrillBasisLabel }
+                    {
+                      dateField: selectedDrillDateField,
+                      basisLabel: selectedDrillBasisLabel,
+                      dateFrom: selectedDrillDateFrom,
+                      dateTo: selectedDrillDateTo,
+                      title: selectedDrillTitle,
+                      meta: selectedDrillMeta,
+                      issueKeys: selectedDrillIssueKeys,
+                    }
                   )
                 }
                 disabled={!selectedWeek || !drillHasNext || drillLoading}

@@ -450,6 +450,76 @@ def test_jira_search_with_retry(monkeypatch):
     assert "summary" in calls[0]["fields"]
 
 
+def test_fetch_release_calendar_rows_uses_sprint_start(monkeypatch):
+    monkeypatch.setattr(api, "RELEASE_MANUAL_DATES_RAW", "")
+    monkeypatch.setattr(api, "_resolve_release_sprint_board_id", lambda: 12)
+    monkeypatch.setattr(
+        api,
+        "jira_agile_get",
+        lambda path, params=None: {
+            "values": [
+                {"id": 186, "name": "Sprint 186", "startDate": "2026-03-11T08:30:00.000+0100"},
+                {"id": 187, "name": "Sprint 187", "startDate": "2026-03-25T08:30:00.000+0100"},
+            ],
+            "isLast": True,
+        },
+    )
+
+    rows = api._fetch_release_calendar_rows()
+
+    assert rows == [
+        {
+            "sprint_id": 186,
+            "board_id": 12,
+            "sprint_name": "Sprint 186",
+            "sprint_start_date": date(2026, 3, 11),
+            "release_date": date(2026, 3, 10),
+            "followup_date": date(2026, 3, 11),
+        },
+        {
+            "sprint_id": 187,
+            "board_id": 12,
+            "sprint_name": "Sprint 187",
+            "sprint_start_date": date(2026, 3, 25),
+            "release_date": date(2026, 3, 24),
+            "followup_date": date(2026, 3, 25),
+        },
+    ]
+
+
+def test_manual_release_calendar_rows_take_precedence(monkeypatch):
+    monkeypatch.setattr(api, "RELEASE_MANUAL_DATES_RAW", "2026-01-13,2026-01-30,2026-02-24")
+
+    rows = api._fetch_release_calendar_rows()
+
+    assert rows == [
+        {
+            "sprint_id": -1,
+            "board_id": 0,
+            "sprint_name": "Release 2026-01-13",
+            "sprint_start_date": date(2026, 1, 14),
+            "release_date": date(2026, 1, 13),
+            "followup_date": date(2026, 1, 14),
+        },
+        {
+            "sprint_id": -2,
+            "board_id": 0,
+            "sprint_name": "Release 2026-01-30",
+            "sprint_start_date": date(2026, 1, 31),
+            "release_date": date(2026, 1, 30),
+            "followup_date": date(2026, 1, 31),
+        },
+        {
+            "sprint_id": -3,
+            "board_id": 0,
+            "sprint_name": "Release 2026-02-24",
+            "sprint_start_date": date(2026, 2, 25),
+            "release_date": date(2026, 2, 24),
+            "followup_date": date(2026, 2, 25),
+        },
+    ]
+
+
 def test_jira_existing_issue_keys_paths(monkeypatch):
     api._issue_existence_cache.clear()
     assert api._jira_existing_issue_keys([]) == set()
@@ -523,6 +593,9 @@ def test_run_sync_once_branches(monkeypatch):
     monkeypatch.setattr(api, "upsert_issues", lambda batch: upsert_calls.append(len(batch)))
     set_last_sync_calls = []
     monkeypatch.setattr(api, "set_last_sync", lambda ts: set_last_sync_calls.append(ts))
+    monkeypatch.setattr(api, "_refresh_release_calendar", lambda cur: None)
+    monkeypatch.setattr(api, "_refresh_release_workload_snapshots", lambda cur: None)
+    patch_conn(monkeypatch, CursorStub())
     complete_calls = []
     monkeypatch.setattr(api, "complete_sync_run_success", lambda rid, upserts, ts: complete_calls.append((rid, upserts, ts)))
     monkeypatch.setattr(api, "complete_sync_run_error", lambda rid, err: complete_calls.append(("err", rid, err)))
@@ -555,6 +628,7 @@ def test_run_sync_once_error_path(monkeypatch):
     monkeypatch.setattr(api, "ensure_schema", lambda: None)
     monkeypatch.setattr(api, "create_sync_run", lambda mode, trigger_type="manual": 22)
     monkeypatch.setattr(api, "get_last_sync", lambda: None)
+    monkeypatch.setattr(api, "_refresh_release_workload_snapshots", lambda cur: None)
     monkeypatch.setattr(api, "jira_search", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
     error_calls = []
     monkeypatch.setattr(api, "complete_sync_run_error", lambda rid, err: error_calls.append((rid, err)))
@@ -676,6 +750,8 @@ def test_issues_endpoint_uses_shared_filter_params(monkeypatch):
     assert params == (
         "2026-01-01",
         "2026-02-28",
+        None,
+        None,
         "Incident",
         "Incident",
         "Koppelingen",
@@ -690,6 +766,23 @@ def test_issues_endpoint_uses_shared_filter_params(monkeypatch):
         5,
         2,
     )
+
+
+def test_issues_endpoint_filters_issue_keys(monkeypatch):
+    now = datetime(2026, 2, 25, 10, 0, 0)
+    cursor = CursorStub(fetchall_values=[[("SD-10", "Incident", "Koppelingen", now, now, "P1", "Johan", "Open")]])
+    patch_conn(monkeypatch, cursor)
+
+    response = client.get(
+        "/issues?date_from=2026-01-01&date_to=2026-02-28&issue_keys=SD-10,SD-11&limit=5&offset=0"
+    )
+
+    assert response.status_code == 200
+    query, params = cursor.executed[0]
+    query = _query_text(query)
+    assert "issue_key = any(%s::text[])" in query
+    assert params[2] == ["SD-10", "SD-11"]
+    assert params[3] == ["SD-10", "SD-11"]
 
 
 def test_alerts_overdue_query_only_uses_open_issues(monkeypatch):

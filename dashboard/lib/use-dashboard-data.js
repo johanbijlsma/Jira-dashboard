@@ -47,6 +47,7 @@ export function useDashboardData({
   const [firstResponseWeekly, setFirstResponseWeekly] = useState([]);
   const [ttfrOverdueWeekly, setTtfrOverdueWeekly] = useState([]);
   const [releaseFollowupWorkload, setReleaseFollowupWorkload] = useState([]);
+  const [currentWeekFlow, setCurrentWeekFlow] = useState(null);
 
   const buildMetricParams = useCallback(() => {
     const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
@@ -68,6 +69,21 @@ export function useDashboardData({
     if (servicedeskOnly) params.set("servicedesk_only", "true");
     return params;
   }, [p90Period.dateFrom, p90Period.dateTo, onderwerp, priority, assignee, organization, servicedeskOnly]);
+
+  const buildReleaseWorkloadParams = useCallback(() => {
+    const currentYear = new Date().getFullYear();
+    const params = new URLSearchParams({
+      date_from: `${currentYear}-01-01`,
+      date_to: dateTo,
+    });
+    if (requestType) params.set("request_type", requestType);
+    if (onderwerp) params.set("onderwerp", onderwerp);
+    if (priority) params.set("priority", priority);
+    if (assignee) params.set("assignee", assignee);
+    if (organization) params.set("organization", organization);
+    if (servicedeskOnly) params.set("servicedesk_only", "true");
+    return params;
+  }, [dateTo, requestType, onderwerp, priority, assignee, organization, servicedeskOnly]);
 
   const refreshMetrics = useCallback(() => {
     const params = buildMetricParams();
@@ -97,12 +113,16 @@ export function useDashboardData({
       setArrayState(setIncidentResolutionWeekly)
     ).catch(() => setIncidentResolutionWeekly([]));
 
-    const releaseParams = new URLSearchParams(params);
+    const releaseParams = buildReleaseWorkloadParams();
     releaseParams.set("anchor_iso", process.env.NEXT_PUBLIC_RELEASE_ANCHOR_ISO || "2026-01-27T16:00:00Z");
     releaseParams.set("interval_days", "14");
     fetchJson(`${API}/metrics/release_followup_workload?` + releaseParams.toString())
       .then(setArrayState(setReleaseFollowupWorkload))
       .catch(() => setReleaseFollowupWorkload([]));
+
+    fetchJson(`${API}/metrics/current_week_flow?` + params.toString())
+      .then(setCurrentWeekFlow)
+      .catch(() => setCurrentWeekFlow(null));
 
     if (!p90Period.hasData) {
       setP90([]);
@@ -114,6 +134,7 @@ export function useDashboardData({
   }, [
     buildMetricParams,
     buildP90Params,
+    buildReleaseWorkloadParams,
     p90Period.hasData,
     setIncidentResolutionWeekly,
     setP90,
@@ -148,6 +169,7 @@ export function useDashboardData({
     firstResponseWeekly,
     ttfrOverdueWeekly,
     releaseFollowupWorkload,
+    currentWeekFlow,
     refreshDashboard,
   };
 }

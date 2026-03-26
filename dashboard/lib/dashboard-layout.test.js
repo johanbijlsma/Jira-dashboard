@@ -15,11 +15,11 @@ import { createDefaultDashboardLayout } from "./dashboard-constants";
 describe("dashboard-layout", () => {
   it("ships the customized default layout", () => {
     expect(createDefaultDashboardLayout()).toEqual({
-      kpiRow: ["totalTickets", "latestTickets", "releaseWednesdayWorkload", "ttfrOverdue", "topType", "topSubject", "topPartner"],
+      kpiRow: ["totalTickets", "latestTickets", "currentWeekFlow", "releaseWednesdayWorkload", "ttfrOverdue", "topType", "topSubject", "topPartner"],
       hiddenKpis: [],
       cardRows: [
         ["topOnderwerpen", "volume", "assignee", "priority", "organizationWeekly"],
-        ["incidentResolution", "onderwerp", "inflowVsClosed", "vacationServicedesk"],
+        ["incidentResolution", "onderwerp", "inflowVsClosed", "releaseWorkload", "vacationServicedesk"],
       ],
       hiddenCards: ["p90", "firstResponseAll"],
       expandedByRow: [null, "onderwerp"],
