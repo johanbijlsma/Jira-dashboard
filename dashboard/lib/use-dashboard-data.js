@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
 import { API } from "./dashboard-constants";
+import { usePageVisibility } from "./use-page-visibility";
+
+const CURRENT_WEEK_FLOW_VISIBLE_POLL_MS = Math.max(
+  15000,
+  (Number(process.env.NEXT_PUBLIC_CURRENT_WEEK_FLOW_POLL_SECONDS) || 30) * 1000
+);
+const CURRENT_WEEK_FLOW_HIDDEN_POLL_MS = Math.max(
+  CURRENT_WEEK_FLOW_VISIBLE_POLL_MS,
+  (Number(process.env.NEXT_PUBLIC_CURRENT_WEEK_FLOW_HIDDEN_POLL_SECONDS) || 120) * 1000
+);
 
 const DEFAULT_META = {
   request_types: [],
@@ -35,6 +45,7 @@ export function useDashboardData({
   servicedeskOnly,
   p90Period,
 }) {
+  const isPageVisible = usePageVisibility();
   const [meta, setMeta] = useState(DEFAULT_META);
   const [volume, setVolume] = useState([]);
   const [onderwerpVolume, setOnderwerpVolume] = useState([]);
@@ -48,6 +59,7 @@ export function useDashboardData({
   const [ttfrOverdueWeekly, setTtfrOverdueWeekly] = useState([]);
   const [releaseFollowupWorkload, setReleaseFollowupWorkload] = useState([]);
   const [currentWeekFlow, setCurrentWeekFlow] = useState(null);
+  const [currentWeekFlowRefreshedAt, setCurrentWeekFlowRefreshedAt] = useState("");
 
   const buildMetricParams = useCallback(() => {
     const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
@@ -85,6 +97,20 @@ export function useDashboardData({
     return params;
   }, [dateTo, requestType, onderwerp, priority, assignee, organization, servicedeskOnly]);
 
+  const refreshCurrentWeekFlow = useCallback(() => {
+    const params = buildMetricParams();
+    return fetchJson(`${API}/metrics/current_week_flow?` + params.toString())
+      .then((data) => {
+        setCurrentWeekFlow(data);
+        setCurrentWeekFlowRefreshedAt(new Date().toISOString());
+        return data;
+      })
+      .catch(() => {
+        setCurrentWeekFlow(null);
+        return null;
+      });
+  }, [buildMetricParams]);
+
   const refreshMetrics = useCallback(() => {
     const params = buildMetricParams();
     const metricRequests = [
@@ -120,9 +146,7 @@ export function useDashboardData({
       .then(setArrayState(setReleaseFollowupWorkload))
       .catch(() => setReleaseFollowupWorkload([]));
 
-    fetchJson(`${API}/metrics/current_week_flow?` + params.toString())
-      .then(setCurrentWeekFlow)
-      .catch(() => setCurrentWeekFlow(null));
+    refreshCurrentWeekFlow();
 
     if (!p90Period.hasData) {
       setP90([]);
@@ -136,6 +160,7 @@ export function useDashboardData({
     buildP90Params,
     buildReleaseWorkloadParams,
     p90Period.hasData,
+    refreshCurrentWeekFlow,
     setIncidentResolutionWeekly,
     setP90,
   ]);
@@ -156,6 +181,13 @@ export function useDashboardData({
     return () => window.clearTimeout(timer);
   }, [refreshMetrics]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      refreshCurrentWeekFlow();
+    }, isPageVisible ? CURRENT_WEEK_FLOW_VISIBLE_POLL_MS : CURRENT_WEEK_FLOW_HIDDEN_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [isPageVisible, refreshCurrentWeekFlow]);
+
   return {
     meta,
     volume,
@@ -170,6 +202,7 @@ export function useDashboardData({
     ttfrOverdueWeekly,
     releaseFollowupWorkload,
     currentWeekFlow,
+    currentWeekFlowRefreshedAt,
     refreshDashboard,
   };
 }

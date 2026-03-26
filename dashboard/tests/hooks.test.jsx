@@ -85,6 +85,7 @@ describe("dashboard hooks", () => {
   });
 
   it("loads dashboard data, normalizes arrays, and refreshes meta", async () => {
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
     global.fetch = createFetchMock({
       "/metrics/volume_weekly?": [{ week: "2026-01-05", request_type: "Incident", tickets: 5 }],
       "/metrics/volume_weekly_by_onderwerp?": [{ onderwerp: "Email", tickets: 3 }],
@@ -128,6 +129,7 @@ describe("dashboard hooks", () => {
     const releaseCall = global.fetch.mock.calls.find(([url]) => String(url).includes("/metrics/release_followup_workload?"))[0];
     expect(releaseCall).toContain("anchor_iso=");
     expect(releaseCall).toContain("date_from=2026-01-01");
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 30000);
     await waitFor(() =>
       expect(result.current.releaseFollowupWorkload).toEqual([
         { release_date: "2026-01-13", followup_date: "2026-01-14", tickets: 4, issue_keys: ["SD-1"] },
@@ -145,6 +147,66 @@ describe("dashboard hooks", () => {
     });
 
     await waitFor(() => expect(result.current.meta.request_types).toEqual(["Incident", "Service"]));
+  });
+
+  it("polls current week flow faster when visible and slower when hidden", async () => {
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+
+    global.fetch = createFetchMock({
+      "/metrics/volume_weekly?": [],
+      "/metrics/volume_weekly_by_onderwerp?": [],
+      "/metrics/volume_by_priority?": [],
+      "/metrics/volume_by_assignee?": [],
+      "/metrics/volume_weekly_by_organization?": [],
+      "/metrics/inflow_vs_closed_weekly?": [],
+      "/metrics/time_to_resolution_weekly_by_type?": [],
+      "/metrics/time_to_first_response_weekly?": [],
+      "/metrics/ttfr_overdue_weekly?": [],
+      "/metrics/release_followup_workload?": [],
+      "/metrics/current_week_flow?": [
+        { current_received: 2, previous_received: 1, current_closed: 1, previous_closed: 0 },
+        { current_received: 3, previous_received: 2, current_closed: 1, previous_closed: 1 },
+      ],
+      "/meta": [{ request_types: [], onderwerpen: [], priorities: [], assignees: [], organizations: [] }],
+    });
+
+    const { result } = renderHook(() =>
+      useDashboardData({
+        dateFrom: "2026-01-01",
+        dateTo: "2026-01-31",
+        requestType: "",
+        onderwerp: "",
+        priority: "",
+        assignee: "",
+        organization: "",
+        servicedeskOnly: false,
+        p90Period: { hasData: false, dateFrom: null, dateTo: null },
+      })
+    );
+
+    await waitFor(() => expect(result.current.currentWeekFlow).toEqual({
+      current_received: 2,
+      previous_received: 1,
+      current_closed: 1,
+      previous_closed: 0,
+    }));
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 120000);
+
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    await waitFor(() => {
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 30000);
+    });
   });
 
   it("skips p90 fetch when no full-week period is available", async () => {
