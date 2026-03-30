@@ -36,7 +36,7 @@ describe("Status page", () => {
     await waitFor(() =>
       expect(screen.getByText("Er loopt al een synchronisatie. Status wordt live bijgewerkt.")).toBeInTheDocument()
     );
-    expect(global.fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/status");
+    expect(global.fetch).toHaveBeenCalledWith("/api/status");
   });
 
   it("starts incremental sync from button and shows feedback", async () => {
@@ -65,7 +65,7 @@ describe("Status page", () => {
     const clickableStartButton = startButtons.find((btn) => !btn.hasAttribute("disabled")) || startButtons[0];
     fireEvent.click(clickableStartButton);
 
-    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/sync", { method: "POST" }));
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith("/api/sync", { method: "POST" }));
     await waitFor(() => expect(screen.getByText("Sync is gestart.")).toBeInTheDocument());
   });
 
@@ -81,7 +81,7 @@ describe("Status page", () => {
 
     render(<StatusPage />);
     await waitFor(() => expect(global.fetch).toHaveBeenCalled());
-    expect(global.fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/status");
+    expect(global.fetch).toHaveBeenCalledWith("/api/status");
     await waitFor(() => expect(intervalSpy).toHaveBeenCalled());
     expect(intervalSpy).toHaveBeenCalledWith(expect.any(Function), 3000);
   });
@@ -113,7 +113,7 @@ describe("Status page", () => {
     });
 
     render(<StatusPage />);
-    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/status"));
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith("/api/status"));
     await waitFor(() => expect(intervalSpy).toHaveBeenCalled());
     expect(intervalSpy).toHaveBeenCalledWith(expect.any(Function), 60000);
   });
@@ -157,7 +157,7 @@ describe("Status page", () => {
     fireEvent.click(button);
 
     await waitFor(() =>
-      expect(global.fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/sync/full", { method: "POST" })
+      expect(global.fetch).toHaveBeenCalledWith("/api/sync/full", { method: "POST" })
     );
     await waitFor(() => expect(screen.getByText("Full sync is gestart.")).toBeInTheDocument());
   });
@@ -279,7 +279,7 @@ describe("Status page", () => {
 
     await waitFor(() =>
       expect(global.fetch).toHaveBeenCalledWith(
-        "http://127.0.0.1:8000/dev/alerts/clear?issue_key=SD-11079",
+        "/api/dev/alerts/clear?issue_key=SD-11079",
         { method: "POST" }
       )
     );
@@ -325,10 +325,10 @@ describe("Status page", () => {
     fireEvent.click(triggerButton);
 
     await waitFor(() =>
-      expect(global.fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/dev/alerts/trigger", { method: "POST" })
+      expect(global.fetch).toHaveBeenCalledWith("/api/dev/alerts/trigger", { method: "POST" })
     );
     await waitFor(() =>
-      expect(global.fetch).toHaveBeenCalledWith("http://127.0.0.1:8000/alerts/live?servicedesk_only=true")
+      expect(global.fetch).toHaveBeenCalledWith("/api/alerts/live?servicedesk_only=true")
     );
     await waitFor(() => expect(screen.getByText("Test alert is gezet.")).toBeInTheDocument());
   });
