@@ -1,9 +1,8 @@
 import Link from "next/link";
 import Head from "next/head";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { API } from "../lib/dashboard-constants";
 import { usePageVisibility } from "../lib/use-page-visibility";
-
-const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
 
 function fmtDateTime(value) {
   if (!value) return "—";

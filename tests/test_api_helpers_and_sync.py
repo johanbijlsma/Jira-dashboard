@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta, timezone
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -141,6 +142,136 @@ def test_issue_metrics_filter_sql_supports_alias_and_custom_org_condition():
         "Org B",
         False,
     )
+
+
+def test_backend_cors_origin_regex_allows_tailscale_hosts():
+    pattern = re.compile(api.BACKEND_CORS_ORIGIN_REGEX)
+
+    assert pattern.match("http://johans-macbook-air.tail920595.ts.net:3000")
+    assert pattern.match("http://100.108.229.18:3000")
+    assert not pattern.match("http://example.com:3000")
+
+
+def test_insight_metric_payload_prefixes_filters_with_and(monkeypatch):
+    cursor = CursorStub(fetchall_values=[[], [], [], [], []])
+    patch_conn(monkeypatch, cursor)
+
+    api._insight_metric_payload(
+        date_from="2026-03-02",
+        date_to="2026-03-30",
+        request_type=None,
+        onderwerp=None,
+        priority=None,
+        assignee=None,
+        organization=None,
+        servicedesk_only=True,
+    )
+
+    executed_sql = [_query_text(query) for query, _ in cursor.executed]
+
+    assert any("and (%s is null or request_type = %s)" in query for query in executed_sql)
+    assert any("and (%s is null or onderwerp_logging = %s)" in query for query in executed_sql)
+    assert all("\n              (%" not in query for query in executed_sql)
+
+
+def test_get_ai_insights_persists_candidates_and_commits(monkeypatch):
+    cursor = CursorStub()
+    connection = ConnStub(cursor)
+
+    monkeypatch.setattr(api, "conn", lambda: connection)
+    monkeypatch.setattr(api, "get_servicedesk_config", lambda: {"ai_insight_threshold_pct": 88})
+    monkeypatch.setattr(api, "_insight_metric_payload", lambda **kwargs: {"inflow_vs_closed": []})
+    monkeypatch.setattr(api, "_create_ai_insight_candidates", lambda metrics: [{"title": "Check volume"}])
+    monkeypatch.setattr(api, "_cleanup_ai_insights", lambda cur: None)
+    monkeypatch.setattr(
+        api,
+        "_persist_ai_insights",
+        lambda cur, scope_key, candidates, threshold_pct: [
+            {"scope_key": scope_key, "threshold_pct": threshold_pct, "count": len(candidates)}
+        ],
+    )
+
+    payload = api.get_ai_insights(
+        date_from="2026-03-02",
+        date_to="2026-03-30",
+        request_type="Incident",
+        onderwerp="Email",
+        priority="High",
+        assignee="Johan",
+        organization="Org A",
+        servicedesk_only=True,
+    )
+
+    assert payload == {
+        "threshold_pct": 88,
+        "max_active": api.MAX_ACTIVE_AI_INSIGHTS,
+        "ttl_hours": api.AI_INSIGHT_TTL_HOURS,
+        "items": [
+            {
+                "scope_key": "2026-03-02|2026-03-30|Incident|Email|High|Johan|Org A|1",
+                "threshold_pct": 88,
+                "count": 1,
+            }
+        ],
+    }
+    assert connection.committed is True
+
+
+def test_startup_auto_sync_scheduler_only_starts_once(monkeypatch):
+    started = []
+
+    class ThreadStub:
+        def __init__(self, *, target, daemon, name):
+            self.target = target
+            self.daemon = daemon
+            self.name = name
+
+        def start(self):
+            started.append((self.target, self.daemon, self.name))
+
+    monkeypatch.setattr(api, "AUTO_SYNC_ENABLED", True)
+    monkeypatch.setattr(api, "_auto_sync_scheduler_started", False)
+    monkeypatch.setattr(api.threading, "Thread", ThreadStub)
+
+    api._startup_auto_sync_scheduler()
+    api._startup_auto_sync_scheduler()
+
+    assert started == [(api._run_auto_sync_scheduler, True, "auto-sync-scheduler")]
+    assert api._auto_sync_scheduler_started is True
+    monkeypatch.setattr(api, "_auto_sync_scheduler_started", False)
+
+
+def test_insights_live_delegates_to_get_ai_insights(monkeypatch):
+    captured = {}
+
+    def fake_get_ai_insights(**kwargs):
+        captured.update(kwargs)
+        return {"items": []}
+
+    monkeypatch.setattr(api, "get_ai_insights", fake_get_ai_insights)
+
+    payload = api.insights_live(
+        date_from="2026-03-02",
+        date_to="2026-03-30",
+        request_type="Incident",
+        onderwerp="Email",
+        priority="High",
+        assignee="Johan",
+        organization="Org A",
+        servicedesk_only=True,
+    )
+
+    assert payload == {"items": []}
+    assert captured == {
+        "date_from": "2026-03-02",
+        "date_to": "2026-03-30",
+        "request_type": "Incident",
+        "onderwerp": "Email",
+        "priority": "High",
+        "assignee": "Johan",
+        "organization": "Org A",
+        "servicedesk_only": True,
+    }
 
 
 def test_weekly_insights_payload_uses_onderwerp_based_servicedesk_scope(monkeypatch):

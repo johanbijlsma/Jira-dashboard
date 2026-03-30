@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  API,
   CARD_TITLES,
   KPI_KEYS,
   MAX_CARDS_PER_ROW,
@@ -12,6 +13,7 @@ import {
 
 describe("dashboard-constants", () => {
   it("exposes expected base constants", () => {
+    expect(API).toContain("127.0.0.1:8000");
     expect(TYPE_COLORS.incident).toBeTruthy();
     expect(CARD_TITLES.volume).toContain("tickets");
     expect(VACATION_TEAM_MEMBERS.length).toBeGreaterThan(0);
