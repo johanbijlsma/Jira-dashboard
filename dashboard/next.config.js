@@ -1,3 +1,5 @@
+const backendInternalBase = (process.env.BACKEND_INTERNAL_BASE || "http://127.0.0.1:8000").replace(/\/+$/, "");
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   allowedDevOrigins: [
@@ -22,6 +24,14 @@ const nextConfig = {
     "http://[::1]",
     "http://[::1]:3000",
   ],
+  async rewrites() {
+    return [
+      {
+        source: "/api/:path*",
+        destination: `${backendInternalBase}/:path*`,
+      },
+    ];
+  },
 };
 
 module.exports = nextConfig;

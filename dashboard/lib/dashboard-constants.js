@@ -1,5 +1,5 @@
-const DEFAULT_API = "http://127.0.0.1:8000";
-const LOCAL_DEV_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+const DEFAULT_API = "/api";
+const LOCAL_API_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
 function trimTrailingSlash(value) {
   return String(value || "").replace(/\/+$/, "");
@@ -7,16 +7,9 @@ function trimTrailingSlash(value) {
 
 function resolveApiBase() {
   const configured = trimTrailingSlash(process.env.NEXT_PUBLIC_API_BASE || DEFAULT_API);
-  if (typeof window === "undefined") return configured;
-
-  const browserHost = window.location.hostname;
-  if (!browserHost || LOCAL_DEV_HOSTS.has(browserHost)) return configured;
-
   try {
     const parsed = new URL(configured);
-    if (!LOCAL_DEV_HOSTS.has(parsed.hostname)) return configured;
-    parsed.hostname = browserHost;
-    parsed.protocol = window.location.protocol;
+    if (LOCAL_API_HOSTS.has(parsed.hostname)) return DEFAULT_API;
     return trimTrailingSlash(parsed.toString());
   } catch {
     return configured;
