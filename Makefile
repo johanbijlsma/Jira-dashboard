@@ -1,5 +1,6 @@
-.PHONY: sync sync-full dev-api dev-api-no-reload dev-frontend dev-check \
-	prod-api prod-frontend prod-build prod-check db-check \
+.PHONY: sync sync-full dev-api dev-api-no-reload dev-frontend dev-frontend-network dev-check \
+	serve-local \
+	prod-api prod-frontend prod-frontend-network prod-build prod-check db-check \
 	install-hooks test-api test-dashboard test semgrep-local
 
 sync:
@@ -16,16 +17,26 @@ dev-api-no-reload:
 
 dev-frontend:
 	test -x dashboard/node_modules/.bin/next || npm --prefix dashboard ci
-	npm --prefix dashboard run dev
+	npm --prefix dashboard run dev -- -H 127.0.0.1 -p 3000
+
+dev-frontend-network:
+	test -x dashboard/node_modules/.bin/next || npm --prefix dashboard ci
+	npm --prefix dashboard run dev -- -H 0.0.0.0 -p 3000
 
 dev-check:
 	curl -sS http://127.0.0.1:8000/status
+
+serve-local: prod-build
+	./scripts/serve-local.sh
 
 prod-api:
 	uvicorn api:app --host 0.0.0.0 --port 8000
 
 prod-frontend: prod-build
-	npm --prefix dashboard run start
+	npm --prefix dashboard run start -- -H 127.0.0.1 -p 3000
+
+prod-frontend-network: prod-build
+	npm --prefix dashboard run start -- -H 0.0.0.0 -p 3000
 
 prod-build:
 	npm --prefix dashboard ci

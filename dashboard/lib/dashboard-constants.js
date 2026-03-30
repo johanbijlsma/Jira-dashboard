@@ -1,4 +1,29 @@
-export const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+const DEFAULT_API = "http://127.0.0.1:8000";
+const LOCAL_DEV_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+function trimTrailingSlash(value) {
+  return String(value || "").replace(/\/+$/, "");
+}
+
+function resolveApiBase() {
+  const configured = trimTrailingSlash(process.env.NEXT_PUBLIC_API_BASE || DEFAULT_API);
+  if (typeof window === "undefined") return configured;
+
+  const browserHost = window.location.hostname;
+  if (!browserHost || LOCAL_DEV_HOSTS.has(browserHost)) return configured;
+
+  try {
+    const parsed = new URL(configured);
+    if (!LOCAL_DEV_HOSTS.has(parsed.hostname)) return configured;
+    parsed.hostname = browserHost;
+    parsed.protocol = window.location.protocol;
+    return trimTrailingSlash(parsed.toString());
+  } catch {
+    return configured;
+  }
+}
+
+export const API = resolveApiBase();
 export const JIRA_BASE = "https://planningsagenda.atlassian.net";
 // Default to a known Tuesday release at 17:00 Amsterdam time so the marker splits office hours from after-hours.
 export const RELEASE_ANCHOR_ISO = process.env.NEXT_PUBLIC_RELEASE_ANCHOR_ISO || "2026-01-27T16:00:00Z";

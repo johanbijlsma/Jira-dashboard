@@ -68,6 +68,10 @@ CORS_ORIGINS_RAW = os.environ.get(
     "BACKEND_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
 )
 BACKEND_CORS_ORIGINS = [x.strip() for x in CORS_ORIGINS_RAW.split(",") if x.strip()]
+BACKEND_CORS_ORIGIN_REGEX = os.environ.get(
+    "BACKEND_CORS_ORIGIN_REGEX",
+    r"^https?://(?:[a-z0-9-]+\.)*ts\.net(?::\d+)?$|^https?://100\.(?:6[4-9]|[78]\d|9\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}(?::\d+)?$",
+)
 
 _jira = requests.Session()
 if JIRA_EMAIL and JIRA_TOKEN:
@@ -1035,7 +1039,7 @@ def _insight_weekly_rows(cur, *, field: str, alias: str, date_from: str, date_to
               and created_at < (%s::timestamptz + interval '1 day')
               and {field_sql} is not null
               and btrim({field_sql}) <> ''
-              {filters_sql}
+              and {filters_sql}
             group by 1, 2
             order by 1 asc, 3 desc, 2 asc;
             """,
@@ -1082,7 +1086,7 @@ def _insight_metric_payload(
             from issues
             where created_at >= %s::timestamptz
               and created_at < (%s::timestamptz + interval '1 day')
-              {filters_sql}
+              and {filters_sql}
             group by 1
             order by 1 asc;
             """,
@@ -1106,7 +1110,7 @@ def _insight_metric_payload(
               and first_response_due_at < now()
               and created_at >= %s::timestamptz
               and created_at < (%s::timestamptz + interval '1 day')
-              {filters_sql}
+              and {filters_sql}
             group by 1
             order by 1 asc;
             """,
@@ -1137,7 +1141,7 @@ def _insight_metric_payload(
               and resolved_at is not null
               and resolved_at >= created_at
               and lower(coalesce(request_type, '')) = 'incident'
-              {filters_sql}
+              and {filters_sql}
             group by 1
             order by 1 asc;
             """,
@@ -1180,7 +1184,7 @@ def _insight_metric_payload(
               and i.created_at < (%s::timestamptz + interval '1 day')
               and org.org_name is not null
               and btrim(org.org_name) <> ''
-              {filters_sql}
+              and {filters_sql}
             group by 1, 2
             order by 1 asc, 3 desc, 2 asc;
             """,
@@ -2748,6 +2752,7 @@ app = FastAPI(title="JSM Analytics API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=BACKEND_CORS_ORIGINS,
+    allow_origin_regex=BACKEND_CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
