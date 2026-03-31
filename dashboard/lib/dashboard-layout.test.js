@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   hideCardLayout,
   hideKpiLayout,
+  mapAiInsightsToCardSlots,
   moveCardToRowLayout,
   moveKpiToVisibleLayout,
   normalizeDashboardLayout,
@@ -98,5 +99,35 @@ describe("dashboard-layout", () => {
       "x",
       "__DROP_HINT__",
     ]);
+  });
+
+  it("keeps AI insights on their target card when that slot is eligible", () => {
+    const result = mapAiInsightsToCardSlots(
+      [{ id: 1, target_card_key: "priority", feedback_status: "pending", removed_at: null }],
+      [["topOnderwerpen", "volume", "priority"]],
+      ["volume"]
+    );
+    expect(Array.from(result.entries())).toEqual([["priority", { id: 1, target_card_key: "priority", feedback_status: "pending", removed_at: null }]]);
+  });
+
+  it("falls back to the first unlocked visible card when target slot is locked or hidden", () => {
+    const result = mapAiInsightsToCardSlots(
+      [{ id: 1, target_card_key: "organizationWeekly", feedback_status: "pending", removed_at: null }],
+      [["topOnderwerpen", "volume", "assignee", "organizationWeekly"]],
+      ["volume", "organizationWeekly"]
+    );
+    expect(Array.from(result.keys())).toEqual(["topOnderwerpen"]);
+  });
+
+  it("assigns multiple AI insights across the next free replaceable card slots", () => {
+    const result = mapAiInsightsToCardSlots(
+      [
+        { id: 1, target_card_key: "organizationWeekly", feedback_status: "pending", removed_at: null },
+        { id: 2, target_card_key: "firstResponseAll", feedback_status: "pending", removed_at: null },
+      ],
+      [["topOnderwerpen", "volume", "assignee", "priority", "organizationWeekly"]],
+      ["volume", "organizationWeekly"]
+    );
+    expect(Array.from(result.keys())).toEqual(["topOnderwerpen", "assignee"]);
   });
 });

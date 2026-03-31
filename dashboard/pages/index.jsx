@@ -56,6 +56,7 @@ import { useVacationsData } from "../lib/use-vacations-data";
 import {
   hideCardLayout,
   hideKpiLayout,
+  mapAiInsightsToCardSlots,
   moveCardToRowLayout,
   moveKpiToVisibleLayout,
   normalizeDashboardLayout as normalizeDashboardLayoutState,
@@ -217,6 +218,12 @@ function formatDurationHoursForTooltip(value) {
   return `${hours.toFixed(1)} uur`;
 }
 
+function resolveCssVarColor(name, fallback) {
+  if (typeof window === "undefined" || typeof document === "undefined") return fallback;
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
+}
+
 export default function Home() {
   const today = useMemo(() => new Date(), []);
   const defaultFrom = useMemo(() => {
@@ -308,6 +315,7 @@ export default function Home() {
   const [insightFeedbackBusyId, setInsightFeedbackBusyId] = useState(null);
   const [pendingInsightDownvoteId, setPendingInsightDownvoteId] = useState(null);
   const [pendingInsightReason, setPendingInsightReason] = useState(AI_INSIGHT_DOWNVOTE_REASONS[0]);
+  const [insightRefreshBusy, setInsightRefreshBusy] = useState(false);
   const [ttrAlertsCollapsed, setTtrAlertsCollapsed] = useState(false);
   const drillPanelRef = useRef(null);
   const drillCloseRef = useRef(null);
@@ -332,6 +340,7 @@ export default function Home() {
   const [cardDropHint, setCardDropHint] = useState(null);
   const [kpiDropHint, setKpiDropHint] = useState(null);
   const [hiddenDropTarget, setHiddenDropTarget] = useState(null);
+  const chartTextSubtle = resolveCssVarColor("--text-subtle", "#cbd5e1");
 
   const normalizeDashboardLayout = useCallback((input) => normalizeDashboardLayoutState(input), []);
 
@@ -3228,6 +3237,16 @@ export default function Home() {
     setExpandedInsightIds((prev) => ({ ...prev, [insightId]: !prev[insightId] }));
   }, []);
 
+  const refreshInsightsPanel = useCallback(async () => {
+    setInsightRefreshBusy(true);
+    try {
+      await refreshLiveInsights();
+      await refreshInsightLog();
+    } finally {
+      setInsightRefreshBusy(false);
+    }
+  }, [refreshInsightLog, refreshLiveInsights]);
+
   const handleInsightFeedback = useCallback(async (insightId, vote, reason = null) => {
     if (!insightId) return;
     setInsightFeedbackBusyId(insightId);
@@ -3248,11 +3267,129 @@ export default function Home() {
     }
   }, [flashToast, refreshInsightLog, submitInsightFeedback]);
 
+  function formatAiInsightHero(insight) {
+    const payload = insight?.source_payload || {};
+    const current = payload.current || {};
+    const previous = payload.previous || {};
+    const label = String(payload.label || "").trim();
+    const comparisonLabel = String(payload.comparison_label || "").trim();
+    const monthLabel = (value) => {
+      if (!value) return "";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "";
+      return new Intl.DateTimeFormat("nl-NL", { month: "long", timeZone: "Europe/Amsterdam" }).format(date);
+    };
+    const currentMonth = monthLabel(current.month_start);
+    const previousMonth = monthLabel(previous.month_start);
+
+    if (insight?.kind === "onderwerp_spike") {
+      return {
+        eyebrow: comparisonLabel || "Onderwerp stijgt",
+        headline: label || "Onderwerp",
+        valueLine: previousMonth && currentMonth
+          ? `van ${previous.tickets ?? "?"} in ${previousMonth} naar ${current.tickets ?? "?"} in ${currentMonth}`
+          : `${previous.tickets ?? "?"} -> ${current.tickets ?? "?"} tickets`,
+        supporting: "Onderwerpvolume laat een duidelijke stijging zien",
+      };
+    }
+    if (insight?.kind === "organization_spike") {
+      return {
+        eyebrow: comparisonLabel || "Partner stijgt",
+        headline: label || "Partner",
+        valueLine: previousMonth && currentMonth
+          ? `van ${previous.tickets ?? "?"} in ${previousMonth} naar ${current.tickets ?? "?"} in ${currentMonth}`
+          : `${previous.tickets ?? "?"} -> ${current.tickets ?? "?"} tickets`,
+        supporting: "Partnervolume laat een duidelijke stijging zien",
+      };
+    }
+    if (insight?.kind === "backlog_pressure") {
+      const prevDelta = Number(previous.inflow || 0) - Number(previous.closed || 0);
+      const currentDelta = Number(current.inflow || 0) - Number(current.closed || 0);
+      return {
+        eyebrow: "Backlogdruk stijgt",
+        headline: `${prevDelta} -> ${currentDelta}`,
+        valueLine: "Netto backlogdelta per week",
+        supporting: `${previous.inflow ?? "?"}/${previous.closed ?? "?"} naar ${current.inflow ?? "?"}/${current.closed ?? "?"} inkomend/afgesloten`,
+      };
+    }
+    if (insight?.kind === "priority1_year_trend") {
+      return {
+        eyebrow: comparisonLabel || "12 maanden trend",
+        headline: "Priority 1",
+        valueLine: `van ${previous.tickets ?? "?"} naar ${current.tickets ?? "?"} tickets`,
+        supporting: "Jaartrend laat zwaardere servicedeskdruk zien",
+      };
+    }
+    if (insight?.kind === "ttfr_overdue_spike") {
+      return {
+        eyebrow: "TTFR-verzuim stijgt",
+        headline: `${previous.overdue ?? "?"} -> ${current.overdue ?? "?"}`,
+        valueLine: "Open tickets over first response SLA",
+        supporting: "Meer tickets wachten te lang op eerste respons",
+      };
+    }
+    if (insight?.kind === "incident_ttr_rise") {
+      const previousHours = Number(previous.avg_hours);
+      const currentHours = Number(current.avg_hours);
+      return {
+        eyebrow: "Incident-TTR stijgt",
+        headline: `${Number.isFinite(previousHours) ? previousHours.toFixed(1) : "?"}u -> ${Number.isFinite(currentHours) ? currentHours.toFixed(1) : "?"}u`,
+        valueLine: "Gemiddelde oplostijd incidenten",
+        supporting: "Incidenten doen langer over afhandeling dan vorige periode",
+      };
+    }
+
+    return {
+      eyebrow: "AI-signaal",
+      headline: insight?.title || "Nieuw signaal",
+      valueLine: insight?.summary || "",
+      supporting: "",
+    };
+  }
+
+  function getInsightPeriodHeaders(item) {
+    const current = item?.source_payload?.current || {};
+    const previous = item?.source_payload?.previous || {};
+
+    const monthLabel = (value) => {
+      if (!value) return null;
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return null;
+      return new Intl.DateTimeFormat("nl-NL", { month: "long", timeZone: "Europe/Amsterdam" }).format(date);
+    };
+
+    const weekLabel = (value) => {
+      if (!value) return null;
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return null;
+      return fmtDate(date.toISOString().slice(0, 10));
+    };
+
+    if (current.window_months === 12 && previous.window_months === 12) {
+      return { currentLabel: "Laatste 12 maanden", previousLabel: "12 maanden daarvoor" };
+    }
+
+    const currentMonth = monthLabel(current.month_start);
+    const previousMonth = monthLabel(previous.month_start);
+    if (currentMonth && previousMonth) {
+      return { currentLabel: currentMonth, previousLabel: previousMonth };
+    }
+
+    const currentWeek = weekLabel(current.week_start);
+    const previousWeek = weekLabel(previous.week_start);
+    if (currentWeek && previousWeek) {
+      return { currentLabel: currentWeek, previousLabel: previousWeek };
+    }
+
+    return { currentLabel: "Huidig", previousLabel: "Vorig" };
+  }
+
   function renderAiInsightCard(originalCardKey, expanded = false) {
     const insight = aiInsightByCardKey.get(originalCardKey);
     if (!insight) return renderCardContent(originalCardKey, expanded);
 
     const pendingDownvote = pendingInsightDownvoteId === insight.id;
+    const hero = formatAiInsightHero(insight);
     const confidenceExplanation =
       insight.source_payload?.confidence?.confidence_explanation ||
       `Confidence score ${Math.round(insight.score_pct)}%. Dit is een interne relevantiescore op basis van afwijking ten opzichte van de vorige periode en bepaalt of een AI-card getoond wordt.`;
@@ -3260,10 +3397,10 @@ export default function Home() {
       <div
         style={{
           display: "grid",
-          gap: 12,
+          gap: 14,
           height: "100%",
           alignContent: "start",
-          gridTemplateRows: "auto auto auto auto minmax(0, 1fr) auto auto",
+          gridTemplateRows: "auto auto auto",
           minHeight: 0,
           position: "relative",
         }}
@@ -3271,15 +3408,16 @@ export default function Home() {
         <div
           style={{
             display: "grid",
-            gap: 8,
-            padding: expanded ? "18px 18px 14px" : "12px 12px 10px",
+            gap: expanded ? 14 : 12,
+            padding: expanded ? "18px 18px 16px" : "14px 14px 12px",
             borderRadius: 16,
             background:
-              "linear-gradient(145deg, color-mix(in srgb, #0f766e 18%, var(--surface)) 0%, color-mix(in srgb, #14b8a6 8%, var(--surface)) 100%)",
-            border: "1px solid color-mix(in srgb, #0f766e 30%, var(--border))",
+              "linear-gradient(160deg, color-mix(in srgb, #14b8a6 22%, var(--surface)) 0%, color-mix(in srgb, #0f766e 16%, var(--surface)) 48%, color-mix(in srgb, #2dd4bf 10%, var(--surface)) 100%)",
+            border: "1px solid color-mix(in srgb, #14b8a6 58%, var(--border))",
+            boxShadow: "0 10px 24px color-mix(in srgb, #0f766e 20%, transparent)",
           }}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start", marginBottom: expanded ? 6 : 4 }}>
             <span
               style={{
                 display: "inline-flex",
@@ -3288,9 +3426,9 @@ export default function Home() {
                 width: "fit-content",
                 padding: "5px 10px",
                 borderRadius: 999,
-                background: "rgba(255,255,255,0.72)",
+                background: "color-mix(in srgb, var(--surface) 82%, white)",
                 color: "#0f766e",
-                border: "1px solid color-mix(in srgb, #0f766e 26%, white)",
+                border: "1px solid color-mix(in srgb, #14b8a6 44%, var(--border))",
                 fontSize: 12,
                 fontWeight: 800,
                 letterSpacing: 0.2,
@@ -3298,7 +3436,7 @@ export default function Home() {
               title={confidenceExplanation}
             >
               AI Insight
-              <span style={{ color: "rgba(15, 23, 42, 0.68)" }}>{Math.round(insight.score_pct)}%</span>
+              <span style={{ color: "color-mix(in srgb, var(--text-main) 82%, transparent)" }}>{Math.round(insight.score_pct)}%</span>
               <span
                 aria-label="Confidence score uitleg"
                 title={confidenceExplanation}
@@ -3319,49 +3457,51 @@ export default function Home() {
                 i
               </span>
             </span>
-            <button type="button" onClick={() => openInsightLogPanel(String(insight.id))} style={filterOpenButtonStyle}>
-              Log
-            </button>
           </div>
-          <strong style={{ fontSize: expanded ? 24 : 18, lineHeight: 1.15, maxWidth: 560 }}>{insight.title}</strong>
-          <div style={{ color: "rgba(15, 23, 42, 0.78)", lineHeight: 1.45, fontSize: expanded ? 15 : 13 }}>{insight.summary}</div>
+          <div style={{ display: "grid", gap: expanded ? 8 : 6 }}>
+            <div
+              style={{
+                fontSize: expanded ? 13 : 11,
+                fontWeight: 800,
+                letterSpacing: 0.4,
+                textTransform: "uppercase",
+                color: "color-mix(in srgb, var(--text-main) 60%, transparent)",
+              }}
+            >
+              {hero.eyebrow}
+            </div>
+            <strong style={{ fontSize: expanded ? 34 : 28, lineHeight: 1.02, maxWidth: 560, letterSpacing: -0.5 }}>
+              {hero.headline}
+            </strong>
+            <div style={{ fontSize: expanded ? 20 : 17, lineHeight: 1.15, fontWeight: 800, color: "var(--text-main)" }}>{hero.valueLine}</div>
+            <div style={{ color: "color-mix(in srgb, var(--text-main) 74%, transparent)", lineHeight: 1.35, fontSize: expanded ? 15 : 13, fontWeight: 600 }}>
+              {hero.supporting}
+            </div>
+            {expanded ? <div style={{ color: "color-mix(in srgb, var(--text-main) 70%, transparent)", lineHeight: 1.4, fontSize: 14 }}>{insight.summary}</div> : null}
+          </div>
         </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <span style={fixedMetricBadgeStyle}>Vervangt: {cardTitleByKey(originalCardKey)}</span>
-          {insight.deviation_pct != null ? <span style={fixedMetricBadgeStyle}>Afwijking: {insight.deviation_pct > 0 ? "+" : ""}{insight.deviation_pct}%</span> : null}
-          <span style={fixedMetricBadgeStyle}>TTL: {aiInsightTtlHours} uur</span>
-        </div>
-        {insight.action_label ? (
+        {expanded ? (
           <div
-            style={{
-              padding: expanded ? "14px 16px" : "10px 12px",
-              borderRadius: 14,
-              background: "color-mix(in srgb, #f59e0b 10%, var(--surface))",
-              border: "1px solid color-mix(in srgb, #f59e0b 28%, var(--border))",
-              display: "grid",
-              gap: 4,
+              style={{
+                display: "grid",
+                gap: 8,
+                padding: "14px 16px",
+                borderRadius: 14,
+              background: "var(--surface-muted)",
+              border: "1px dashed color-mix(in srgb, #0f766e 28%, var(--border))",
             }}
           >
-            <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 700 }}>Aanbevolen actie</div>
-            <div style={{ fontWeight: 700 }}>{insight.action_label}</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 700 }}>Waarom deze kaart nu zichtbaar is</div>
+            <div style={{ color: "var(--text-muted)", lineHeight: 1.5 }}>
+              Deze AI-card heeft tijdelijk de standaardkaart vervangen zodat het signaal direct in de hoofdview opvalt.
+            </div>
           </div>
         ) : null}
-        <div
-            style={{
-              display: "grid",
-              gap: 8,
-              padding: expanded ? "14px 16px" : "10px 12px",
-              borderRadius: 14,
-            background: "var(--surface-muted)",
-            border: "1px dashed color-mix(in srgb, #0f766e 28%, var(--border))",
-          }}
-        >
-          <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 700 }}>Waarom deze kaart nu zichtbaar is</div>
-          <div style={{ color: "var(--text-muted)", lineHeight: 1.5 }}>
-            Deze AI-card heeft tijdelijk de standaardkaart vervangen zodat het signaal direct in de hoofdview opvalt.
-          </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {insight.deviation_pct != null ? <span style={fixedMetricBadgeStyle}>Afwijking: {insight.deviation_pct > 0 ? "+" : ""}{insight.deviation_pct}%</span> : null}
+          <span style={fixedMetricBadgeStyle}>TTL: {aiInsightTtlHours} uur</span>
+          <span style={fixedMetricBadgeStyle}>Vervangt: {cardTitleByKey(originalCardKey)}</span>
         </div>
-        <div style={{ minHeight: 0 }} />
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <button
@@ -3389,7 +3529,7 @@ export default function Home() {
             </button>
           </div>
           <button type="button" onClick={() => openInsightLogPanel(String(insight.id))} style={{ ...filterOpenButtonStyle, padding: "6px 10px" }}>
-            Brondata
+            Details
           </button>
         </div>
         {pendingDownvote ? (
@@ -3731,7 +3871,11 @@ export default function Home() {
                   );
                 },
                   plugins: {
-                    legend: { display: true, position: "top" },
+                    legend: {
+                      display: true,
+                      position: "top",
+                      labels: { color: chartTextSubtle },
+                    },
                     renderWatch: { onReady: () => markChartRendered("inflowVsClosed") },
                     tooltip: {
                       mode: "nearest",
@@ -3746,12 +3890,12 @@ export default function Home() {
                   interaction: { mode: "nearest", intersect: false },
                   scales: {
                     x: {
-                      ticks: { color: "var(--text-muted)" },
+                      ticks: { color: chartTextSubtle },
                     },
                     y: {
-                      title: { display: true, text: "Aantal tickets", color: "var(--text-muted)" },
+                      title: { display: true, text: "Aantal tickets", color: chartTextSubtle },
                       ticks: {
-                        color: "var(--text-muted)",
+                        color: chartTextSubtle,
                         callback: (value) => num(value),
                       },
                     },
@@ -3797,12 +3941,12 @@ export default function Home() {
                 },
                 scales: {
                   x: {
-                    ticks: { color: "var(--text-muted)" },
+                    ticks: { color: chartTextSubtle },
                   },
                   y: {
-                    title: { display: true, text: "Tickets", color: "var(--text-muted)" },
+                    title: { display: true, text: "Tickets", color: chartTextSubtle },
                     ticks: {
-                      color: "var(--text-muted)",
+                      color: chartTextSubtle,
                       callback: (value) => num(value),
                     },
                   },
@@ -3827,7 +3971,11 @@ export default function Home() {
                   maintainAspectRatio: false,
                   animation: slowChartAnimation("incidentResolution"),
                   plugins: {
-                    legend: { display: true, position: "top" },
+                    legend: {
+                      display: true,
+                      position: "top",
+                      labels: { color: chartTextSubtle },
+                    },
                     renderWatch: { onReady: () => markChartRendered("incidentResolution") },
                     tooltip: {
                       mode: "nearest",
@@ -3842,11 +3990,11 @@ export default function Home() {
                   interaction: { mode: "nearest", intersect: false },
                   scales: {
                     x: {
-                      ticks: { color: "var(--text-muted)" },
+                      ticks: { color: chartTextSubtle },
                     },
                     y: {
-                      title: { display: true, text: "Uren", color: "var(--text-muted)" },
-                      ticks: { color: "var(--text-muted)" },
+                      title: { display: true, text: "Uren", color: chartTextSubtle },
+                      ticks: { color: chartTextSubtle },
                     },
                   },
                 }}
@@ -3907,7 +4055,11 @@ export default function Home() {
                   maintainAspectRatio: false,
                   animation: slowChartAnimation("organizationWeekly"),
                   plugins: {
-                    legend: { display: true, position: "top" },
+                    legend: {
+                      display: true,
+                      position: "top",
+                      labels: { color: chartTextSubtle },
+                    },
                     renderWatch: { onReady: () => markChartRendered("organizationWeekly") },
                     tooltip: { mode: "nearest", intersect: false },
                     simpleDataLabels: false,
@@ -3915,11 +4067,11 @@ export default function Home() {
                   interaction: { mode: "nearest", intersect: false },
                   scales: {
                     x: {
-                      ticks: { color: "var(--text-muted)" },
+                      ticks: { color: chartTextSubtle },
                     },
                     y: {
-                      title: { display: true, text: "Aantal tickets", color: "var(--text-muted)" },
-                      ticks: { color: "var(--text-muted)" },
+                      title: { display: true, text: "Aantal tickets", color: chartTextSubtle },
+                      ticks: { color: chartTextSubtle },
                     },
                   },
                 }}
@@ -4314,22 +4466,16 @@ export default function Home() {
   const visibleCardRows = dashboardLayout.cardRows;
   const hiddenCardKeys = dashboardLayout.hiddenCards;
   const lockedCardKeys = useMemo(() => dashboardLayout.lockedCards || [], [dashboardLayout.lockedCards]);
+  const expandableCardKeys = useMemo(
+    () => new Set(["volume", "onderwerp", "inflowVsClosed", "incidentResolution", "firstResponseAll", "organizationWeekly", "releaseWorkload", "p90"]),
+    []
+  );
   const cardTitleByKey = useCallback(
     (key) => (key === "topOnderwerpen" ? "Top 10 onderwerpen" : CARD_TITLES[key] || key),
     []
   );
   const aiInsightByCardKey = useMemo(() => {
-    const visibleCards = new Set(visibleCardRows.flat());
-    const map = new Map();
-    liveInsights.forEach((item) => {
-      const targetCardKey = item?.target_card_key;
-      if (!targetCardKey) return;
-      if (!visibleCards.has(targetCardKey)) return;
-      if (lockedCardKeys.includes(targetCardKey)) return;
-      if (item?.removed_at || item?.feedback_status === "downvoted") return;
-      if (!map.has(targetCardKey)) map.set(targetCardKey, item);
-    });
-    return map;
+    return mapAiInsightsToCardSlots(liveInsights, visibleCardRows, lockedCardKeys);
   }, [liveInsights, lockedCardKeys, visibleCardRows]);
 
   function startDrag(kind, key, source) {
@@ -5167,6 +5313,7 @@ export default function Home() {
                 const displayTitle = aiInsight ? aiInsight.title : cardTitleByKey(cardKey);
                 const showPartialWeekBadge = !aiInsight && Boolean(weeklyScopeHint) && weeklyPartialCardKeys.has(cardKey);
                 const showLastWeekBadge = !aiInsight && cardKey === "topOnderwerpen";
+                const canExpandCard = expandableCardKeys.has(cardKey);
                 return (
                   <div
                     key={cardKey}
@@ -5222,7 +5369,7 @@ export default function Home() {
                             ) : null}
                           </span>
                         </div>
-                      ) : (
+                      ) : canExpandCard ? (
                         <button
                           type="button"
                           className="card-expand-title"
@@ -5251,6 +5398,17 @@ export default function Home() {
                             </svg>
                           </span>
                         </button>
+                      ) : (
+                        <div style={{ ...cardTitleButtonStyle, cursor: "default", marginBottom: 0 }}>
+                          <span style={{ display: "inline-flex", alignItems: "baseline", gap: 6 }}>
+                            <span style={chartTitleStyle}>{displayTitle}</span>
+                            {aiInsight ? <span style={fixedMetricBadgeStyle}>AI</span> : null}
+                            {showLastWeekBadge ? <span style={fixedMetricBadgeStyle}>Periode: laatste week</span> : null}
+                            {showPartialWeekBadge ? (
+                              <span style={fixedMetricBadgeStyle} title={weeklyScopeHint}>Lopende week*</span>
+                            ) : null}
+                          </span>
+                        </div>
                       )}
                       {isLayoutEditing ? (
                         <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
@@ -5723,10 +5881,10 @@ export default function Home() {
           <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border)" }}>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <span style={{ color: "var(--text-muted)" }}>
-                Threshold <b>{activeAiThresholdPct}%</b> · maximaal <b>3</b> actieve AI-cards
+                Threshold <b>{activeAiThresholdPct}%</b> · live zichtbaar <b>{aiInsightByCardKey.size}</b> · maximaal <b>3</b> actieve AI-cards
               </span>
-              <button onClick={() => refreshInsightLog()} style={{ marginLeft: "auto" }}>
-                Vernieuwen
+              <button onClick={() => refreshInsightsPanel()} disabled={insightRefreshBusy} style={{ marginLeft: "auto" }}>
+                {insightRefreshBusy ? "Verversen..." : "Vernieuwen"}
               </button>
             </div>
           </div>
@@ -5915,6 +6073,7 @@ export default function Home() {
                   const sourceCurrent = item.source_payload?.current || {};
                   const sourcePrevious = item.source_payload?.previous || {};
                   const sourceLabel = item.source_payload?.label || null;
+                  const periodHeaders = getInsightPeriodHeaders(item);
                   return (
                     <div
                       key={item.id}
@@ -5952,13 +6111,13 @@ export default function Home() {
                               <thead>
                                 <tr>
                                   <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Meting</th>
-                                  <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Huidig</th>
-                                  <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Vorig</th>
+                                  <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>{periodHeaders.currentLabel}</th>
+                                  <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>{periodHeaders.previousLabel}</th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {Object.keys({ ...sourceCurrent, ...sourcePrevious })
-                                  .filter((key) => key !== "week_start")
+                                  .filter((key) => !["week_start", "month_start", "window_months"].includes(key))
                                   .map((key) => (
                                     <tr key={`${item.id}-${key}`}>
                                       <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>{key}</td>

@@ -127,14 +127,21 @@ function normalizeInsight(entry) {
   };
 }
 
+function isoDay(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function buildFixedInsightWindow() {
+  const now = new Date();
+  const lastFullMonthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0));
+  const start = new Date(Date.UTC(lastFullMonthEnd.getUTCFullYear(), lastFullMonthEnd.getUTCMonth() - 24, 1));
+  return {
+    dateFrom: isoDay(start),
+    dateTo: isoDay(lastFullMonthEnd),
+  };
+}
+
 export function useAiInsights({
-  dateFrom,
-  dateTo,
-  requestType,
-  onderwerp,
-  priority,
-  assignee,
-  organization,
   servicedeskOnly,
 }) {
   const [liveInsights, setLiveInsights] = useState([]);
@@ -148,18 +155,14 @@ export function useAiInsights({
   );
 
   const buildParams = useCallback(() => {
+    const fixedWindow = buildFixedInsightWindow();
     const params = new URLSearchParams({
-      date_from: dateFrom,
-      date_to: dateTo,
+      date_from: fixedWindow.dateFrom,
+      date_to: fixedWindow.dateTo,
       servicedesk_only: servicedeskOnly ? "true" : "false",
     });
-    if (requestType) params.set("request_type", requestType);
-    if (onderwerp) params.set("onderwerp", onderwerp);
-    if (priority) params.set("priority", priority);
-    if (assignee) params.set("assignee", assignee);
-    if (organization) params.set("organization", organization);
     return params;
-  }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee, organization, servicedeskOnly]);
+  }, [servicedeskOnly]);
 
   const refreshInsightLog = useCallback(async () => {
     let normalized = buildFallbackInsights();

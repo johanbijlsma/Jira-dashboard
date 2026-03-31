@@ -1051,6 +1051,31 @@ def _insight_weekly_rows(cur, *, field: str, alias: str, date_from: str, date_to
     return [{"week_start": row[0], alias: row[1], "tickets": int(row[2] or 0)} for row in cur.fetchall()]
 
 
+def _insight_monthly_rows(cur, *, field: str, alias: str, date_from: str, date_to: str, filter_sql: str, filter_params: list[Any]):
+    cur.execute(
+        compose_sql_query(
+            """
+            select
+              date_trunc('month', created_at) as month_start,
+              {field_sql} as label,
+              count(*) as tickets
+            from issues
+            where created_at >= %s::timestamptz
+              and created_at < (%s::timestamptz + interval '1 day')
+              and {field_sql} is not null
+              and btrim({field_sql}) <> ''
+              and {filters_sql}
+            group by 1, 2
+            order by 1 asc, 3 desc, 2 asc;
+            """,
+            field_sql=field,
+            filters_sql=filter_sql,
+        ),
+        [date_from, date_to, *filter_params],
+    )
+    return [{"month_start": row[0], alias: row[1], "tickets": int(row[2] or 0)} for row in cur.fetchall()]
+
+
 def _insight_metric_payload(
     *,
     date_from: str,
@@ -1153,7 +1178,7 @@ def _insight_metric_payload(
             {"week_start": row[0], "avg_hours": float(row[1]) if row[1] is not None else None} for row in cur.fetchall()
         ]
 
-        onderwerp_rows = _insight_weekly_rows(
+        onderwerp_rows = _insight_monthly_rows(
             cur,
             field="onderwerp_logging",
             alias="onderwerp",
@@ -1175,7 +1200,7 @@ def _insight_metric_payload(
             compose_sql_query(
             """
             select
-              date_trunc('week', i.created_at) as week_start,
+              date_trunc('month', i.created_at) as month_start,
               org.org_name as organization,
               count(*) as tickets
             from issues i
@@ -1192,7 +1217,37 @@ def _insight_metric_payload(
             ),
             [date_from, date_to, *organization_filter_params],
         )
-        organization_rows = [{"week_start": row[0], "organization": row[1], "tickets": int(row[2] or 0)} for row in cur.fetchall()]
+        organization_rows = [{"month_start": row[0], "organization": row[1], "tickets": int(row[2] or 0)} for row in cur.fetchall()]
+
+        cur.execute(
+            compose_sql_query(
+            """
+            select
+              date_trunc('month', created_at) as month_start,
+              priority,
+              count(*) as tickets
+            from issues
+            where created_at >= %s::timestamptz
+              and created_at < (%s::timestamptz + interval '1 day')
+              and priority is not null
+              and {filters_sql}
+            group by 1, 2
+            order by 1 asc, 3 desc, 2 asc;
+            """,
+            filters_sql=filter_sql,
+            ),
+            [date_from, date_to, *filter_params],
+        )
+        priority1_by_month: Dict[str, int] = {}
+        for month_start, priority_value, tickets in cur.fetchall():
+            if not is_priority1_priority(priority_value):
+                continue
+            key = month_start.isoformat()
+            priority1_by_month[key] = priority1_by_month.get(key, 0) + int(tickets or 0)
+        priority1_monthly = [
+            {"month_start": key, "tickets": value}
+            for key, value in sorted(priority1_by_month.items())
+        ]
 
     return {
         "inflow_vs_closed": inflow_vs_closed,
@@ -1200,6 +1255,7 @@ def _insight_metric_payload(
         "incident_resolution": incident_resolution,
         "onderwerp_volume": onderwerp_rows,
         "organization_volume": organization_rows,
+        "priority1_monthly": priority1_monthly,
     }
 
 
@@ -1208,6 +1264,15 @@ def _latest_with_previous(rows: List[Dict[str, Any]], value_key: str):
     if len(usable) < 2:
         return None, None
     return usable[-1], usable[-2]
+
+
+def _sum_last_n_periods(rows: List[Dict[str, Any]], value_key: str, n: int):
+    usable = [row for row in rows if row.get(value_key) is not None]
+    if len(usable) < n * 2:
+        return None, None
+    current = usable[-n:]
+    previous = usable[-(n * 2):-n]
+    return sum(float(row.get(value_key) or 0) for row in current), sum(float(row.get(value_key) or 0) for row in previous)
 
 
 def _score_from_change(current: float, previous: float, *, min_delta: float = 0.0) -> tuple[float, float, Dict[str, Any]]:
@@ -1324,9 +1389,9 @@ def _create_ai_insight_candidates(metrics: Dict[str, Any]) -> List[Dict[str, Any
             }
         )
 
-    for key, target_card_key, label_key, kind, title, summary_prefix, action_label in [
-        ("onderwerp_volume", "onderwerp", "onderwerp", "onderwerp_spike", "AI-signaal: onderwerp springt eruit", "Onderwerp", "Check instroom en trend per onderwerp"),
-        ("organization_volume", "organizationWeekly", "organization", "organization_spike", "AI-signaal: partner springt eruit", "Partner", "Check partnerbelasting en context"),
+    for key, target_card_key, label_key, kind, title, summary_prefix in [
+        ("onderwerp_volume", "onderwerp", "onderwerp", "onderwerp_spike", "AI-signaal: onderwerp springt eruit", "Onderwerp"),
+        ("organization_volume", "organizationWeekly", "organization", "organization_spike", "AI-signaal: partner springt eruit", "Partner"),
     ]:
         grouped: Dict[str, List[Dict[str, Any]]] = {}
         for row in metrics.get(key) or []:
@@ -1338,26 +1403,51 @@ def _create_ai_insight_candidates(metrics: Dict[str, Any]) -> List[Dict[str, Any
             latest, previous = _latest_with_previous(rows, "tickets")
             if not latest or not previous or int(latest.get("tickets") or 0) <= int(previous.get("tickets") or 0):
                 continue
-            score, deviation, confidence = _score_from_change(float(latest["tickets"]), float(previous["tickets"]), min_delta=5.0)
+            # Subject/partner cards work with smaller monthly volumes, so a +1 increase can still
+            # be operationally relevant when the relative jump is clear.
+            score, deviation, confidence = _score_from_change(float(latest["tickets"]), float(previous["tickets"]), min_delta=1.0)
             candidates.append(
                 {
                     "kind": kind,
                     "target_card_key": target_card_key,
                     "title": title,
-                    "summary": f"{summary_prefix} '{label}' groeide van {previous['tickets']} naar {latest['tickets']} tickets.",
-                    "action_label": action_label,
+                    "summary": f"{summary_prefix} '{label}' steeg maand-op-maand van {previous['tickets']} naar {latest['tickets']} tickets.",
+                    "action_label": None,
                     "score_pct": score,
                     "deviation_pct": deviation,
                     "source_payload": {
                         "label": label,
                         "current": latest,
                         "previous": previous,
-                        "metric": summary_prefix,
+                        "metric": f"{summary_prefix} maand-op-maand",
+                        "comparison_label": "Maand-op-maand",
                         "confidence": confidence,
                     },
                 }
             )
             break
+
+    priority1_current, priority1_previous = _sum_last_n_periods(metrics.get("priority1_monthly") or [], "tickets", 12)
+    if priority1_current is not None and priority1_previous is not None and priority1_current > priority1_previous and priority1_previous > 0:
+        score, deviation, confidence = _score_from_change(priority1_current, priority1_previous, min_delta=5.0)
+        candidates.append(
+            {
+                "kind": "priority1_year_trend",
+                "target_card_key": "priority",
+                "title": "AI-signaal: Priority 1 stijgt op jaartrend",
+                "summary": f"In de laatste 12 maanden steeg Priority 1 van {int(priority1_previous)} naar {int(priority1_current)} tickets.",
+                "action_label": None,
+                "score_pct": score,
+                "deviation_pct": deviation,
+                "source_payload": {
+                    "metric": "Priority 1 12-maandstrend",
+                    "current": {"tickets": int(priority1_current), "window_months": 12},
+                    "previous": {"tickets": int(priority1_previous), "window_months": 12},
+                    "comparison_label": "12 maanden trend",
+                    "confidence": confidence,
+                },
+            }
+        )
 
     return candidates
 
@@ -1366,10 +1456,21 @@ def _persist_ai_insights(cur, *, scope_key: str, candidates: List[Dict[str, Any]
     now = datetime.now(timezone.utc)
     active: List[Dict[str, Any]] = []
     filtered = [item for item in candidates if float(item.get("score_pct") or 0) >= threshold_pct]
-    filtered.sort(key=lambda item: (float(item.get("score_pct") or 0), _iso_or_none(item.get("source_payload", {}).get("current", {}).get("week_start")) or ""), reverse=True)
+    filtered.sort(
+        key=lambda item: (
+            float(item.get("score_pct") or 0),
+            _iso_or_none(item.get("source_payload", {}).get("current", {}).get("week_start"))
+            or _iso_or_none(item.get("source_payload", {}).get("current", {}).get("month_start"))
+            or "",
+        ),
+        reverse=True,
+    )
     for item in filtered[:MAX_ACTIVE_AI_INSIGHTS]:
-        current_week = item.get("source_payload", {}).get("current", {}).get("week_start")
-        insight_key = f"{scope_key}|{item['kind']}|{item['target_card_key']}|{_iso_or_none(current_week) or ''}|{item.get('source_payload', {}).get('label', '')}"
+        current_period = (
+            item.get("source_payload", {}).get("current", {}).get("week_start")
+            or item.get("source_payload", {}).get("current", {}).get("month_start")
+        )
+        insight_key = f"{scope_key}|{item['kind']}|{item['target_card_key']}|{_iso_or_none(current_period) or ''}|{item.get('source_payload', {}).get('label', '')}"
         expires_at = now + timedelta(hours=AI_INSIGHT_TTL_HOURS)
         cur.execute(
             """
