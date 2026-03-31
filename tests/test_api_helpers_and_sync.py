@@ -274,6 +274,72 @@ def test_insights_live_delegates_to_get_ai_insights(monkeypatch):
     }
 
 
+def test_monthly_onderwerp_spike_gets_bonus_for_small_but_clear_growth():
+    candidates = api._create_ai_insight_candidates(
+        {
+            "inflow_vs_closed": [],
+            "ttfr_overdue": [],
+            "incident_resolution": [],
+            "onderwerp_volume": [
+                {"month_start": "2026-02-01T00:00:00+01:00", "onderwerp": "Datalek", "tickets": 2},
+                {"month_start": "2026-03-01T00:00:00+01:00", "onderwerp": "Datalek", "tickets": 3},
+            ],
+            "organization_volume": [],
+            "priority1_monthly": [],
+        }
+    )
+
+    onderwerp_candidate = next(item for item in candidates if item["kind"] == "onderwerp_spike")
+    assert onderwerp_candidate["score_pct"] == 81.0
+    assert onderwerp_candidate["source_payload"]["confidence"]["threshold_bonus"] == 12.0
+    assert onderwerp_candidate["source_payload"]["comparison_label"] == "Maand-op-maand"
+
+
+def test_monthly_partner_spike_stays_below_threshold_when_growth_is_still_modest():
+    candidates = api._create_ai_insight_candidates(
+        {
+            "inflow_vs_closed": [],
+            "ttfr_overdue": [],
+            "incident_resolution": [],
+            "onderwerp_volume": [],
+            "organization_volume": [
+                {"month_start": "2026-02-01T00:00:00+01:00", "organization": "VitaMee", "tickets": 3},
+                {"month_start": "2026-03-01T00:00:00+01:00", "organization": "VitaMee", "tickets": 4},
+            ],
+            "priority1_monthly": [],
+        }
+    )
+
+    partner_candidate = next(item for item in candidates if item["kind"] == "organization_spike")
+    assert partner_candidate["score_pct"] == 73.5
+    assert partner_candidate["source_payload"]["confidence"]["threshold_bonus"] == 12.0
+
+
+def test_priority1_year_trend_candidate_uses_last_12_months():
+    rows = [
+        {"month_start": f"2024-{month:02d}-01T00:00:00+01:00", "tickets": 1}
+        for month in range(1, 13)
+    ] + [
+        {"month_start": f"2025-{month:02d}-01T00:00:00+01:00", "tickets": 2}
+        for month in range(1, 13)
+    ]
+    candidates = api._create_ai_insight_candidates(
+        {
+            "inflow_vs_closed": [],
+            "ttfr_overdue": [],
+            "incident_resolution": [],
+            "onderwerp_volume": [],
+            "organization_volume": [],
+            "priority1_monthly": rows,
+        }
+    )
+
+    trend_candidate = next(item for item in candidates if item["kind"] == "priority1_year_trend")
+    assert trend_candidate["target_card_key"] == "priority"
+    assert trend_candidate["score_pct"] >= 90.0
+    assert trend_candidate["source_payload"]["comparison_label"] == "12 maanden trend"
+
+
 def test_weekly_insights_payload_uses_onderwerp_based_servicedesk_scope(monkeypatch):
     cursor = CursorStub(
         fetchall_values=[

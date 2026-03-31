@@ -11,6 +11,12 @@ import {
 export const legendNoopHandler = () => {};
 
 export function setupChartDefaults(ChartJS) {
+  const cssVar = (name, fallback) => {
+    if (typeof window === "undefined" || typeof document === "undefined") return fallback;
+    const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return value || fallback;
+  };
+
   function getReleaseMarkers(weeks, opts, xScale) {
     const anchor = zonedDateTimeParts(opts.anchorIso, opts.timeZone);
     if (!anchor) return [];
@@ -371,4 +377,10 @@ export function setupChartDefaults(ChartJS) {
   ChartJS.defaults.plugins.legend.onLeave = (evt) => {
     if (evt?.native?.target?.style) evt.native.target.style.cursor = "default";
   };
+  ChartJS.defaults.color = cssVar("--text-subtle", "#cbd5e1");
+  ChartJS.defaults.borderColor = cssVar("--border", "#334155");
+  ChartJS.defaults.plugins.legend.labels.color = cssVar("--text-subtle", "#cbd5e1");
+  ChartJS.defaults.scale.grid.color = `color-mix(in srgb, ${cssVar("--border", "#334155")} 38%, transparent)`;
+  ChartJS.defaults.scale.ticks.color = cssVar("--text-subtle", "#cbd5e1");
+  ChartJS.defaults.scale.title.color = cssVar("--text-subtle", "#cbd5e1");
 }

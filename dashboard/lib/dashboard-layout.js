@@ -190,6 +190,33 @@ export function toggleCardLockLayout(prev, key) {
   return { ...prev, lockedCards: Array.from(lockedCards) };
 }
 
+export function mapAiInsightsToCardSlots(liveInsights, visibleCardRows, lockedCardKeys) {
+  const orderedVisibleCards = (Array.isArray(visibleCardRows) ? visibleCardRows : []).flat().filter(Boolean);
+  const locked = new Set(Array.isArray(lockedCardKeys) ? lockedCardKeys : []);
+  const eligibleSlots = orderedVisibleCards.filter((key) => !locked.has(key));
+  const availableSlots = new Set(eligibleSlots);
+  const map = new Map();
+
+  (Array.isArray(liveInsights) ? liveInsights : []).forEach((item) => {
+    if (!item || item.removed_at || item.feedback_status === "downvoted") return;
+
+    const preferredSlot = item.target_card_key;
+    let assignedSlot = null;
+
+    if (preferredSlot && availableSlots.has(preferredSlot)) {
+      assignedSlot = preferredSlot;
+    } else {
+      assignedSlot = eligibleSlots.find((key) => availableSlots.has(key)) || null;
+    }
+
+    if (!assignedSlot) return;
+    map.set(assignedSlot, item);
+    availableSlots.delete(assignedSlot);
+  });
+
+  return map;
+}
+
 export function renderKpiRowWithHintLayout(row, isLayoutEditing, draggingKey, kpiDropHint) {
   if (!isLayoutEditing) return row;
   const cleanRow = row.filter((key) => key !== draggingKey);

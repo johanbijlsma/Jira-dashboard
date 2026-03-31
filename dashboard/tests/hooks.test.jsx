@@ -498,7 +498,7 @@ describe("dashboard hooks", () => {
     expect(result.current.insightLogEntries[0].feedback_status).toBe("downvoted");
   });
 
-  it("includes active filters in AI insight requests and keeps defaults on empty API payloads", async () => {
+  it("uses a fixed AI insight window and ignores active dashboard filters", async () => {
     global.fetch = createFetchMock({
       "/insights/live?": [
         {
@@ -528,11 +528,13 @@ describe("dashboard hooks", () => {
     const liveCall = global.fetch.mock.calls.find(([url]) => String(url).includes("/insights/live?"))[0];
     const logCall = global.fetch.mock.calls.find(([url]) => String(url).includes("/insights/logs?"))[0];
 
-    expect(liveCall).toContain("request_type=Incident");
-    expect(liveCall).toContain("onderwerp=Email");
-    expect(liveCall).toContain("priority=High");
-    expect(liveCall).toContain("assignee=Alice");
-    expect(liveCall).toContain("organization=Org+A");
+    expect(liveCall).toContain("date_from=");
+    expect(liveCall).toContain("date_to=");
+    expect(liveCall).not.toContain("request_type=");
+    expect(liveCall).not.toContain("onderwerp=");
+    expect(liveCall).not.toContain("priority=");
+    expect(liveCall).not.toContain("assignee=");
+    expect(liveCall).not.toContain("organization=");
     expect(liveCall).toContain("servicedesk_only=false");
     expect(logCall).toContain("limit=200");
     expect(result.current.liveInsights).toEqual([]);
