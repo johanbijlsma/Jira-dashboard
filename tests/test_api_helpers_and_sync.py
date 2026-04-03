@@ -217,6 +217,95 @@ def test_get_ai_insights_persists_candidates_and_commits(monkeypatch):
     assert connection.committed is True
 
 
+def _insight_row(*, row_id=1, expires_at=None, feedback_status="pending", removed_at=None):
+    detected_at = datetime(2026, 4, 1, 10, 0, tzinfo=timezone.utc)
+    if expires_at is None:
+        expires_at = detected_at + timedelta(hours=api.AI_INSIGHT_TTL_HOURS)
+    return (
+        row_id,
+        "scope|kind|card|2026-04-01|label",
+        "AI-signaal",
+        "Samenvatting",
+        None,
+        "onderwerp_spike",
+        "onderwerp",
+        82.0,
+        34.6,
+        detected_at,
+        expires_at,
+        {"current": {"month_start": "2026-04-01", "tickets": 35}, "previous": {"month_start": "2026-03-01", "tickets": 26}},
+        feedback_status,
+        None,
+        None,
+        removed_at,
+    )
+
+
+def test_persist_ai_insights_keeps_expired_items_out_of_live_results(monkeypatch):
+    now = datetime(2026, 4, 3, 12, 0, tzinfo=timezone.utc)
+    cursor = CursorStub(fetchone_values=[_insight_row(expires_at=now - timedelta(minutes=1))])
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now if tz else now.replace(tzinfo=None)
+
+    monkeypatch.setattr(api, "datetime", FrozenDateTime)
+
+    items = api._persist_ai_insights(
+        cursor,
+        scope_key="scope",
+        candidates=[
+            {
+                "kind": "onderwerp_spike",
+                "target_card_key": "onderwerp",
+                "title": "AI-signaal",
+                "summary": "Samenvatting",
+                "score_pct": 82,
+                "deviation_pct": 34.6,
+                "source_payload": {"current": {"month_start": "2026-04-01"}, "label": "Rapportages"},
+            }
+        ],
+        threshold_pct=75,
+    )
+
+    assert items == []
+    executed_sql = _query_text(cursor.executed[0][0]).lower()
+    assert "expires_at = excluded.expires_at" not in executed_sql
+
+
+def test_persist_ai_insights_returns_unexpired_items(monkeypatch):
+    now = datetime(2026, 4, 3, 12, 0, tzinfo=timezone.utc)
+    cursor = CursorStub(fetchone_values=[_insight_row(expires_at=now + timedelta(hours=2), feedback_status="upvoted")])
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now if tz else now.replace(tzinfo=None)
+
+    monkeypatch.setattr(api, "datetime", FrozenDateTime)
+
+    items = api._persist_ai_insights(
+        cursor,
+        scope_key="scope",
+        candidates=[
+            {
+                "kind": "onderwerp_spike",
+                "target_card_key": "onderwerp",
+                "title": "AI-signaal",
+                "summary": "Samenvatting",
+                "score_pct": 82,
+                "deviation_pct": 34.6,
+                "source_payload": {"current": {"month_start": "2026-04-01"}, "label": "Rapportages"},
+            }
+        ],
+        threshold_pct=75,
+    )
+
+    assert len(items) == 1
+    assert items[0]["feedback_status"] == "upvoted"
+
+
 def test_startup_auto_sync_scheduler_only_starts_once(monkeypatch):
     started = []
 

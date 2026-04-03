@@ -1,23 +1,6 @@
-import { Bar, Doughnut, Line } from "react-chartjs-2";
 import {
-  ArcElement,
-  BarElement,
-  CategoryScale,
-  Chart as ChartJS,
-  Legend,
-  LineElement,
-  LinearScale,
-  PointElement,
-  Tooltip,
-} from "chart.js";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { parseNlDateToIso } from "../lib/date";
-import { buildUpcomingWarningText, businessDaysUntil } from "../lib/vacation-banner";
-import Link from "next/link";
-import Head from "next/head";
-import {
-  API,
   AI_INSIGHT_DOWNVOTE_REASONS,
+  API,
   CARD_TITLES,
   DASHBOARD_CONFIG_STORAGE_KEY,
   DEFAULT_SERVICEDESK_ONLY,
@@ -35,8 +18,8 @@ import {
   fmtDateTime,
   fmtDateWithWeekday,
   hasDataPoints,
-  isTextEntryTarget,
   isCurrentPartialWeek,
+  isTextEntryTarget,
   isoDate,
   num,
   pct,
@@ -45,14 +28,20 @@ import {
   weekStartIsoFromDate,
   zonedDateTimeParts,
 } from "../lib/dashboard-utils";
-import { legendNoopHandler, setupChartDefaults } from "../lib/chart-setup";
-import { useAlertLogs } from "../lib/use-alert-logs";
-import { useAiInsights } from "../lib/use-ai-insights";
-import { useDashboardData } from "../lib/use-dashboard-data";
-import { useLiveAlerts } from "../lib/use-live-alerts";
-import { useServicedeskConfig } from "../lib/use-servicedesk-config";
-import { useSyncStatus } from "../lib/use-sync-status";
-import { useVacationsData } from "../lib/use-vacations-data";
+import {
+  ArcElement,
+  BarElement,
+  CategoryScale,
+  Chart as ChartJS,
+  Legend,
+  LineElement,
+  LinearScale,
+  PointElement,
+  Tooltip,
+} from "chart.js";
+import { Bar, Line } from "react-chartjs-2";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { buildUpcomingWarningText, businessDaysUntil } from "../lib/vacation-banner";
 import {
   hideCardLayout,
   hideKpiLayout,
@@ -66,10 +55,22 @@ import {
   toggleRowExpandCardLayout,
 } from "../lib/dashboard-layout";
 import { isTotalLabel, median, trendInfo, uniqueChartColor, wowSortValue } from "../lib/dashboard-metrics";
+import { legendNoopHandler, setupChartDefaults } from "../lib/chart-setup";
+
 import EmptyChartState from "../components/EmptyChartState";
+import Head from "next/head";
+import Link from "next/link";
 import LiveAlertStack from "../components/LiveAlertStack";
 import Toast from "../components/Toast";
 import VacationAvatar from "../components/VacationAvatar";
+import { parseNlDateToIso } from "../lib/date";
+import { useAiInsights } from "../lib/use-ai-insights";
+import { useAlertLogs } from "../lib/use-alert-logs";
+import { useDashboardData } from "../lib/use-dashboard-data";
+import { useLiveAlerts } from "../lib/use-live-alerts";
+import { useServicedeskConfig } from "../lib/use-servicedesk-config";
+import { useSyncStatus } from "../lib/use-sync-status";
+import { useVacationsData } from "../lib/use-vacations-data";
 
 ChartJS.register(
   CategoryScale,
@@ -2875,9 +2876,19 @@ export default function Home() {
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    borderColor: "var(--danger)",
-    color: "var(--danger)",
-    background: "color-mix(in srgb, var(--danger) 10%, var(--surface))",
+    borderColor: "var(--border)",
+    color: "var(--text-main)",
+    background: "var(--surface)",
+  };
+  const togglePillStyle = {
+    ...buttonBaseStyle,
+    height: 34,
+    padding: "0 12px",
+    borderRadius: 999,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 10,
+    fontWeight: 700,
   };
   const dragHandleStyle = {
     width: 18,
@@ -3133,6 +3144,26 @@ export default function Home() {
     fontSize: 13,
     color: "var(--text-subtle)",
   };
+  const switchTrackStyle = {
+    width: 38,
+    height: 22,
+    borderRadius: 999,
+    position: "relative",
+    display: "inline-flex",
+    alignItems: "center",
+    transition: "background 160ms ease, border-color 160ms ease",
+    flexShrink: 0,
+  };
+  const switchThumbStyle = {
+    width: 16,
+    height: 16,
+    borderRadius: 999,
+    background: "#ffffff",
+    position: "absolute",
+    top: 2,
+    transition: "transform 160ms ease",
+    boxShadow: "0 1px 3px color-mix(in srgb, #000 22%, transparent)",
+  };
   const hiddenPoolStyle = {
     minHeight: 64,
     border: "1px dashed var(--border)",
@@ -3384,12 +3415,76 @@ export default function Home() {
     return { currentLabel: "Huidig", previousLabel: "Vorig" };
   }
 
+  function getInsightFeedbackPresentation(feedbackStatus) {
+    if (feedbackStatus === "upvoted") {
+      return {
+        label: "Upvote",
+        borderColor: "color-mix(in srgb, #16a34a 48%, var(--border))",
+        background: "color-mix(in srgb, #16a34a 16%, var(--surface))",
+        color: "color-mix(in srgb, #16a34a 82%, var(--text-main))",
+      };
+    }
+    if (feedbackStatus === "downvoted") {
+      return {
+        label: "Downvote",
+        borderColor: "color-mix(in srgb, var(--danger) 48%, var(--border))",
+        background: "color-mix(in srgb, var(--danger) 16%, var(--surface))",
+        color: "color-mix(in srgb, var(--danger) 86%, var(--text-main))",
+      };
+    }
+    return {
+      label: "Nog geen feedback",
+      borderColor: "var(--border)",
+      background: "var(--surface-muted)",
+      color: "var(--text-muted)",
+    };
+  }
+
+  function getInsightTrendPresentation(insight) {
+    const current = insight?.source_payload?.current || {};
+    const previous = insight?.source_payload?.previous || {};
+
+    if (insight?.kind === "backlog_pressure") {
+      const currentDelta = Number(current.inflow || 0) - Number(current.closed || 0);
+      const previousDelta = Number(previous.inflow || 0) - Number(previous.closed || 0);
+      return trendInfo(currentDelta, previousDelta);
+    }
+
+    if (insight?.kind === "ttfr_overdue_spike") {
+      return trendInfo(current.overdue, previous.overdue);
+    }
+
+    if (insight?.kind === "incident_ttr_rise") {
+      return trendInfo(current.avg_hours, previous.avg_hours);
+    }
+
+    if (insight?.kind === "priority1_year_trend") {
+      return trendInfo(current.tickets, previous.tickets);
+    }
+
+    if (typeof current.tickets !== "undefined" || typeof previous.tickets !== "undefined") {
+      return trendInfo(current.tickets, previous.tickets);
+    }
+
+    const deviation = Number(insight?.deviation_pct);
+    if (!Number.isFinite(deviation)) {
+      return { symbol: "→", text: "—", color: "var(--text-muted)" };
+    }
+    if (deviation > 0.5) return { symbol: "↑", text: `+${num(deviation, 1)}%`, color: "var(--ok)" };
+    if (deviation < -0.5) return { symbol: "↓", text: `${num(deviation, 1)}%`, color: "var(--danger)" };
+    return { symbol: "→", text: `${num(deviation, 1)}%`, color: "var(--text-muted)" };
+  }
+
   function renderAiInsightCard(originalCardKey, expanded = false) {
     const insight = aiInsightByCardKey.get(originalCardKey);
     if (!insight) return renderCardContent(originalCardKey, expanded);
 
     const pendingDownvote = pendingInsightDownvoteId === insight.id;
     const hero = formatAiInsightHero(insight);
+    const trend = getInsightTrendPresentation(insight);
+    const feedbackPresentation = getInsightFeedbackPresentation(insight.feedback_status);
+    const upvoteActive = insight.feedback_status === "upvoted";
+    const downvoteActive = insight.feedback_status === "downvoted";
     const confidenceExplanation =
       insight.source_payload?.confidence?.confidence_explanation ||
       `Confidence score ${Math.round(insight.score_pct)}%. Dit is een interne relevantiescore op basis van afwijking ten opzichte van de vorige periode en bepaalt of een AI-card getoond wordt.`;
@@ -3418,45 +3513,61 @@ export default function Home() {
           }}
         >
           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start", marginBottom: expanded ? 6 : 4 }}>
-            <span
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 8,
-                width: "fit-content",
-                padding: "5px 10px",
-                borderRadius: 999,
-                background: "color-mix(in srgb, var(--surface) 82%, white)",
-                color: "#0f766e",
-                border: "1px solid color-mix(in srgb, #14b8a6 44%, var(--border))",
-                fontSize: 12,
-                fontWeight: 800,
-                letterSpacing: 0.2,
-              }}
-              title={confidenceExplanation}
-            >
-              AI Insight
-              <span style={{ color: "color-mix(in srgb, var(--text-main) 82%, transparent)" }}>{Math.round(insight.score_pct)}%</span>
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, width: "100%" }}>
               <span
-                aria-label="Confidence score uitleg"
-                title={confidenceExplanation}
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
-                  justifyContent: "center",
-                  width: 16,
-                  height: 16,
+                  gap: 8,
+                  width: "fit-content",
+                  padding: "5px 10px",
                   borderRadius: 999,
-                  border: "1px solid color-mix(in srgb, #0f766e 25%, currentColor)",
-                  fontSize: 10,
+                  background: "color-mix(in srgb, var(--surface) 82%, white)",
+                  color: "#0f766e",
+                  border: "1px solid color-mix(in srgb, #14b8a6 44%, var(--border))",
+                  fontSize: 12,
                   fontWeight: 800,
-                  lineHeight: 1,
-                  cursor: "help",
+                  letterSpacing: 0.2,
+                }}
+                title={confidenceExplanation}
+              >
+                AI Insight
+              </span>
+              <div
+                title={confidenceExplanation}
+                style={{
+                  display: "grid",
+                  gap: 2,
+                  justifyItems: "end",
+                  minWidth: expanded ? 88 : 72,
+                  padding: expanded ? "8px 12px" : "6px 10px",
+                  borderRadius: 14,
+                  background: "color-mix(in srgb, #0f172a 12%, var(--surface))",
+                  border: "1px solid color-mix(in srgb, #14b8a6 38%, var(--border))",
+                  color: "var(--text-main)",
+                  boxShadow: "0 4px 12px color-mix(in srgb, #0f172a 12%, transparent)",
                 }}
               >
-                i
-              </span>
-            </span>
+                <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase", color: "color-mix(in srgb, var(--text-main) 64%, transparent)" }}>
+                  Delta
+                </span>
+                <span
+                  style={{
+                    fontSize: expanded ? 30 : 24,
+                    lineHeight: 1,
+                    fontWeight: 900,
+                    letterSpacing: -0.8,
+                    color: trend.color,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  <span>{trend.symbol}</span>
+                  <span>{trend.text}</span>
+                </span>
+              </div>
+            </div>
           </div>
           <div style={{ display: "grid", gap: expanded ? 8 : 6 }}>
             <div
@@ -3500,7 +3611,18 @@ export default function Home() {
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           {insight.deviation_pct != null ? <span style={fixedMetricBadgeStyle}>Afwijking: {insight.deviation_pct > 0 ? "+" : ""}{insight.deviation_pct}%</span> : null}
           <span style={fixedMetricBadgeStyle}>TTL: {aiInsightTtlHours} uur</span>
-          <span style={fixedMetricBadgeStyle}>Vervangt: {cardTitleByKey(originalCardKey)}</span>
+          {insight.feedback_status !== "pending" ? (
+            <span
+              style={{
+                ...fixedMetricBadgeStyle,
+                borderColor: feedbackPresentation.borderColor,
+                background: feedbackPresentation.background,
+                color: feedbackPresentation.color,
+              }}
+            >
+              Feedback: {feedbackPresentation.label}
+            </span>
+          ) : null}
         </div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -3508,7 +3630,14 @@ export default function Home() {
               type="button"
               onClick={() => handleInsightFeedback(insight.id, "up")}
               disabled={insightFeedbackBusyId === insight.id}
-              style={{ ...iconButtonStyle, minWidth: 42, fontWeight: 700 }}
+              style={{
+                ...iconButtonStyle,
+                minWidth: 42,
+                fontWeight: 700,
+                borderColor: upvoteActive ? "color-mix(in srgb, #16a34a 52%, var(--border))" : "var(--border)",
+                background: upvoteActive ? "color-mix(in srgb, #16a34a 16%, var(--surface))" : "var(--surface)",
+                color: upvoteActive ? "color-mix(in srgb, #16a34a 82%, var(--text-main))" : "var(--text-main)",
+              }}
               title="Relevant"
               aria-label="Relevant"
             >
@@ -3521,7 +3650,14 @@ export default function Home() {
                 setPendingInsightReason(AI_INSIGHT_DOWNVOTE_REASONS[0]);
               }}
               disabled={insightFeedbackBusyId === insight.id}
-              style={{ ...iconButtonStyle, minWidth: 42, fontWeight: 700 }}
+              style={{
+                ...iconButtonStyle,
+                minWidth: 42,
+                fontWeight: 700,
+                borderColor: downvoteActive ? "color-mix(in srgb, var(--danger) 52%, var(--border))" : "var(--border)",
+                background: downvoteActive ? "color-mix(in srgb, var(--danger) 14%, var(--surface))" : "var(--surface)",
+                color: downvoteActive ? "color-mix(in srgb, var(--danger) 86%, var(--text-main))" : "var(--text-main)",
+              }}
               title="Niet relevant"
               aria-label="Niet relevant"
             >
@@ -3531,6 +3667,9 @@ export default function Home() {
           <button type="button" onClick={() => openInsightLogPanel(String(insight.id))} style={{ ...filterOpenButtonStyle, padding: "6px 10px" }}>
             Details
           </button>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={fixedMetricBadgeStyle}>Vervangt: {cardTitleByKey(originalCardKey)}</span>
         </div>
         {pendingDownvote ? (
           <div
@@ -3583,7 +3722,6 @@ export default function Home() {
 
   function renderCardContent(cardKey, expanded = false) {
     const bodyStyle = expanded ? { height: "100%", minHeight: 0, position: "relative" } : chartBodyStyle;
-    const donutStyle = expanded ? { ...donutBodyStyle, minHeight: 0 } : donutBodyStyle;
     const emptyStyle = expanded ? { ...hiddenChartPlaceholderStyle, minHeight: 0 } : hiddenChartPlaceholderStyle;
     if (cardKey === "topOnderwerpen") {
       return (
@@ -3730,22 +3868,43 @@ export default function Home() {
         <div style={bodyStyle}>
           {!priority ? (
             hasDataPoints(priorityBarData) ? (
-              <div style={donutStyle}>
-                <Doughnut
+              <div style={{ height: "100%", minHeight: 0 }}>
+                <Bar
                   data={priorityBarData}
                   options={{
-                    cutout: "60%",
+                    responsive: true,
                     maintainAspectRatio: false,
+                    indexAxis: "y",
                     plugins: {
                       legend: {
-                        display: true,
-                        position: "right",
-                        onClick: legendNoopHandler,
-                        labels: {
-                          color: (ctx) => priorityColors?.[ctx.index] || "#6b7280",
+                        display: false,
+                      },
+                      tooltip: {
+                        callbacks: {
+                          label: (ctx) => `${ctx.label}: ${num(ctx.parsed.x)} tickets`,
                         },
                       },
-                      simpleDataLabels: { mode: "arc", minArcPct: 8 },
+                      simpleDataLabels: { mode: "bar", maxLabels: expanded ? 20 : 10 },
+                    },
+                    scales: {
+                      x: {
+                        beginAtZero: true,
+                        ticks: {
+                          color: chartTextSubtle,
+                          callback: (value) => num(value),
+                        },
+                        grid: {
+                          color: "color-mix(in srgb, var(--border) 72%, transparent)",
+                        },
+                      },
+                      y: {
+                        ticks: {
+                          color: chartTextSubtle,
+                        },
+                        grid: {
+                          display: false,
+                        },
+                      },
                     },
                   }}
                 />
@@ -3765,22 +3924,43 @@ export default function Home() {
         <div style={bodyStyle}>
           {!assignee ? (
             hasDataPoints(assigneeBarData) ? (
-              <div style={donutStyle}>
-                <Doughnut
+              <div style={{ height: "100%", minHeight: 0 }}>
+                <Bar
                   data={assigneeBarData}
                   options={{
-                    cutout: "60%",
+                    responsive: true,
                     maintainAspectRatio: false,
+                    indexAxis: "y",
                     plugins: {
                       legend: {
-                        display: true,
-                        position: "right",
-                        onClick: legendNoopHandler,
-                        labels: {
-                          color: (ctx) => assigneeColors?.[ctx.index] || "#6b7280",
+                        display: false,
+                      },
+                      tooltip: {
+                        callbacks: {
+                          label: (ctx) => `${ctx.label}: ${num(ctx.parsed.x)} tickets`,
                         },
                       },
-                      simpleDataLabels: { mode: "arc", minArcPct: 8 },
+                      simpleDataLabels: { mode: "bar", maxLabels: expanded ? 20 : 10 },
+                    },
+                    scales: {
+                      x: {
+                        beginAtZero: true,
+                        ticks: {
+                          color: chartTextSubtle,
+                          callback: (value) => num(value),
+                        },
+                        grid: {
+                          color: "color-mix(in srgb, var(--border) 72%, transparent)",
+                        },
+                      },
+                      y: {
+                        ticks: {
+                          color: chartTextSubtle,
+                        },
+                        grid: {
+                          display: false,
+                        },
+                      },
                     },
                   }}
                 />
@@ -4475,8 +4655,9 @@ export default function Home() {
     []
   );
   const aiInsightByCardKey = useMemo(() => {
+    if (dashboardLayout.showAiCards === false) return new Map();
     return mapAiInsightsToCardSlots(liveInsights, visibleCardRows, lockedCardKeys);
-  }, [liveInsights, lockedCardKeys, visibleCardRows]);
+  }, [dashboardLayout.showAiCards, liveInsights, lockedCardKeys, visibleCardRows]);
 
   function startDrag(kind, key, source) {
     if (!isLayoutEditing) return;
@@ -4526,6 +4707,10 @@ export default function Home() {
 
   function hideCardByKey(key) {
     setDashboardLayout((prev) => hideCardLayout(prev, key));
+  }
+
+  function toggleAiCardsVisibility() {
+    setDashboardLayout((prev) => ({ ...prev, showAiCards: prev.showAiCards === false }));
   }
 
   function toggleCardLock(key) {
@@ -5883,7 +6068,47 @@ export default function Home() {
               <span style={{ color: "var(--text-muted)" }}>
                 Threshold <b>{activeAiThresholdPct}%</b> · live zichtbaar <b>{aiInsightByCardKey.size}</b> · maximaal <b>3</b> actieve AI-cards
               </span>
-              <button onClick={() => refreshInsightsPanel()} disabled={insightRefreshBusy} style={{ marginLeft: "auto" }}>
+              <button
+                type="button"
+                onClick={toggleAiCardsVisibility}
+                aria-pressed={dashboardLayout.showAiCards !== false}
+                style={{
+                  ...togglePillStyle,
+                  marginLeft: "auto",
+                  borderColor: dashboardLayout.showAiCards === false ? "var(--border)" : "color-mix(in srgb, var(--accent) 55%, var(--border))",
+                  background:
+                    dashboardLayout.showAiCards === false
+                      ? "var(--surface)"
+                      : "color-mix(in srgb, var(--accent) 12%, var(--surface))",
+                  color: "var(--text-main)",
+                }}
+                title="Toon of verberg AI-cards op het dashboard"
+              >
+                <span>AI-cards tonen</span>
+                <span
+                  aria-hidden="true"
+                  style={{
+                    ...switchTrackStyle,
+                    background:
+                      dashboardLayout.showAiCards === false
+                        ? "color-mix(in srgb, var(--text-faint) 24%, var(--surface-muted))"
+                        : "color-mix(in srgb, var(--accent) 72%, var(--surface))",
+                    border:
+                      dashboardLayout.showAiCards === false
+                        ? "1px solid var(--border)"
+                        : "1px solid color-mix(in srgb, var(--accent) 72%, var(--border))",
+                  }}
+                >
+                  <span
+                    style={{
+                      ...switchThumbStyle,
+                      left: 2,
+                      transform: dashboardLayout.showAiCards === false ? "translateX(0)" : "translateX(16px)",
+                    }}
+                  />
+                </span>
+              </button>
+              <button onClick={() => refreshInsightsPanel()} disabled={insightRefreshBusy}>
                 {insightRefreshBusy ? "Verversen..." : "Vernieuwen"}
               </button>
             </div>
@@ -6089,7 +6314,18 @@ export default function Home() {
                           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                             <strong>{item.title}</strong>
                             <span style={fixedMetricBadgeStyle}>{Math.round(item.score_pct)}%</span>
-                            {item.feedback_status !== "pending" ? <span style={fixedMetricBadgeStyle}>{item.feedback_status}</span> : null}
+                            {item.feedback_status !== "pending" ? (
+                              <span
+                                style={{
+                                  ...fixedMetricBadgeStyle,
+                                  borderColor: getInsightFeedbackPresentation(item.feedback_status).borderColor,
+                                  background: getInsightFeedbackPresentation(item.feedback_status).background,
+                                  color: getInsightFeedbackPresentation(item.feedback_status).color,
+                                }}
+                              >
+                                {getInsightFeedbackPresentation(item.feedback_status).label}
+                              </span>
+                            ) : null}
                           </div>
                           <div style={{ color: "var(--text-muted)" }}>{item.summary}</div>
                           <div style={{ fontSize: 12, color: "var(--text-faint)" }}>

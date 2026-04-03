@@ -1485,7 +1485,6 @@ def _persist_ai_insights(cur, *, scope_key: str, candidates: List[Dict[str, Any]
                 action_label = excluded.action_label,
                 score_pct = excluded.score_pct,
                 deviation_pct = excluded.deviation_pct,
-                expires_at = excluded.expires_at,
                 source_payload = excluded.source_payload
             returning
               id, insight_key, title, summary, action_label, kind, target_card_key, score_pct, deviation_pct,
@@ -1509,7 +1508,13 @@ def _persist_ai_insights(cur, *, scope_key: str, candidates: List[Dict[str, Any]
         row = cur.fetchone()
         if row:
             mapped = _map_ai_insight_row(row)
-            if mapped and mapped.get("feedback_status") != "downvoted" and not mapped.get("removed_at"):
+            expires_value = row[10]
+            if (
+                mapped
+                and (expires_value is None or expires_value > now)
+                and mapped.get("feedback_status") != "downvoted"
+                and not mapped.get("removed_at")
+            ):
                 active.append(mapped)
     return active
 
