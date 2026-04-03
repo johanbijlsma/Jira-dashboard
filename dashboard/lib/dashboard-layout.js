@@ -13,6 +13,7 @@ function normalizeList(arr, allowedSet) {
 export function normalizeDashboardLayout(input) {
   const fallback = createDefaultDashboardLayout();
   if (!input || typeof input !== "object") return fallback;
+  const showAiCards = input.showAiCards !== false;
 
   const allKpis = new Set(KPI_KEYS);
   const allCards = new Set(NON_KPI_CARD_KEYS);
@@ -91,7 +92,7 @@ export function normalizeDashboardLayout(input) {
   const visibleCards = new Set([...cardRows[0], ...cardRows[1]]);
   const lockedCards = normalizeList(input.lockedCards, visibleCards);
 
-  return { kpiRow, hiddenKpis, cardRows, hiddenCards, expandedByRow, lockedCards };
+  return { showAiCards, kpiRow, hiddenKpis, cardRows, hiddenCards, expandedByRow, lockedCards };
 }
 
 export function moveKpiToVisibleLayout(prev, key, targetKey = null, position = "before") {

@@ -28,6 +28,7 @@ describe("dashboard-constants", () => {
 
   it("creates a normalized default layout", () => {
     const layout = createDefaultDashboardLayout();
+    expect(layout.showAiCards).toBe(true);
     expect(layout.kpiRow).toEqual(KPI_KEYS);
     expect(layout.hiddenKpis).toEqual([]);
     expect(layout.hiddenCards).toEqual(["p90", "firstResponseAll"]);

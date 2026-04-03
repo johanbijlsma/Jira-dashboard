@@ -62,6 +62,7 @@ export const MAX_KPI_TILES = 8;
 
 export function createDefaultDashboardLayout() {
   return {
+    showAiCards: true,
     kpiRow: [...KPI_KEYS],
     hiddenKpis: [],
     cardRows: [

@@ -16,6 +16,7 @@ import { createDefaultDashboardLayout } from "./dashboard-constants";
 describe("dashboard-layout", () => {
   it("ships the customized default layout", () => {
     expect(createDefaultDashboardLayout()).toEqual({
+      showAiCards: true,
       kpiRow: ["totalTickets", "latestTickets", "currentWeekFlow", "releaseWednesdayWorkload", "ttfrOverdue", "topType", "topSubject", "topPartner"],
       hiddenKpis: [],
       cardRows: [
@@ -48,6 +49,7 @@ describe("dashboard-layout", () => {
     expect(normalized.expandedByRow[0]).toBe("volume");
     expect(normalized.expandedByRow[1]).toBeNull();
     expect(normalized.lockedCards).toEqual(["volume"]);
+    expect(normalized.showAiCards).toBe(true);
   });
 
   it("normalizes legacy shape and split card order", () => {
@@ -60,6 +62,11 @@ describe("dashboard-layout", () => {
     expect(normalized.kpiRow[0]).toBe("topType");
     expect(normalized.hiddenKpis).toContain("totalTickets");
     expect(normalized.hiddenCards).toContain("assignee");
+  });
+
+  it("keeps explicit AI-card visibility setting", () => {
+    const normalized = normalizeDashboardLayout({ showAiCards: false });
+    expect(normalized.showAiCards).toBe(false);
   });
 
   it("moves and hides kpis", () => {
