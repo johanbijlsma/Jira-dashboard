@@ -71,6 +71,7 @@ import { useLiveAlerts } from "../lib/use-live-alerts";
 import { useServicedeskConfig } from "../lib/use-servicedesk-config";
 import { useSyncStatus } from "../lib/use-sync-status";
 import { useVacationsData } from "../lib/use-vacations-data";
+import { useWeeklyInsights } from "../lib/use-weekly-insights";
 
 ChartJS.register(
   CategoryScale,
@@ -219,6 +220,20 @@ function formatDurationHoursForTooltip(value) {
   return `${hours.toFixed(1)} uur`;
 }
 
+function formatHoursOrDash(value) {
+  const hours = Number(value);
+  if (!Number.isFinite(hours)) return "n.v.t.";
+  return `${hours.toFixed(1)} uur`;
+}
+
+function formatNumberOrDash(value) {
+  const numValue = Number(value);
+  if (!Number.isFinite(numValue)) return "0";
+  return String(numValue);
+}
+
+const WEEKLY_INSIGHTS_GROUP_KEY = "__weekly_insights__";
+
 function resolveCssVarColor(name, fallback) {
   if (typeof window === "undefined" || typeof document === "undefined") return fallback;
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -309,6 +324,7 @@ export default function Home() {
   const [drillOffset, setDrillOffset] = useState(0);
   const [drillHasNext, setDrillHasNext] = useState(false);
   const [clearAlertLogsBusy, setClearAlertLogsBusy] = useState(false);
+  const [weeklyInsightsDownloadBusy, setWeeklyInsightsDownloadBusy] = useState(false);
   const [alertKindFilter, setAlertKindFilter] = useState("ALL");
   const [expandedAlertGroups, setExpandedAlertGroups] = useState({});
   const [expandedInsightIds, setExpandedInsightIds] = useState({});
@@ -482,6 +498,11 @@ export default function Home() {
     resetKey: servicedeskOnly,
   });
   const {
+    weeklyInsights,
+    weeklyInsightsLoading,
+    weeklyInsightsError,
+  } = useWeeklyInsights({ servicedeskOnly: true });
+  const {
     liveInsights,
     insightLogEntries,
     thresholdPct: activeAiThresholdPct,
@@ -596,6 +617,32 @@ export default function Home() {
     setSyncMessageKind(kind);
     if (ms > 0) setTimeout(() => setSyncMessage(""), ms);
   }, []);
+
+  const downloadWeeklyInsightsPdf = useCallback(async () => {
+    setWeeklyInsightsDownloadBusy(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("servicedesk_only", "true");
+      const response = await fetch(`${API}/alerts/weekly-insights.pdf?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(`Weekly PDF downloaden mislukt (${response.status})`);
+      }
+      const blob = await response.blob();
+      const objectUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const week = weeklyInsights?.week || {};
+      link.href = objectUrl;
+      link.download = `weekly-insights-${week.start_date || "week-start"}-${week.end_date || "week-end"}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      flashToast(err?.message || "Weekly PDF downloaden mislukt.", "error");
+    } finally {
+      setWeeklyInsightsDownloadBusy(false);
+    }
+  }, [flashToast, weeklyInsights]);
 
   const applyDateRange = useCallback(({ months = 0, years = 0, days = 0 }) => {
     const end = new Date();
@@ -6186,10 +6233,151 @@ export default function Home() {
 
         <div style={{ padding: "12px 20px", overflow: "auto", flex: 1 }}>
           {sidePanelMode === "alerts" ? (
-            alertLogEntries.length ? (
-              filteredAlertLogGroups.length ? (
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <div style={{ display: "grid", gap: 16 }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Tijd</th>
+                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Soort</th>
+                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Issue</th>
+                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Laatste info</th>
+                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Aantal</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                        {weeklyInsights?.generated_at ? fmtDateTime(weeklyInsights.generated_at) : "—"}
+                      </td>
+                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                        <span style={{ ...alertKindPillStyle("LOGBOOK_EVENT"), borderColor: "rgba(37, 99, 235, 0.35)", background: "color-mix(in srgb, #2563eb 12%, var(--surface))", color: "#1d4ed8" }}>
+                          Weekly insights
+                        </span>
+                      </td>
+                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>—</td>
+                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                        {weeklyInsights?.week?.label || "Vorige volledige week"}
+                      </td>
+                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                        <button
+                          onClick={() => toggleAlertGroup(WEEKLY_INSIGHTS_GROUP_KEY)}
+                          aria-label={expandedAlertGroups[WEEKLY_INSIGHTS_GROUP_KEY] ? "Inklappen" : "Uitklappen"}
+                          title={expandedAlertGroups[WEEKLY_INSIGHTS_GROUP_KEY] ? "Inklappen" : "Uitklappen"}
+                          style={{
+                            border: "1px solid var(--border)",
+                            borderRadius: 6,
+                            background: "var(--surface)",
+                            padding: "4px 8px",
+                            cursor: "pointer",
+                          }}
+                        >
+                          {expandedAlertGroups[WEEKLY_INSIGHTS_GROUP_KEY] ? "▲" : "▼"}
+                        </button>
+                      </td>
+                    </tr>
+                    {expandedAlertGroups[WEEKLY_INSIGHTS_GROUP_KEY] ? (
+                      <tr>
+                        <td colSpan={5} style={{ padding: "0 8px 10px 8px", background: "var(--surface-muted)" }}>
+                          <div style={{ padding: "14px 16px", border: "1px solid var(--border)", borderRadius: 8, marginTop: 6, background: "color-mix(in srgb, var(--accent) 4%, var(--surface))" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+                              <div>
+                                <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Weekly insights</div>
+                                <div style={{ fontSize: 18, fontWeight: 700 }}>
+                                  {weeklyInsights?.week?.label || "Vorige volledige week"}
+                                </div>
+                                <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 4 }}>
+                                  {weeklyInsights?.scope ? `${weeklyInsights.scope} · ` : ""}gegenereerd {weeklyInsights?.generated_at ? fmtDateTime(weeklyInsights.generated_at) : "nog niet"}
+                                </div>
+                              </div>
+                              <button type="button" onClick={downloadWeeklyInsightsPdf} disabled={weeklyInsightsDownloadBusy || !weeklyInsights}>
+                                {weeklyInsightsDownloadBusy ? "PDF maken..." : "Download PDF"}
+                              </button>
+                            </div>
+                            {weeklyInsightsError ? (
+                              <div style={{ marginTop: 12, color: "#991b1b" }}>{weeklyInsightsError}</div>
+                            ) : weeklyInsightsLoading && !weeklyInsights ? (
+                              <div style={{ marginTop: 12, color: "var(--text-muted)" }}>Weekly insights worden geladen…</div>
+                            ) : weeklyInsights ? (
+                              <div style={{ display: "grid", gap: 14, marginTop: 14 }}>
+                                <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
+                                  {[
+                                    ["Binnengekomen", formatNumberOrDash(weeklyInsights.summary?.incoming_tickets)],
+                                    ["Afgesloten", formatNumberOrDash(weeklyInsights.summary?.closed_tickets)],
+                                    ["Sluitratio", weeklyInsights.summary?.close_rate_pct != null ? `${weeklyInsights.summary.close_rate_pct}%` : "n.v.t."],
+                                    ["Open delta", formatNumberOrDash(weeklyInsights.summary?.open_delta)],
+                                    ["Alert events", formatNumberOrDash(weeklyInsights.alerts?.total_events)],
+                                  ].map(([label, value]) => (
+                                    <div key={label} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", background: "var(--surface)" }}>
+                                      <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{label}</div>
+                                      <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>{value}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                                <div style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                                  <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "12px 14px", background: "var(--surface)" }}>
+                                    <div style={{ fontWeight: 700, marginBottom: 8 }}>Service levels</div>
+                                    <div style={{ display: "grid", gap: 6, fontSize: 14 }}>
+                                      <div>First response gemiddeld: <b>{formatHoursOrDash(weeklyInsights.service_levels?.first_response_avg_hours)}</b></div>
+                                      <div>First response mediaan: <b>{formatHoursOrDash(weeklyInsights.service_levels?.first_response_p50_hours)}</b></div>
+                                      <div>Resolution gemiddeld: <b>{formatHoursOrDash(weeklyInsights.service_levels?.resolution_avg_hours)}</b></div>
+                                      <div>Resolution mediaan: <b>{formatHoursOrDash(weeklyInsights.service_levels?.resolution_p50_hours)}</b></div>
+                                    </div>
+                                  </div>
+                                  <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "12px 14px", background: "var(--surface)" }}>
+                                    <div style={{ fontWeight: 700, marginBottom: 8 }}>Alerts per soort</div>
+                                    {Array.isArray(weeklyInsights.alerts?.by_kind) && weeklyInsights.alerts.by_kind.length ? (
+                                      <div style={{ display: "grid", gap: 6 }}>
+                                        {weeklyInsights.alerts.by_kind.map((item) => (
+                                          <div key={item.kind} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                                            <span>{alertKindLabel(item.kind)}</span>
+                                            <b>{formatNumberOrDash(item.events)}</b>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <div style={{ color: "var(--text-muted)" }}>Geen alerts in deze week.</div>
+                                    )}
+                                  </div>
+                                </div>
+                                <div style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                                  {[
+                                    ["Top request types", weeklyInsights.breakdowns?.request_types],
+                                    ["Top onderwerpen", weeklyInsights.breakdowns?.onderwerpen],
+                                    ["Top priorities", weeklyInsights.breakdowns?.priorities],
+                                    ["Top assignees", weeklyInsights.breakdowns?.assignees],
+                                    ["Top organizations", weeklyInsights.breakdowns?.organizations],
+                                  ].map(([title, rows]) => (
+                                    <div key={title} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "12px 14px", background: "var(--surface)" }}>
+                                      <div style={{ fontWeight: 700, marginBottom: 8 }}>{title}</div>
+                                      {Array.isArray(rows) && rows.length ? (
+                                        <div style={{ display: "grid", gap: 6 }}>
+                                          {rows.map((row) => (
+                                            <div key={`${title}:${row.name}`} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                                              <span>{row.name}</span>
+                                              <b>{formatNumberOrDash(row.tickets)}</b>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <div style={{ color: "var(--text-muted)" }}>Geen data</div>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+              {alertLogEntries.length ? (
+                filteredAlertLogGroups.length ? (
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
                     <thead>
                       <tr>
                         <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Tijd</th>
@@ -6281,14 +6469,15 @@ export default function Home() {
                         );
                       })}
                     </tbody>
-                  </table>
-                </div>
+                    </table>
+                  </div>
+                ) : (
+                  <div style={{ color: "var(--text-muted)" }}>Geen alerts gevonden voor deze soort.</div>
+                )
               ) : (
-                <div style={{ color: "var(--text-muted)" }}>Geen alerts gevonden voor deze soort.</div>
-              )
-            ) : (
-              <div style={{ color: "var(--text-muted)" }}>Nog geen alerts in dit logboek.</div>
-            )
+                <div style={{ color: "var(--text-muted)" }}>Nog geen alerts in dit logboek.</div>
+              )}
+            </div>
           ) : sidePanelMode === "insights" ? (
             insightLogEntries.length ? (
               <div style={{ display: "grid", gap: 12 }}>

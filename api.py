@@ -226,6 +226,289 @@ def _build_text_pdf(lines: List[str]) -> bytes:
     return bytes(pdf)
 
 
+def _build_weekly_insights_pdf(payload: Dict[str, Any]) -> bytes:
+    summary = payload.get("summary") or {}
+    service_levels = payload.get("service_levels") or {}
+    alerts = payload.get("alerts") or {}
+    breakdowns = payload.get("breakdowns") or {}
+
+    def _format_hours(v):
+        if v is None:
+            return "n.v.t."
+        return f"{float(v):.1f} uur"
+
+    alert_items = [
+        f"Totaal events: {int(alerts.get('total_events') or 0)}",
+        *[
+            f"{_alert_kind_report_label(row.get('kind'))}: {int(row.get('events') or 0)}"
+            for row in (alerts.get("by_kind") or [])
+        ],
+    ]
+    if len(alert_items) == 1:
+        alert_items.append("Geen alerts in deze week.")
+
+    sections = [
+        {
+            "title": "Samenvatting",
+            "items": [
+                f"Binnengekomen tickets: {int(summary.get('incoming_tickets') or 0)}",
+                f"Afgesloten tickets: {int(summary.get('closed_tickets') or 0)}",
+                f"Sluitratio: {summary.get('close_rate_pct') if summary.get('close_rate_pct') is not None else 'n.v.t.'}%",
+                f"Open delta (in - uit): {int(summary.get('open_delta') or 0)}",
+            ],
+        },
+        {
+            "title": "Service levels",
+            "items": [
+                f"First response gemiddeld: {_format_hours(service_levels.get('first_response_avg_hours'))}",
+                f"First response mediaan: {_format_hours(service_levels.get('first_response_p50_hours'))}",
+                f"First response steekproef: {int(service_levels.get('first_response_n') or 0)}",
+                f"Resolution gemiddeld: {_format_hours(service_levels.get('resolution_avg_hours'))}",
+                f"Resolution mediaan: {_format_hours(service_levels.get('resolution_p50_hours'))}",
+                f"Resolution steekproef: {int(service_levels.get('resolution_n') or 0)}",
+            ],
+        },
+        {
+            "title": "Alerts",
+            "items": alert_items,
+        },
+        {
+            "title": "Top request types",
+            "items": [
+                f"{row.get('name')}: {int(row.get('tickets') or 0)}"
+                for row in (breakdowns.get("request_types") or [])
+            ] or ["Geen data"],
+        },
+        {
+            "title": "Top onderwerpen",
+            "items": [
+                f"{row.get('name')}: {int(row.get('tickets') or 0)}"
+                for row in (breakdowns.get("onderwerpen") or [])
+            ] or ["Geen data"],
+        },
+        {
+            "title": "Top priorities",
+            "items": [
+                f"{row.get('name')}: {int(row.get('tickets') or 0)}"
+                for row in (breakdowns.get("priorities") or [])
+            ] or ["Geen data"],
+        },
+        {
+            "title": "Top assignees",
+            "items": [
+                f"{row.get('name')}: {int(row.get('tickets') or 0)}"
+                for row in (breakdowns.get("assignees") or [])
+            ] or ["Geen data"],
+        },
+        {
+            "title": "Top organizations",
+            "items": [
+                f"{row.get('name')}: {int(row.get('tickets') or 0)}"
+                for row in (breakdowns.get("organizations") or [])
+            ] or ["Geen data"],
+        },
+    ]
+
+    page_width = 595
+    page_height = 842
+    margin_x = 42
+    margin_top = 54
+    margin_bottom = 46
+    line_height = 14
+    body_font_size = 11
+    meta_font_size = 10
+    section_font_size = 14
+    title_font_size = 22
+    kpi_label_size = 9
+    kpi_value_size = 16
+    usable_width = page_width - (margin_x * 2)
+    column_gap = 16
+    column_width = (usable_width - column_gap) / 2
+
+    pages: List[List[str]] = []
+    current_page: List[str] = []
+    y = page_height - margin_top
+    column_index = 0
+
+    def _start_new_page():
+        nonlocal current_page, y, column_index
+        if current_page:
+            pages.append(current_page)
+        current_page = []
+        y = page_height - margin_top
+        column_index = 0
+
+    def _ensure_space(required_height: float):
+        nonlocal y, column_index
+        if y - required_height < margin_bottom:
+            if column_index == 0:
+                column_index = 1
+                y = page_height - margin_top - 170
+                return
+            _start_new_page()
+
+    def _append_stream(line: str):
+        current_page.append(line)
+
+    def _write_text(
+        text: str,
+        x: float,
+        y_pos: float,
+        *,
+        font: str = "F1",
+        size: int = 11,
+        rgb: tuple[float, float, float] = (0.08, 0.12, 0.18),
+    ):
+        r, g, b = rgb
+        _append_stream(
+            f"BT {r:.3f} {g:.3f} {b:.3f} rg /{font} {size} Tf 1 0 0 1 {x:.2f} {y_pos:.2f} Tm ({_pdf_escape(text)}) Tj ET"
+        )
+
+    def _draw_fill_rect(x: float, y_pos: float, width: float, height: float, *, rgb: tuple[float, float, float]):
+        r, g, b = rgb
+        _append_stream(f"{r:.3f} {g:.3f} {b:.3f} rg")
+        _append_stream(f"{x:.2f} {y_pos:.2f} {width:.2f} {height:.2f} re f")
+
+    def _draw_stroke_rect(x: float, y_pos: float, width: float, height: float, *, rgb: tuple[float, float, float], line_width: float = 1.0):
+        r, g, b = rgb
+        _append_stream(f"{r:.3f} {g:.3f} {b:.3f} RG")
+        _append_stream(f"{line_width:.2f} w")
+        _append_stream(f"{x:.2f} {y_pos:.2f} {width:.2f} {height:.2f} re S")
+
+    def _draw_line(x1: float, y1: float, x2: float, y2: float, *, rgb: tuple[float, float, float], width: float = 1.0):
+        r, g, b = rgb
+        _append_stream(f"{r:.3f} {g:.3f} {b:.3f} RG")
+        _append_stream(f"{width:.2f} w")
+        _append_stream(f"{x1:.2f} {y1:.2f} m {x2:.2f} {y2:.2f} l S")
+
+    header_height = 108
+    header_y = y - 62
+    _draw_fill_rect(margin_x, header_y, usable_width, header_height, rgb=(0.11, 0.27, 0.43))
+    _write_text(
+        "Weekly insights rapport",
+        margin_x,
+        header_y + 74,
+        font="F2",
+        size=title_font_size,
+        rgb=(1.0, 1.0, 1.0),
+    )
+    _write_text(
+        f"Periode: {_format_report_date_range(payload)}",
+        margin_x,
+        header_y + 42,
+        size=meta_font_size,
+        rgb=(0.93, 0.97, 1.0),
+    )
+    _write_text(
+        f"Scope: {payload.get('scope', '-')}",
+        margin_x,
+        header_y + 28,
+        size=meta_font_size,
+        rgb=(0.93, 0.97, 1.0),
+    )
+    _write_text(
+        f"Gegenereerd op: {_format_report_timestamp(payload.get('generated_at'))}",
+        margin_x,
+        header_y + 14,
+        size=meta_font_size,
+        rgb=(0.93, 0.97, 1.0),
+    )
+    y = header_y - 18
+
+    kpi_top = y
+    kpi_gap = 12
+    kpi_width = (usable_width - (kpi_gap * 3)) / 4
+    kpi_height = 50
+    kpi_items = [
+        ("Binnengekomen", f"{int(summary.get('incoming_tickets') or 0)}"),
+        ("Afgesloten", f"{int(summary.get('closed_tickets') or 0)}"),
+        ("Sluitratio", f"{summary.get('close_rate_pct') if summary.get('close_rate_pct') is not None else 'n.v.t.'}%"),
+        ("Alert events", f"{int(alerts.get('total_events') or 0)}"),
+    ]
+    for idx, (label, value) in enumerate(kpi_items):
+        x = margin_x + idx * (kpi_width + kpi_gap)
+        box_y = kpi_top - kpi_height + 8
+        _draw_fill_rect(x, box_y, kpi_width, kpi_height, rgb=(0.96, 0.98, 1.0))
+        _draw_stroke_rect(x, box_y, kpi_width, kpi_height, rgb=(0.78, 0.84, 0.91), line_width=0.8)
+        _write_text(label, x + 10, box_y + 31, font="F2", size=kpi_label_size, rgb=(0.27, 0.38, 0.49))
+        _write_text(value, x + 10, box_y + 13, font="F2", size=kpi_value_size, rgb=(0.11, 0.27, 0.43))
+
+    y = kpi_top - kpi_height - 10
+    _draw_line(margin_x, y, margin_x + usable_width, y, rgb=(0.80, 0.85, 0.91), width=1.2)
+    y -= 24
+    content_start_y = y
+
+    for section in sections:
+        items = section.get("items") or []
+        section_height = 26 + max(1, len(items)) * line_height + 18
+        _ensure_space(section_height)
+        column_x = margin_x if column_index == 0 else margin_x + column_width + column_gap
+
+        _draw_fill_rect(column_x, y - 6, column_width, 22, rgb=(0.89, 0.94, 0.98))
+        _write_text(
+            str(section.get("title") or ""),
+            column_x + 10,
+            y + 9,
+            font="F2",
+            size=section_font_size,
+            rgb=(0.11, 0.27, 0.43),
+        )
+        y -= 30
+
+        for item in items:
+            _write_text(f"- {item}", column_x + 10, y, size=body_font_size, rgb=(0.08, 0.12, 0.18))
+            y -= line_height
+        y -= 10
+
+    if current_page:
+        pages.append(current_page)
+
+    objects: List[str] = []
+
+    def add_obj(body: str) -> int:
+        objects.append(body)
+        return len(objects)
+
+    catalog_id = add_obj("<< /Type /Catalog /Pages 0 0 R >>")
+    pages_id = add_obj("<< /Type /Pages /Kids [] /Count 0 >>")
+    font_regular_id = add_obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    font_bold_id = add_obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>")
+
+    page_ids = []
+    for page_lines in pages or [["BT /F1 11 Tf 1 0 0 1 42 780 Tm (Geen data beschikbaar.) Tj ET"]]:
+        stream_text = "\n".join(page_lines)
+        stream_id = add_obj(f"<< /Length {len(stream_text.encode('latin-1', 'replace'))} >>\nstream\n{stream_text}\nendstream")
+        page_id = add_obj(
+            f"<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 {page_width} {page_height}] "
+            f"/Resources << /Font << /F1 {font_regular_id} 0 R /F2 {font_bold_id} 0 R >> >> /Contents {stream_id} 0 R >>"
+        )
+        page_ids.append(page_id)
+
+    kids = " ".join(f"{pid} 0 R" for pid in page_ids)
+    objects[pages_id - 1] = f"<< /Type /Pages /Kids [{kids}] /Count {len(page_ids)} >>"
+    objects[catalog_id - 1] = f"<< /Type /Catalog /Pages {pages_id} 0 R >>"
+
+    pdf = bytearray()
+    pdf.extend(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for idx, obj in enumerate(objects, start=1):
+        offsets.append(len(pdf))
+        pdf.extend(f"{idx} 0 obj\n{obj}\nendobj\n".encode("latin-1", "replace"))
+
+    xref_start = len(pdf)
+    pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode("latin-1"))
+    pdf.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        pdf.extend(f"{offset:010d} 00000 n \n".encode("latin-1"))
+    pdf.extend(
+        (
+            f"trailer\n<< /Size {len(objects) + 1} /Root {catalog_id} 0 R >>\n"
+            f"startxref\n{xref_start}\n%%EOF\n"
+        ).encode("latin-1")
+    )
+    return bytes(pdf)
+
+
 def _weekly_insights_payload(servicedesk_only: bool = True) -> Dict[str, Any]:
     ensure_schema()
     week_start, week_end = _previous_full_week_range()
@@ -233,8 +516,22 @@ def _weekly_insights_payload(servicedesk_only: bool = True) -> Dict[str, Any]:
     date_to = week_end.isoformat()
     servicedesk_scope_sql = servicedesk_filter_clause()
     servicedesk_scope_sql_i = servicedesk_filter_clause("i")
+    assignee_scope_sql = servicedesk_scope_sql
+    assignee_scope_params: tuple[Any, ...] = (date_from, date_to, servicedesk_only)
 
     with conn() as c, c.cursor() as cur:
+        servicedesk_team_members, _servicedesk_onderwerpen = _get_servicedesk_scope(cur)
+        if servicedesk_only:
+            assignee_scope_sql = (
+                f"""
+                {servicedesk_scope_sql}
+                  and (
+                    assignee is not null
+                    and assignee = any(coalesce((select servicedesk_team_members from dashboard_config where id=1), array[]::text[]))
+                  )
+                """
+            )
+        assignee_scope_params = (date_from, date_to, servicedesk_only)
         cur.execute(
             compose_sql_query(
             """
@@ -324,14 +621,14 @@ def _weekly_insights_payload(servicedesk_only: bool = True) -> Dict[str, Any]:
             from issues
             where created_at >= %s::timestamptz and created_at < (%s::timestamptz + interval '1 day')
               and assignee is not null and assignee <> ''
-              and {servicedesk_scope_sql}
+              and {assignee_scope_sql}
             group by 1
             order by 2 desc, 1
             limit 5;
             """,
-            servicedesk_scope_sql=servicedesk_scope_sql,
+            assignee_scope_sql=assignee_scope_sql,
             ),
-            (date_from, date_to, servicedesk_only),
+            assignee_scope_params,
         )
         assignee_rows = cur.fetchall()
 
@@ -463,9 +760,9 @@ def _weekly_insights_pdf_lines(payload: Dict[str, Any]) -> List[str]:
     lines = [
         "Weekly insights rapport",
         "",
-        f"Periode: {payload.get('week', {}).get('label', '-')}",
+        f"Periode: {_format_report_date_range(payload)}",
         f"Scope: {payload.get('scope', '-')}",
-        f"Gegenereerd op: {payload.get('generated_at', '-')}",
+        f"Gegenereerd op: {_format_report_timestamp(payload.get('generated_at'))}",
         "",
         "Samenvatting",
         f"- Binnengekomen tickets: {int(summary.get('incoming_tickets') or 0)}",
@@ -485,7 +782,7 @@ def _weekly_insights_pdf_lines(payload: Dict[str, Any]) -> List[str]:
         f"- Totaal events: {int(alerts.get('total_events') or 0)}",
     ]
     for row in (alerts.get("by_kind") or []):
-        lines.append(f"  - {row.get('kind')}: {int(row.get('events') or 0)}")
+        lines.append(f"  - {_alert_kind_report_label(row.get('kind'))}: {int(row.get('events') or 0)}")
 
     def add_breakdown(title: str, rows: List[Dict[str, Any]]):
         lines.append("")
@@ -502,6 +799,48 @@ def _weekly_insights_pdf_lines(payload: Dict[str, Any]) -> List[str]:
     add_breakdown("Top assignees", breakdowns.get("assignees") or [])
     add_breakdown("Top organizations", breakdowns.get("organizations") or [])
     return lines
+
+
+def _weekly_insights_filename(payload: Dict[str, Any]) -> str:
+    week = payload.get("week") or {}
+    start_date = str(week.get("start_date") or "week-start")
+    end_date = str(week.get("end_date") or "week-end")
+    return f"weekly-insights-{start_date}-{end_date}.pdf"
+
+
+def _format_report_timestamp(value: Any) -> str:
+    if not value:
+        return "-"
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return str(value)
+    local_dt = dt.astimezone(REPORT_TIMEZONE)
+    return local_dt.strftime("%d-%m-%Y %H:%M")
+
+
+def _format_report_date_range(payload: Dict[str, Any]) -> str:
+    week = payload.get("week") or {}
+    start_date = str(week.get("start_date") or "")
+    end_date = str(week.get("end_date") or "")
+    if not start_date or not end_date:
+        return str(week.get("label") or "-")
+    return f"{start_date[8:10]}-{start_date[5:7]}-{start_date[0:4]} t/m {end_date[8:10]}-{end_date[5:7]}-{end_date[0:4]}"
+
+
+def _alert_kind_report_label(kind: Any) -> str:
+    normalized = str(kind or "").strip().upper()
+    mapping = {
+        "P1": "Priority 1",
+        "SLA_WARNING": "SLA bijna verlopen",
+        "SLA_CRITICAL": "SLA kritiek",
+        "SLA_OVERDUE": "SLA verlopen",
+        "TTR_WARNING": "TTR binnen 24 uur",
+        "TTR_CRITICAL": "TTR binnen 60 min",
+        "TTR_OVERDUE": "TTR verlopen",
+        "LOGBOOK_EVENT": "Logboek event",
+    }
+    return mapping.get(normalized, str(kind or "-"))
 
 
 def ensure_schema():  # pragma: no cover
@@ -561,6 +900,8 @@ def ensure_schema():  # pragma: no cover
               servicedesk_team_members text[] not null default '{}',
               servicedesk_onderwerpen text[] not null default '{}',
               ai_insight_threshold_pct integer not null default 75,
+              alert_logs_cleared_at_servicedesk timestamptz,
+              alert_logs_cleared_at_all timestamptz,
               servicedesk_onderwerpen_customized boolean not null default false,
               updated_at timestamptz not null default now()
             );
@@ -701,6 +1042,8 @@ def ensure_schema():  # pragma: no cover
             "alter table dashboard_config add column if not exists "
             "ai_insight_threshold_pct integer not null default 75;"
         )
+        cur.execute("alter table dashboard_config add column if not exists alert_logs_cleared_at_servicedesk timestamptz;")
+        cur.execute("alter table dashboard_config add column if not exists alert_logs_cleared_at_all timestamptz;")
         cur.execute("alter table dashboard_config add column if not exists servicedesk_onderwerpen_customized boolean not null default false;")
         cur.execute("alter table dashboard_config add column if not exists updated_at timestamptz not null default now();")
         cur.execute("alter table ai_insights_log add column if not exists insight_key text;")
@@ -2411,6 +2754,44 @@ def _insert_alert_logbook_event(cur, servicedesk_only: bool, reason: str, remove
             reason,
             bool(servicedesk_only),
         ),
+    )
+
+
+def _get_alert_log_clear_column(servicedesk_only: bool) -> str:
+    return "alert_logs_cleared_at_servicedesk" if servicedesk_only else "alert_logs_cleared_at_all"
+
+
+def _get_alert_logs_cleared_at(cur, servicedesk_only: bool) -> Optional[datetime]:
+    column = _get_alert_log_clear_column(servicedesk_only)
+    cur.execute(
+        compose_sql_query(
+            """
+            select {column}
+            from dashboard_config
+            where id = 1;
+            """,
+            column=column,
+        )
+    )
+    row = cur.fetchone()
+    return row[0] if isinstance(row, (list, tuple)) and row else None
+
+
+def _set_alert_logs_cleared_at(cur, servicedesk_only: bool):
+    column = _get_alert_log_clear_column(servicedesk_only)
+    cur.execute(
+        compose_sql_query(
+            """
+            insert into dashboard_config(id) values (1)
+            on conflict (id) do nothing;
+
+            update dashboard_config
+            set {column} = now(),
+                updated_at = now()
+            where id = 1;
+            """,
+            column=column,
+        )
     )
 
 
@@ -4282,15 +4663,17 @@ def alerts_logs(limit: int = 200, servicedesk_only: bool = True):
     safe_limit = max(1, min(int(limit or 200), 1000))
     with conn() as c, c.cursor() as cur:
         _maybe_cleanup_alert_logs(cur)
+        cleared_at = _get_alert_logs_cleared_at(cur, servicedesk_only)
         cur.execute(
             """
             select id, issue_key, alert_kind, status, meta, servicedesk_only, detected_at
             from alert_logs
             where servicedesk_only = %s
+              and (%s::timestamptz is null or detected_at >= %s::timestamptz)
             order by detected_at desc, id desc
             limit %s;
             """,
-            (servicedesk_only, safe_limit),
+            (servicedesk_only, cleared_at, cleared_at, safe_limit),
         )
         rows = cur.fetchall()
         c.commit()
@@ -4308,17 +4691,28 @@ def alerts_logs(limit: int = 200, servicedesk_only: bool = True):
     ]
 
 
+@app.get("/alerts/weekly-insights")
+def alerts_weekly_insights(servicedesk_only: bool = True):
+    return _weekly_insights_payload(servicedesk_only=servicedesk_only)
+
+
+@app.get("/alerts/weekly-insights.pdf")
+def alerts_weekly_insights_pdf(servicedesk_only: bool = True):
+    payload = _weekly_insights_payload(servicedesk_only=servicedesk_only)
+    pdf = _build_weekly_insights_pdf(payload)
+    filename = _weekly_insights_filename(payload)
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.post("/alerts/logs/clear")
 def alerts_logs_clear(servicedesk_only: bool = True):
     ensure_schema()
     with conn() as c, c.cursor() as cur:
-        cur.execute(
-            """
-            delete from alert_logs
-            where servicedesk_only = %s;
-            """,
-            (servicedesk_only,),
-        )
+        _set_alert_logs_cleared_at(cur, servicedesk_only)
         _insert_alert_logbook_event(cur, servicedesk_only=servicedesk_only, reason="MANUAL_CLEAR")
         c.commit()
     return {"ok": True, "servicedesk_only": bool(servicedesk_only)}
