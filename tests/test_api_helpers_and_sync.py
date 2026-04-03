@@ -458,7 +458,9 @@ def test_weekly_insights_payload_uses_onderwerp_based_servicedesk_scope(monkeypa
     issue_queries = [_query_text(query) for query, _params in cursor.executed if "from issues" in _query_text(query).lower()]
     assert issue_queries
     assert any("servicedesk_onderwerpen" in query for query in issue_queries)
-    assert all("servicedesk_team_members" not in query for query in issue_queries)
+    assignee_queries = [query for query in issue_queries if "select assignee, count(*) as tickets" in query.lower()]
+    assert assignee_queries
+    assert any("servicedesk_team_members" in query for query in assignee_queries)
 
 
 def test_ensure_schema_filters_non_servicedesk_onderwerpen_case_insensitive(monkeypatch):
@@ -600,10 +602,11 @@ def test_weekly_insights_pdf_lines_formats_breakdowns_and_empty_states():
     assert "Weekly insights rapport" in lines
     assert "Periode: 2026-03-09 t/m 2026-03-15" in lines
     assert "Scope: alleen servicedesk" in lines
+    assert "Gegenereerd op: 20-03-2026 11:00" in lines
     assert "- Sluitratio: 75.0%" in lines
     assert "- First response gemiddeld: 1.5 uur" in lines
     assert "- First response mediaan: n.v.t." in lines
-    assert "  - ttr_overdue: 2" in lines
+    assert "  - TTR verlopen: 2" in lines
     assert "Top onderwerpen" in lines
     assert "- Geen data" in lines
     assert "- Incident: 4" in lines
@@ -1189,7 +1192,8 @@ def test_alerts_logs_endpoint_maps_rows(monkeypatch):
     cursor = CursorStub(
         fetchall_values=[
             [(1, "SD-1", "P1", "Nieuwe melding", "Priority 1", True, now)]
-        ]
+        ],
+        fetchone_values=[(None,)],
     )
     patch_conn(monkeypatch, cursor)
     monkeypatch.setattr(api, "_last_alert_log_cleanup_at", 999999.0)
@@ -1204,6 +1208,68 @@ def test_alerts_logs_endpoint_maps_rows(monkeypatch):
     assert data[0]["servicedesk_only"] is True
 
 
+def test_alerts_logs_endpoint_applies_clear_timestamp(monkeypatch):
+    now = datetime(2026, 2, 25, 10, 0, 0)
+    cleared_at = datetime(2026, 2, 25, 9, 30, 0, tzinfo=timezone.utc)
+    cursor = CursorStub(
+        fetchall_values=[[(1, "SD-1", "P1", "Nieuwe melding", "Priority 1", True, now)]],
+        fetchone_values=[(cleared_at,)],
+    )
+    patch_conn(monkeypatch, cursor)
+    monkeypatch.setattr(api, "_last_alert_log_cleanup_at", 999999.0)
+    monkeypatch.setattr(api.time, "time", lambda: 1000000.0)
+
+    response = client.get("/alerts/logs?limit=5&servicedesk_only=true")
+
+    assert response.status_code == 200
+    select_query, select_params = next(
+        (_query_text(q), params) for q, params in cursor.executed if "from alert_logs" in _query_text(q).lower()
+    )
+    assert "detected_at >= %s::timestamptz" in select_query
+    assert select_params[1] == cleared_at
+    assert select_params[2] == cleared_at
+
+
+def test_alerts_weekly_insights_endpoint_returns_payload(monkeypatch):
+    payload = {
+        "generated_at": "2026-03-20T10:00:00Z",
+        "week": {"start_date": "2026-03-09", "end_date": "2026-03-15", "label": "2026-03-09 t/m 2026-03-15"},
+        "scope": "alleen servicedesk",
+        "summary": {"incoming_tickets": 12},
+        "service_levels": {},
+        "alerts": {},
+        "breakdowns": {},
+    }
+    monkeypatch.setattr(api, "_weekly_insights_payload", lambda servicedesk_only=True: payload)
+
+    response = client.get("/alerts/weekly-insights?servicedesk_only=true")
+
+    assert response.status_code == 200
+    assert response.json() == payload
+
+
+def test_alerts_weekly_insights_pdf_endpoint_returns_pdf_download(monkeypatch):
+    payload = {
+        "generated_at": "2026-03-20T10:00:00Z",
+        "week": {"start_date": "2026-03-09", "end_date": "2026-03-15", "label": "2026-03-09 t/m 2026-03-15"},
+        "scope": "alleen servicedesk",
+        "summary": {},
+        "service_levels": {},
+        "alerts": {},
+        "breakdowns": {},
+    }
+    monkeypatch.setattr(api, "_weekly_insights_payload", lambda servicedesk_only=True: payload)
+
+    response = client.get("/alerts/weekly-insights.pdf?servicedesk_only=true")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert 'attachment; filename="weekly-insights-2026-03-09-2026-03-15.pdf"' == response.headers["content-disposition"]
+    assert response.content.startswith(b"%PDF-1.4")
+    assert b"Weekly insights rapport" in response.content
+    assert b"Helvetica-Bold" in response.content
+
+
 def test_alerts_logs_clear_endpoint_deletes_scope(monkeypatch):
     cursor = CursorStub()
     patch_conn(monkeypatch, cursor)
@@ -1212,8 +1278,8 @@ def test_alerts_logs_clear_endpoint_deletes_scope(monkeypatch):
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert response.json()["servicedesk_only"] is True
-    assert any("delete from alert_logs" in q.lower() for q, _ in cursor.executed)
-    assert any("insert into alert_logs" in q.lower() for q, _ in cursor.executed)
+    assert any("update dashboard_config" in _query_text(q).lower() for q, _ in cursor.executed)
+    assert any("insert into alert_logs" in _query_text(q).lower() for q, _ in cursor.executed)
 
 
 def test_alert_log_cleanup_adds_logbook_event_when_rows_removed(monkeypatch):

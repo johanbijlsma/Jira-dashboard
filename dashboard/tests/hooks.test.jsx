@@ -8,6 +8,7 @@ import { usePageVisibility } from "../lib/use-page-visibility";
 import { useServicedeskConfig } from "../lib/use-servicedesk-config";
 import { useSyncStatus } from "../lib/use-sync-status";
 import { useVacationsData } from "../lib/use-vacations-data";
+import { useWeeklyInsights } from "../lib/use-weekly-insights";
 
 function jsonResponse(data) {
   return Promise.resolve({
@@ -82,6 +83,53 @@ describe("dashboard hooks", () => {
     await waitFor(() => expect(syncHook.result.current.syncStatus?.auto_sync?.enabled).toBe(true));
     await waitFor(() => expect(logHook.result.current.alertLogEntries[0].issue_key).toBe("SD-2"));
     await waitFor(() => expect(vacationHook.result.current.upcomingVacationTotal).toBe(3));
+  });
+
+  it("loads weekly insights and refreshes them when the page becomes visible again", async () => {
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+
+    global.fetch = createFetchMock({
+      "/alerts/weekly-insights?": [
+        {
+          generated_at: "2026-03-17T08:00:00Z",
+          week: { label: "2026-03-09 t/m 2026-03-15" },
+          scope: "alleen servicedesk",
+          summary: { incoming_tickets: 9 },
+          service_levels: {},
+          alerts: {},
+          breakdowns: {},
+        },
+        {
+          generated_at: "2026-03-17T09:00:00Z",
+          week: { label: "2026-03-09 t/m 2026-03-15" },
+          scope: "alleen servicedesk",
+          summary: { incoming_tickets: 11 },
+          service_levels: {},
+          alerts: {},
+          breakdowns: {},
+        },
+      ],
+    });
+
+    const { result } = renderHook(() => useWeeklyInsights({ servicedeskOnly: true }));
+
+    await waitFor(() => expect(result.current.weeklyInsights?.summary?.incoming_tickets).toBe(9));
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 3600000);
+
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    await waitFor(() => expect(result.current.weeklyInsights?.summary?.incoming_tickets).toBe(11));
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 900000);
   });
 
   it("loads dashboard data, normalizes arrays, and refreshes meta", async () => {
