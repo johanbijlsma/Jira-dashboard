@@ -132,7 +132,7 @@ export function setupChartDefaults(ChartJS) {
       }
 
       ctx.save();
-      ctx.font = `${opts.fontWeight} ${opts.fontSize}px system-ui`;
+      ctx.font = `${opts.fontWeight} ${opts.fontSize}px "Plus Jakarta Sans", system-ui, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
 
@@ -176,7 +176,10 @@ export function setupChartDefaults(ChartJS) {
 
           const pos = element.tooltipPosition();
           const y = opts.mode === "line" ? pos.y - opts.lineOffset : pos.y - opts.barOffset;
-          drawLabel(num(value, value % 1 === 0 ? 0 : 1), pos.x, y, textColor);
+          const rawColors = dataset.backgroundColor;
+          const bgColor = Array.isArray(rawColors) ? rawColors[idx] : rawColors;
+          const fill = opts.mode === "bar" ? contrastTextFor(bgColor) : textColor;
+          drawLabel(num(value, value % 1 === 0 ? 0 : 1), pos.x, y, fill);
         });
       });
 
@@ -275,7 +278,7 @@ export function setupChartDefaults(ChartJS) {
         const label = `Release ${fmtDate(activeMarker.isoDate)}`;
         ctx.save();
         ctx.setLineDash([]);
-        ctx.font = "600 12px system-ui";
+        ctx.font = '600 12px "Plus Jakarta Sans", system-ui, sans-serif';
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         const metrics = ctx.measureText(label);
