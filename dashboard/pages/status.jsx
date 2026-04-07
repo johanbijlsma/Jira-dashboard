@@ -503,7 +503,7 @@ export default function StatusPage() {
         body {
           background: var(--page-bg);
           color: var(--text-main);
-          font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+          font-family: var(--font-sans), "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
           margin: 0;
           min-height: 100%;
           overflow: auto;

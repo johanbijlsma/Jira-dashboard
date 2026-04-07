@@ -241,6 +241,7 @@ function resolveCssVarColor(name, fallback) {
 }
 
 export default function Home() {
+  const [chartThemeKey, setChartThemeKey] = useState("init");
   const today = useMemo(() => new Date(), []);
   const defaultFrom = useMemo(() => {
     const d = new Date();
@@ -358,6 +359,48 @@ export default function Home() {
   const [kpiDropHint, setKpiDropHint] = useState(null);
   const [hiddenDropTarget, setHiddenDropTarget] = useState(null);
   const chartTextSubtle = resolveCssVarColor("--text-subtle", "#cbd5e1");
+  const chartBorderColor = resolveCssVarColor("--border", "#334155");
+  const chartGridColor = `color-mix(in srgb, ${chartBorderColor} 38%, transparent)`;
+  const chartAxisBorderColor = `color-mix(in srgb, ${chartBorderColor} 72%, transparent)`;
+  const chartLegendLabels = useMemo(() => ({ color: chartTextSubtle }), [chartTextSubtle]);
+  const buildChartAxis = useCallback(
+    ({ title, tickCallback, tickOptions = {}, gridDisplay = true, beginAtZero = undefined }) => {
+      const axis = {
+        ticks: {
+          color: chartTextSubtle,
+          ...tickOptions,
+        },
+        grid: {
+          display: gridDisplay,
+          color: chartGridColor,
+        },
+        border: {
+          color: chartAxisBorderColor,
+        },
+      };
+      if (typeof beginAtZero === "boolean") axis.beginAtZero = beginAtZero;
+      if (tickCallback) axis.ticks.callback = tickCallback;
+      if (title) {
+        axis.title = {
+          display: true,
+          text: title,
+          color: chartTextSubtle,
+        };
+      }
+      return axis;
+    },
+    [chartAxisBorderColor, chartGridColor, chartTextSubtle]
+  );
+  const buildSimpleDataLabels = useCallback(
+    ({ mode, maxLabels, datasetIndexes = undefined }) => ({
+      mode,
+      maxLabels,
+      datasetIndexes,
+      color: mode === "line" ? chartTextSubtle : undefined,
+    }),
+    [chartTextSubtle]
+  );
+  const chartRenderKey = useCallback((cardKey) => `${cardKey}-${chartThemeKey}`, [chartThemeKey]);
 
   const normalizeDashboardLayout = useCallback((input) => normalizeDashboardLayoutState(input), []);
 
@@ -1248,6 +1291,42 @@ export default function Home() {
   }, [refreshInsightLog, refreshLiveInsights, refreshSyncStatus, refreshDashboard]);
 
   useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return undefined;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    let frame = 0;
+    const apply = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const styles = getComputedStyle(document.documentElement);
+        const nextKey = [
+          media.matches ? "dark" : "light",
+          styles.getPropertyValue("--text-main").trim(),
+          styles.getPropertyValue("--text-subtle").trim(),
+          styles.getPropertyValue("--border").trim(),
+        ].join("|");
+        setChartThemeKey(nextKey || "theme");
+      });
+    };
+    apply();
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", apply);
+      return () => {
+        window.cancelAnimationFrame(frame);
+        media.removeEventListener("change", apply);
+      };
+    }
+    media.addListener(apply);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      media.removeListener(apply);
+    };
+  }, []);
+
+  useEffect(() => {
+    setupChartDefaults(ChartJS);
+  }, [chartThemeKey]);
+
+  useEffect(() => {
     if (typeof document !== "undefined") {
       document.title = "Dashboard Servicedesk Planningsagenda";
     }
@@ -1335,12 +1414,9 @@ export default function Home() {
     const hasSlaWarning = Array.isArray(liveAlerts?.first_response_due_warning) && liveAlerts.first_response_due_warning.length > 0;
     const hasSlaCritical = Array.isArray(liveAlerts?.first_response_due_critical) && liveAlerts.first_response_due_critical.length > 0;
     const hasOverdue = Array.isArray(liveAlerts?.first_response_overdue) && liveAlerts.first_response_overdue.length > 0;
-    const hasTtrWarning = Array.isArray(liveAlerts?.time_to_resolution_warning) && liveAlerts.time_to_resolution_warning.length > 0;
     const hasTtrCritical = Array.isArray(liveAlerts?.time_to_resolution_critical) && liveAlerts.time_to_resolution_critical.length > 0;
-    const hasTtrOverdue = Array.isArray(liveAlerts?.time_to_resolution_overdue) && liveAlerts.time_to_resolution_overdue.length > 0;
     const hasSla = hasSlaWarning || hasSlaCritical || hasOverdue;
-    const hasTtr = hasTtrWarning || hasTtrCritical || hasTtrOverdue;
-    const showTtrSignal = hasTtr && !ttrAlertsCollapsed;
+    const showTtrSignal = hasTtrCritical && !ttrAlertsCollapsed;
     if (!hasP1 && !hasSla && !showTtrSignal) {
       return {
         href: "/favicon.ico",
@@ -1351,13 +1427,9 @@ export default function Home() {
     const color =
       hasP1 || hasSlaCritical || hasOverdue
         ? "#dc2626"
-        : showTtrSignal && hasTtrOverdue
-          ? "#1e3a8a"
-          : showTtrSignal && hasTtrCritical
-            ? "#2563eb"
-          : showTtrSignal && hasTtrWarning
-              ? "#60a5fa"
-              : "#f59e0b";
+        : showTtrSignal && hasTtrCritical
+          ? "#2563eb"
+          : "#f59e0b";
     return {
       href: alertFaviconDataUri(color, false),
       pulseHref: alertFaviconDataUri(color, true),
@@ -2702,7 +2774,7 @@ export default function Home() {
   const pagePaddingTop = pagePaddingX;
   const pagePaddingBottom = "clamp(20px, 3dvh, 40px)";
   const pageStyle = {
-    fontFamily: "system-ui",
+    fontFamily: 'var(--font-sans), "Plus Jakarta Sans", system-ui, sans-serif',
     paddingTop: pagePaddingTop,
     paddingRight: pagePaddingX,
     paddingBottom: pagePaddingBottom,
@@ -3834,6 +3906,7 @@ export default function Home() {
         <div style={bodyStyle}>
           {hasDataPoints(lineData) ? (
             <Line
+              key={chartRenderKey("volume")}
               data={lineData}
               options={{
                 responsive: true,
@@ -3854,9 +3927,13 @@ export default function Home() {
                   tooltip: { mode: "nearest", intersect: false },
                   releaseCadence: releaseCadencePlugin,
                   renderWatch: { onReady: () => markChartRendered("volume") },
-                  simpleDataLabels: { mode: "line", maxLabels: expanded ? 24 : 12 },
+                  simpleDataLabels: buildSimpleDataLabels({ mode: "line", maxLabels: expanded ? 24 : 12 }),
                 },
                 interaction: { mode: "nearest", intersect: false },
+                scales: {
+                  x: buildChartAxis({}),
+                  y: buildChartAxis({ title: "Aantal tickets", tickCallback: (value) => num(value) }),
+                },
               }}
             />
           ) : (
@@ -3876,6 +3953,7 @@ export default function Home() {
           <div style={bodyStyle}>
             {hasDataPoints(onderwerpLineData) ? (
               <Line
+                key={chartRenderKey("onderwerp")}
                 data={onderwerpLineData}
                 options={{
                   responsive: true,
@@ -3896,9 +3974,13 @@ export default function Home() {
                     tooltip: { mode: "nearest", intersect: false },
                     releaseCadence: releaseCadenceOnderwerpPlugin,
                     renderWatch: { onReady: () => markChartRendered("onderwerp") },
-                    simpleDataLabels: { mode: "line", maxLabels: expanded ? 24 : 12 },
+                    simpleDataLabels: buildSimpleDataLabels({ mode: "line", maxLabels: expanded ? 24 : 12 }),
                   },
                   interaction: { mode: "nearest", intersect: false },
+                  scales: {
+                    x: buildChartAxis({}),
+                    y: buildChartAxis({ title: "Aantal tickets", tickCallback: (value) => num(value) }),
+                  },
                 }}
               />
             ) : (
@@ -3917,41 +3999,31 @@ export default function Home() {
             hasDataPoints(priorityBarData) ? (
               <div style={{ height: "100%", minHeight: 0 }}>
                 <Bar
+                  key={chartRenderKey("priority")}
                   data={priorityBarData}
                   options={{
                     responsive: true,
                     maintainAspectRatio: false,
                     indexAxis: "y",
+                    animation: slowChartAnimation("priority"),
                     plugins: {
                       legend: {
                         display: false,
                       },
                       tooltip: {
+                        mode: "nearest",
+                        intersect: false,
                         callbacks: {
                           label: (ctx) => `${ctx.label}: ${num(ctx.parsed.x)} tickets`,
                         },
                       },
-                      simpleDataLabels: { mode: "bar", maxLabels: expanded ? 20 : 10 },
+                      renderWatch: { onReady: () => markChartRendered("priority") },
+                      simpleDataLabels: buildSimpleDataLabels({ mode: "bar", maxLabels: expanded ? 20 : 10 }),
                     },
+                    interaction: { mode: "nearest", intersect: false },
                     scales: {
-                      x: {
-                        beginAtZero: true,
-                        ticks: {
-                          color: chartTextSubtle,
-                          callback: (value) => num(value),
-                        },
-                        grid: {
-                          color: "color-mix(in srgb, var(--border) 72%, transparent)",
-                        },
-                      },
-                      y: {
-                        ticks: {
-                          color: chartTextSubtle,
-                        },
-                        grid: {
-                          display: false,
-                        },
-                      },
+                      x: buildChartAxis({ title: "Aantal tickets", tickCallback: (value) => num(value), beginAtZero: true }),
+                      y: buildChartAxis({ gridDisplay: false }),
                     },
                   }}
                 />
@@ -3962,6 +4034,7 @@ export default function Home() {
           ) : (
             <EmptyChartState filterLabel="Prioriteit" style={emptyStyle} />
           )}
+          {renderSlowChartOverlay("priority")}
         </div>
       );
     }
@@ -3973,41 +4046,31 @@ export default function Home() {
             hasDataPoints(assigneeBarData) ? (
               <div style={{ height: "100%", minHeight: 0 }}>
                 <Bar
+                  key={chartRenderKey("assignee")}
                   data={assigneeBarData}
                   options={{
                     responsive: true,
                     maintainAspectRatio: false,
                     indexAxis: "y",
+                    animation: slowChartAnimation("assignee"),
                     plugins: {
                       legend: {
                         display: false,
                       },
                       tooltip: {
+                        mode: "nearest",
+                        intersect: false,
                         callbacks: {
                           label: (ctx) => `${ctx.label}: ${num(ctx.parsed.x)} tickets`,
                         },
                       },
-                      simpleDataLabels: { mode: "bar", maxLabels: expanded ? 20 : 10 },
+                      renderWatch: { onReady: () => markChartRendered("assignee") },
+                      simpleDataLabels: buildSimpleDataLabels({ mode: "bar", maxLabels: expanded ? 20 : 10 }),
                     },
+                    interaction: { mode: "nearest", intersect: false },
                     scales: {
-                      x: {
-                        beginAtZero: true,
-                        ticks: {
-                          color: chartTextSubtle,
-                          callback: (value) => num(value),
-                        },
-                        grid: {
-                          color: "color-mix(in srgb, var(--border) 72%, transparent)",
-                        },
-                      },
-                      y: {
-                        ticks: {
-                          color: chartTextSubtle,
-                        },
-                        grid: {
-                          display: false,
-                        },
-                      },
+                      x: buildChartAxis({ title: "Aantal tickets", tickCallback: (value) => num(value), beginAtZero: true }),
+                      y: buildChartAxis({ gridDisplay: false }),
                     },
                   }}
                 />
@@ -4018,6 +4081,7 @@ export default function Home() {
           ) : (
             <EmptyChartState filterLabel="Assignee" style={emptyStyle} />
           )}
+          {renderSlowChartOverlay("assignee")}
         </div>
       );
     }
@@ -4028,32 +4092,20 @@ export default function Home() {
           <div style={bodyStyle}>
             {hasDataPoints(barData) ? (
               <Bar
+                key={chartRenderKey("p90")}
                 data={barData}
                 options={{
                   responsive: true,
                   maintainAspectRatio: false,
                   plugins: {
-                    legend: { display: true, position: "top" },
-                    simpleDataLabels: { mode: "bar", maxLabels: expanded ? 20 : 10, datasetIndexes: [2] },
+                    legend: { display: true, position: "top", labels: chartLegendLabels },
+                    simpleDataLabels: buildSimpleDataLabels({ mode: "bar", maxLabels: expanded ? 20 : 10, datasetIndexes: [2] }),
                   },
                   scales: {
-                    x: {
-                      ticks: {
-                        color: "var(--text-muted)",
-                        maxRotation: 30,
-                        minRotation: 0,
-                      },
-                    },
-                    y: {
-                      title: {
-                        display: true,
-                        text: "Uren",
-                        color: "var(--text-muted)",
-                      },
-                      ticks: {
-                        color: "var(--text-muted)",
-                      },
-                    },
+                    x: buildChartAxis({
+                      tickOptions: { maxRotation: 30, minRotation: 0 },
+                    }),
+                    y: buildChartAxis({ title: "Uren" }),
                   },
                 }}
               />
@@ -4075,6 +4127,7 @@ export default function Home() {
         <div style={bodyStyle}>
             {hasDataPoints(inflowVsClosedLineData) ? (
               <Line
+                key={chartRenderKey("inflowVsClosed")}
                 data={inflowVsClosedLineData}
                 options={{
                   responsive: true,
@@ -4101,7 +4154,7 @@ export default function Home() {
                     legend: {
                       display: true,
                       position: "top",
-                      labels: { color: chartTextSubtle },
+                      labels: chartLegendLabels,
                     },
                     renderWatch: { onReady: () => markChartRendered("inflowVsClosed") },
                     tooltip: {
@@ -4116,16 +4169,8 @@ export default function Home() {
                   },
                   interaction: { mode: "nearest", intersect: false },
                   scales: {
-                    x: {
-                      ticks: { color: chartTextSubtle },
-                    },
-                    y: {
-                      title: { display: true, text: "Aantal tickets", color: chartTextSubtle },
-                      ticks: {
-                        color: chartTextSubtle,
-                        callback: (value) => num(value),
-                      },
-                    },
+                    x: buildChartAxis({}),
+                    y: buildChartAxis({ title: "Aantal tickets", tickCallback: (value) => num(value) }),
                   },
                 }}
               />
@@ -4142,6 +4187,7 @@ export default function Home() {
         <div style={bodyStyle}>
           {hasDataPoints(releaseWorkloadLineData) ? (
             <Line
+              key={chartRenderKey("releaseWorkload")}
               data={releaseWorkloadLineData}
               options={{
                 responsive: true,
@@ -4157,7 +4203,7 @@ export default function Home() {
                       label: (ctx) => `${num(ctx.parsed.y)} tickets`,
                     },
                   },
-                  simpleDataLabels: { mode: "line", maxLabels: expanded ? 20 : 10 },
+                  simpleDataLabels: buildSimpleDataLabels({ mode: "line", maxLabels: expanded ? 20 : 10 }),
                 },
                 onClick: (_evt, elements) => {
                   const el = elements?.[0];
@@ -4167,16 +4213,8 @@ export default function Home() {
                   openReleaseWorkloadDrilldown(row);
                 },
                 scales: {
-                  x: {
-                    ticks: { color: chartTextSubtle },
-                  },
-                  y: {
-                    title: { display: true, text: "Tickets", color: chartTextSubtle },
-                    ticks: {
-                      color: chartTextSubtle,
-                      callback: (value) => num(value),
-                    },
-                  },
+                  x: buildChartAxis({}),
+                  y: buildChartAxis({ title: "Tickets", tickCallback: (value) => num(value) }),
                 },
               }}
             />
@@ -4192,6 +4230,7 @@ export default function Home() {
         <div style={bodyStyle}>
             {hasDataPoints(incidentResolutionLineData) ? (
               <Line
+                key={chartRenderKey("incidentResolution")}
                 data={incidentResolutionLineData}
                 options={{
                   responsive: true,
@@ -4201,7 +4240,7 @@ export default function Home() {
                     legend: {
                       display: true,
                       position: "top",
-                      labels: { color: chartTextSubtle },
+                      labels: chartLegendLabels,
                     },
                     renderWatch: { onReady: () => markChartRendered("incidentResolution") },
                     tooltip: {
@@ -4216,13 +4255,8 @@ export default function Home() {
                   },
                   interaction: { mode: "nearest", intersect: false },
                   scales: {
-                    x: {
-                      ticks: { color: chartTextSubtle },
-                    },
-                    y: {
-                      title: { display: true, text: "Uren", color: chartTextSubtle },
-                      ticks: { color: chartTextSubtle },
-                    },
+                    x: buildChartAxis({}),
+                    y: buildChartAxis({ title: "Uren" }),
                   },
                 }}
               />
@@ -4239,13 +4273,14 @@ export default function Home() {
         <div style={bodyStyle}>
             {hasDataPoints(firstResponseLineData) ? (
               <Line
+                key={chartRenderKey("firstResponseAll")}
                 data={firstResponseLineData}
                 options={{
                   responsive: true,
                   maintainAspectRatio: false,
                   animation: slowChartAnimation("firstResponseAll"),
                   plugins: {
-                    legend: { display: true, position: "top" },
+                    legend: { display: true, position: "top", labels: chartLegendLabels },
                     renderWatch: { onReady: () => markChartRendered("firstResponseAll") },
                     tooltip: { mode: "nearest", intersect: false },
                     releaseCadence: releaseCadencePlugin,
@@ -4253,13 +4288,8 @@ export default function Home() {
                   },
                   interaction: { mode: "nearest", intersect: false },
                   scales: {
-                    x: {
-                      ticks: { color: "var(--text-muted)" },
-                    },
-                    y: {
-                      title: { display: true, text: "Uren", color: "var(--text-muted)" },
-                      ticks: { color: "var(--text-muted)" },
-                    },
+                    x: buildChartAxis({}),
+                    y: buildChartAxis({ title: "Uren" }),
                   },
                 }}
               />
@@ -4276,6 +4306,7 @@ export default function Home() {
         <div style={bodyStyle}>
             {hasDataPoints(organizationBarData) ? (
               <Bar
+                key={chartRenderKey("organizationWeekly")}
                 data={organizationBarData}
                 options={{
                   responsive: true,
@@ -4285,7 +4316,7 @@ export default function Home() {
                     legend: {
                       display: true,
                       position: "top",
-                      labels: { color: chartTextSubtle },
+                      labels: chartLegendLabels,
                     },
                     renderWatch: { onReady: () => markChartRendered("organizationWeekly") },
                     tooltip: { mode: "nearest", intersect: false },
@@ -4293,13 +4324,8 @@ export default function Home() {
                   },
                   interaction: { mode: "nearest", intersect: false },
                   scales: {
-                    x: {
-                      ticks: { color: chartTextSubtle },
-                    },
-                    y: {
-                      title: { display: true, text: "Aantal tickets", color: chartTextSubtle },
-                      ticks: { color: chartTextSubtle },
-                    },
+                    x: buildChartAxis({}),
+                    y: buildChartAxis({ title: "Aantal tickets" }),
                   },
                 }}
               />
