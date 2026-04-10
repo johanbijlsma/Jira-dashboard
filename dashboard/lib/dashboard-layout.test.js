@@ -20,11 +20,11 @@ describe("dashboard-layout", () => {
       kpiRow: ["totalTickets", "latestTickets", "currentWeekFlow", "releaseWednesdayWorkload", "ttfrOverdue", "topType", "topSubject", "topPartner"],
       hiddenKpis: [],
       cardRows: [
-        ["topOnderwerpen", "volume", "assignee", "priority", "organizationWeekly"],
-        ["incidentResolution", "onderwerp", "inflowVsClosed", "releaseWorkload", "vacationServicedesk"],
+        ["volume", "onderwerp", "inflowVsClosed"],
+        ["assignee", "priority", "organizationWeekly", "incidentResolution", "vacationServicedesk"],
       ],
-      hiddenCards: ["p90", "firstResponseAll"],
-      expandedByRow: [null, "onderwerp"],
+      hiddenCards: ["topOnderwerpen", "releaseWorkload", "p90", "firstResponseAll"],
+      expandedByRow: ["onderwerp", null],
       lockedCards: ["volume", "organizationWeekly", "onderwerp", "vacationServicedesk"],
     });
   });

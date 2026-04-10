@@ -54,13 +54,15 @@ import {
   toggleCardLockLayout,
   toggleRowExpandCardLayout,
 } from "../lib/dashboard-layout";
-import { isTotalLabel, median, trendInfo, uniqueChartColor, wowSortValue } from "../lib/dashboard-metrics";
+import { isTotalLabel, trendInfo, uniqueChartColor, wowSortValue } from "../lib/dashboard-metrics";
 import { legendNoopHandler, setupChartDefaults } from "../lib/chart-setup";
 
 import EmptyChartState from "../components/EmptyChartState";
 import Head from "next/head";
+import InsightsRow from "../components/InsightsRow";
 import Link from "next/link";
 import LiveAlertStack from "../components/LiveAlertStack";
+import TopicTrendsCard from "../components/TopicTrendsCard";
 import Toast from "../components/Toast";
 import VacationAvatar from "../components/VacationAvatar";
 import { parseNlDateToIso } from "../lib/date";
@@ -72,6 +74,8 @@ import { useServicedeskConfig } from "../lib/use-servicedesk-config";
 import { useSyncStatus } from "../lib/use-sync-status";
 import { useVacationsData } from "../lib/use-vacations-data";
 import { useWeeklyInsights } from "../lib/use-weekly-insights";
+import { computeInsights } from "../lib/dashboard-insights";
+import { buildMovingAverage, buildTopicTrendSeries, resolveSelectedTopic } from "../lib/topic-trends";
 
 ChartJS.register(
   CategoryScale,
@@ -266,6 +270,7 @@ export default function Home() {
   const [dateTo, setDateTo] = useState(isoDate(today));
   const dateFromNativeRef = useRef(null);
   const dateToNativeRef = useRef(null);
+  const dateFromTextRef = useRef(null);
 
   const [dateFromUi, setDateFromUi] = useState(fmtDate(defaultFrom));
   const [dateToUi, setDateToUi] = useState(fmtDate(today));
@@ -342,6 +347,7 @@ export default function Home() {
   const [showPriority, setShowPriority] = useState(false);
   const [showAssignee, setShowAssignee] = useState(false);
   const [expandedCard, setExpandedCard] = useState("");
+  const [selectedTopicTrend, setSelectedTopicTrend] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [showStartupSkeleton, setShowStartupSkeleton] = useState(true);
   const [dashboardLayout, setDashboardLayout] = useState(createDefaultDashboardLayout);
@@ -1635,6 +1641,17 @@ export default function Home() {
   }, [filtersOpen]);
 
   useEffect(() => {
+    if (!filtersOpen) return;
+    const timer = window.setTimeout(() => {
+      const input = dateFromTextRef.current;
+      if (!input) return;
+      input.focus();
+      input.select?.();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [filtersOpen]);
+
+  useEffect(() => {
     if (!sidePanelOpen) return;
     const t = setTimeout(() => {
       drillCloseRef.current?.focus?.();
@@ -1775,24 +1792,48 @@ export default function Home() {
     return [...base, total];
   }, [weeks, volume, meta.request_types, requestType]);
 
-  const onderwerpSeries = useMemo(() => {
-    const data = Array.isArray(onderwerpVolume) ? onderwerpVolume : [];
-    const subjects = onderwerp ? [onderwerp] : onderwerpFilterOpties;
-    const base = subjects.map((o) => ({
-      label: o,
-      data: weeksOnderwerp.map((w) => {
-        const row = data.find((v) => v.onderwerp === o && v.week.slice(0, 10) === w);
-        return row ? row.tickets : 0;
-      }),
-    }));
-    if (onderwerp) return base;
+  const allTopicTrendSeries = useMemo(
+    () => buildTopicTrendSeries({ rows: onderwerpVolume, bucketKeys: weeksOnderwerp, selectedTopic: onderwerp, limit: Number.MAX_SAFE_INTEGER }),
+    [weeksOnderwerp, onderwerpVolume, onderwerp]
+  );
 
-    return base
-      .map((s) => ({ ...s, total: s.data.reduce((sum, n) => sum + n, 0) }))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 5)
-      .map(({ total, ...rest }) => rest);
-  }, [weeksOnderwerp, onderwerpVolume, onderwerp, onderwerpFilterOpties]);
+  const topicTrendSeries = useMemo(
+    () => buildTopicTrendSeries({ rows: onderwerpVolume, bucketKeys: weeksOnderwerp, selectedTopic: onderwerp, limit: 5 }),
+    [weeksOnderwerp, onderwerpVolume, onderwerp]
+  );
+
+  useEffect(() => {
+    setSelectedTopicTrend((current) => {
+      const next = resolveSelectedTopic(topicTrendSeries, current || onderwerp);
+      return current === next ? current : next;
+    });
+  }, [topicTrendSeries, onderwerp]);
+
+  const topicTrendsHasData = useMemo(
+    () => topicTrendSeries.some((series) => series.total > 0),
+    [topicTrendSeries]
+  );
+
+  const dashboardInsights = useMemo(() => {
+    const inflowRows = Array.isArray(inflowVsClosedWeekly) ? inflowVsClosedWeekly : [];
+    const bucketLabels = weeklyLabels(weeks);
+    const buckets = weeks.map((week, index) => {
+      const row = inflowRows.find((item) => String(item?.week || "").slice(0, 10) === week);
+      return {
+        label: bucketLabels[index] || fmtDate(week),
+        incoming: row?.incoming_count != null ? Number(row.incoming_count) : 0,
+        resolved: row?.closed_count != null ? Number(row.closed_count) : 0,
+      };
+    });
+
+    return computeInsights({
+      buckets,
+      topics: allTopicTrendSeries.map((topic) => ({
+        topic: topic.topic,
+        counts: topic.buckets.map((bucket) => bucket.count),
+      })),
+    });
+  }, [allTopicTrendSeries, inflowVsClosedWeekly, weeks, weeklyLabels]);
 
   const typeColor = useCallback((label) => {
     const key = String(label || "").toLowerCase();
@@ -1813,88 +1854,37 @@ export default function Home() {
         borderDash: isTotalLabel(s.label) ? [6, 4] : undefined,
       }));
 
-      const currentWeek = weekStartIsoFromDate();
       const totalSeries = series.find((s) => isTotalLabel(s.label));
       if (totalSeries && !requestType) {
-        const valuesForMedian = totalSeries.data
-          .map((v, i) => (weeks[i] === currentWeek ? null : v))
-          .filter((v) => v != null);
-        const med = median(valuesForMedian);
-        if (med != null) {
-          datasets.push({
-            label: "Mediaan totaal aantal tickets",
-            data: weeks.map((w) => (w === currentWeek ? null : med)),
-            tension: 0,
-            borderColor: "#c62828",
-            backgroundColor: "#c62828",
-            borderDash: [4, 4],
-            pointRadius: 0,
-            pointHitRadius: 0,
-          });
-        }
+        datasets.push({
+          label: "Voortschrijdend gemiddelde totaal",
+          data: buildMovingAverage(totalSeries.data, 3),
+          tension: 0.25,
+          borderColor: "#c62828",
+          backgroundColor: "#c62828",
+          borderDash: [4, 4],
+          pointRadius: 0,
+          pointHitRadius: 0,
+        });
       }
 
       if (requestType && series[0]) {
         const typeSeries = series[0];
-        const valuesForMedian = typeSeries.data
-          .map((v, i) => (weeks[i] === currentWeek ? null : v))
-          .filter((v) => v != null);
-        const med = median(valuesForMedian);
-        if (med != null) {
-          datasets.push({
-            label: `Mediaan ${typeSeries.label}`,
-            data: weeks.map((w) => (w === currentWeek ? null : med)),
-            tension: 0,
-            borderColor: "#c62828",
-            backgroundColor: "#c62828",
-            borderDash: [4, 4],
-            pointRadius: 0,
-            pointHitRadius: 0,
-          });
-        }
+        datasets.push({
+          label: `Voortschrijdend gemiddelde ${typeSeries.label}`,
+          data: buildMovingAverage(typeSeries.data, 3),
+          tension: 0.25,
+          borderColor: "#c62828",
+          backgroundColor: "#c62828",
+          borderDash: [4, 4],
+          pointRadius: 0,
+          pointHitRadius: 0,
+        });
       }
 
       return { labels, datasets };
     },
     [weeks, weeklyLabels, series, requestType, typeColor]
-  );
-
-  const onderwerpLineData = useMemo(
-    () => {
-      const datasets = onderwerpSeries.map((s, i) => ({
-        label: s.label,
-        data: s.data,
-        tension: 0.2,
-        borderColor: uniqueChartColor(i, onderwerpSeries.length),
-        backgroundColor: uniqueChartColor(i, onderwerpSeries.length),
-        pointBackgroundColor: uniqueChartColor(i, onderwerpSeries.length),
-        pointBorderColor: uniqueChartColor(i, onderwerpSeries.length),
-      }));
-
-      // When a specific onderwerp filter is active, add a median guide line for that onderwerp.
-      if (onderwerp && onderwerpSeries[0]) {
-        const currentWeek = weekStartIsoFromDate();
-        const valuesForMedian = onderwerpSeries[0].data
-          .map((v, i) => (weeksOnderwerp[i] === currentWeek ? null : v))
-          .filter((v) => v != null);
-        const med = median(valuesForMedian);
-        if (med != null) {
-          datasets.push({
-            label: `Mediaan ${onderwerpSeries[0].label}`,
-            data: weeksOnderwerp.map((w) => (w === currentWeek ? null : med)),
-            tension: 0,
-            borderColor: "#c62828",
-            backgroundColor: "#c62828",
-            borderDash: [4, 4],
-            pointRadius: 0,
-            pointHitRadius: 0,
-          });
-        }
-      }
-
-      return { labels: weeklyLabels(weeksOnderwerp), datasets };
-    },
-    [weeksOnderwerp, weeklyLabels, onderwerpSeries, onderwerp]
   );
 
   const priorityColors = useMemo(
@@ -2153,7 +2143,7 @@ export default function Home() {
   useEffect(() => {
     const cards = [
       ["volume", hasDataPoints(lineData)],
-      ["onderwerp", hasDataPoints(onderwerpLineData)],
+      ["onderwerp", topicTrendsHasData],
       ["inflowVsClosed", hasDataPoints(inflowVsClosedLineData)],
       ["incidentResolution", hasDataPoints(incidentResolutionLineData)],
       ["firstResponseAll", hasDataPoints(firstResponseLineData)],
@@ -2167,7 +2157,8 @@ export default function Home() {
   }, [
     armSlowChart,
     lineData,
-    onderwerpLineData,
+    topicTrendsHasData,
+    selectedTopicTrend,
     inflowVsClosedLineData,
     incidentResolutionLineData,
     firstResponseLineData,
@@ -2196,7 +2187,7 @@ export default function Home() {
         : null;
     const avgPerWeek = indices.length ? totalTickets / indices.length : null;
 
-    const typeCandidates = series.filter((s) => !isTotalLabel(s.label) && !String(s.label).startsWith("Mediaan "));
+    const typeCandidates = series.filter((s) => !isTotalLabel(s.label) && !String(s.label).startsWith("Voortschrijdend gemiddelde "));
     const typeTotals = typeCandidates.map((s) => ({
       label: s.label,
       total: indices.reduce((sum, idx) => sum + (Number(s.data?.[idx]) || 0), 0),
@@ -2950,6 +2941,19 @@ export default function Home() {
     fontWeight: 700,
     whiteSpace: "nowrap",
   };
+  const dateRangeBadgeStyle = {
+    height: 34,
+    padding: "0 12px",
+    borderRadius: 999,
+    border: "1px solid var(--border)",
+    background: "color-mix(in srgb, var(--surface-muted) 74%, var(--surface))",
+    color: "var(--text-main)",
+    display: "inline-flex",
+    alignItems: "center",
+    fontSize: 12,
+    fontWeight: 700,
+    whiteSpace: "nowrap",
+  };
   const syncDockStyle = {
     position: "fixed",
     left: 12,
@@ -3095,6 +3099,12 @@ export default function Home() {
     justifyContent: "space-between",
     gap: 10,
   };
+  const currentDateRangeLabel = useMemo(() => {
+    if (!dateFrom && !dateTo) return "Periode onbekend";
+    if (dateFrom && dateTo) return `${fmtDate(dateFrom)} t/m ${fmtDate(dateTo)}`;
+    if (dateFrom) return `Vanaf ${fmtDate(dateFrom)}`;
+    return `Tot ${fmtDate(dateTo)}`;
+  }, [dateFrom, dateTo]);
   const cardTitleHintStyle = {
     fontSize: 12,
     fontWeight: 600,
@@ -3917,8 +3927,7 @@ export default function Home() {
                   if (!el) return;
                   const weekStart = weeks[el.index];
                   const typeLabel = lineData.datasets[el.datasetIndex]?.label;
-                  if (typeLabel === "Mediaan totaal aantal tickets") return;
-                  if (typeLabel && typeLabel.startsWith("Mediaan ")) return;
+                  if (String(typeLabel || "").startsWith("Voortschrijdend gemiddelde")) return;
                   const effectiveType = requestType ? requestType : isTotalLabel(typeLabel) ? "" : typeLabel;
                   fetchDrilldown(weekStart, effectiveType, "");
                 },
@@ -3951,42 +3960,24 @@ export default function Home() {
       return (
         <div style={onderwerpContentStyle}>
           <div style={bodyStyle}>
-            {hasDataPoints(onderwerpLineData) ? (
-              <Line
-                key={chartRenderKey("onderwerp")}
-                data={onderwerpLineData}
-                options={{
-                  responsive: true,
-                  maintainAspectRatio: false,
-                  animation: slowChartAnimation("onderwerp"),
-                  onClick: (_evt, elements) => {
-                    const el = elements?.[0];
-                    if (!el) return;
-                    const weekStart = weeksOnderwerp[el.index];
-                    const subjectLabel = onderwerpLineData.datasets[el.datasetIndex]?.label;
-                    if (!subjectLabel || subjectLabel.startsWith("Mediaan ")) return;
-                    if (!subjectLabel) return;
-                    setOnderwerp(subjectLabel || "");
-                    fetchDrilldown(weekStart, requestType, subjectLabel);
-                  },
-                  plugins: {
-                    legend: { display: false },
-                    tooltip: { mode: "nearest", intersect: false },
-                    releaseCadence: releaseCadenceOnderwerpPlugin,
-                    renderWatch: { onReady: () => markChartRendered("onderwerp") },
-                    simpleDataLabels: buildSimpleDataLabels({ mode: "line", maxLabels: expanded ? 24 : 12 }),
-                  },
-                  interaction: { mode: "nearest", intersect: false },
-                  scales: {
-                    x: buildChartAxis({}),
-                    y: buildChartAxis({ title: "Aantal tickets", tickCallback: (value) => num(value) }),
-                  },
-                }}
+            {topicTrendsHasData ? (
+              <TopicTrendsCard
+                topics={topicTrendSeries}
+                selectedTopic={selectedTopicTrend}
+                onSelectTopic={setSelectedTopicTrend}
+                onDetailPointClick={(bucketLabel, topicLabel) => fetchDrilldown(bucketLabel, requestType, topicLabel)}
+                labels={weeklyLabels(weeksOnderwerp)}
+                buildChartAxis={buildChartAxis}
+                chartKey={chartRenderKey("onderwerp")}
+                animation={slowChartAnimation("onderwerp")}
+                releaseCadencePlugin={releaseCadenceOnderwerpPlugin}
+                markChartReady={() => markChartRendered("onderwerp")}
+                renderOverlay={() => renderSlowChartOverlay("onderwerp")}
+                expanded={expanded}
               />
             ) : (
               <EmptyChartState filterLabel="Onderwerp" style={emptyStyle} />
             )}
-            {renderSlowChartOverlay("onderwerp")}
           </div>
         </div>
       );
@@ -4916,6 +4907,15 @@ export default function Home() {
           <div style={headerPrimaryButtonsStyle}>
             <button
               type="button"
+              onClick={() => setFiltersOpen(true)}
+              style={{ ...dateRangeBadgeStyle, cursor: "pointer" }}
+              title={`Huidige periode: ${currentDateRangeLabel}. Klik om filters te openen.`}
+              aria-label={`Huidige periode ${currentDateRangeLabel}. Open filters`}
+            >
+              {currentDateRangeLabel}
+            </button>
+            <button
+              type="button"
               onClick={() => openInsightLogPanel("")}
               style={{ ...layoutPrimaryButtonStyle, minWidth: 42, padding: "0 10px", justifyContent: "center", position: "relative" }}
               title="AI inzichtenlog openen"
@@ -5035,6 +5035,7 @@ export default function Home() {
             <span style={labelStyle}>Van</span>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <input
+              ref={dateFromTextRef}
               type="text"
               inputMode="numeric"
               placeholder="dd/mm/jjjj"
@@ -5525,6 +5526,28 @@ export default function Home() {
       </div>
         );
       })()}
+
+      {showStartupSkeleton ? (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: isTvMode ? "clamp(8px, 0.8dvh, 12px)" : "clamp(8px, 1dvh, 14px)",
+            marginBottom: isTvMode ? "clamp(8px, 0.8dvh, 12px)" : "clamp(8px, 1dvh, 14px)",
+            width: "100%",
+          }}
+        >
+          {Array.from({ length: 4 }).map((_, idx) => (
+            <div key={`insight-skeleton-${idx}`} style={skeletonCardStyle}>
+              <div style={{ ...skeletonBarStyle, width: "32%", marginBottom: 10 }} />
+              <div style={{ ...skeletonBarStyle, width: "74%", height: 22, marginBottom: 8 }} />
+              <div style={{ ...skeletonBarStyle, width: "58%" }} />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <InsightsRow cards={dashboardInsights} isTvMode={isTvMode} />
+      )}
 
       {showStartupSkeleton ? (
         <div style={cardRowsWrapStyle}>

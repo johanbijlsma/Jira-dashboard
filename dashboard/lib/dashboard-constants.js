@@ -44,7 +44,7 @@ export const TYPE_COLORS = {
 export const CARD_TITLES = {
   volume: "Aantal tickets per week",
   releaseWorkload: "Workload na release",
-  onderwerp: "Onderwerp logging",
+  onderwerp: "Onderwerp trends",
   priority: "Tickets per priority",
   assignee: "Tickets per assignee",
   p90: "Doorlooptijd p50/p75/p90",
@@ -66,11 +66,11 @@ export function createDefaultDashboardLayout() {
     kpiRow: [...KPI_KEYS],
     hiddenKpis: [],
     cardRows: [
-      ["topOnderwerpen", "volume", "assignee", "priority", "organizationWeekly"],
-      ["incidentResolution", "onderwerp", "inflowVsClosed", "releaseWorkload", "vacationServicedesk"],
+      ["volume", "onderwerp", "inflowVsClosed"],
+      ["assignee", "priority", "organizationWeekly", "incidentResolution", "vacationServicedesk"],
     ],
-    hiddenCards: ["p90", "firstResponseAll"],
-    expandedByRow: [null, "onderwerp"],
+    hiddenCards: ["topOnderwerpen", "releaseWorkload", "p90", "firstResponseAll"],
+    expandedByRow: ["onderwerp", null],
     lockedCards: ["volume", "organizationWeekly", "onderwerp", "vacationServicedesk"],
   };
 }
