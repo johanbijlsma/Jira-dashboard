@@ -31,9 +31,11 @@ describe("dashboard-constants", () => {
     expect(layout.showAiCards).toBe(true);
     expect(layout.kpiRow).toEqual(KPI_KEYS);
     expect(layout.hiddenKpis).toEqual([]);
-    expect(layout.hiddenCards).toEqual(["p90", "firstResponseAll"]);
+    expect(layout.hiddenCards).toEqual(["topOnderwerpen", "releaseWorkload", "p90", "firstResponseAll"]);
     expect(layout.cardRows.length).toBe(2);
-    expect(layout.expandedByRow).toEqual([null, "onderwerp"]);
+    expect(layout.cardRows[0]).toEqual(["volume", "onderwerp", "inflowVsClosed"]);
+    expect(layout.cardRows[1]).toEqual(["assignee", "priority", "organizationWeekly", "incidentResolution", "vacationServicedesk"]);
+    expect(layout.expandedByRow).toEqual(["onderwerp", null]);
     expect(layout.lockedCards).toEqual(["volume", "organizationWeekly", "onderwerp", "vacationServicedesk"]);
     expect(NON_KPI_CARD_KEYS).toContain("topOnderwerpen");
   });
