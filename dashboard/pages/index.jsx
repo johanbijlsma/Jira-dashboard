@@ -4890,7 +4890,7 @@ export default function Home() {
         ),
       },
     }),
-    [kpiStats, openReleaseWorkloadDrilldown]
+    [kpiStats, openReleaseWorkloadDrilldown, releaseStatusBadge, releaseStatusNote]
   );
 
   const visibleKpiKeys = dashboardLayout.kpiRow;
