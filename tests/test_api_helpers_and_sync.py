@@ -762,6 +762,7 @@ def test_fetch_release_calendar_rows_uses_sprint_start(monkeypatch):
             "board_id": 12,
             "sprint_name": "Sprint 186",
             "sprint_start_date": date(2026, 3, 11),
+            "base_release_date": date(2026, 3, 10),
             "release_date": date(2026, 3, 10),
             "followup_date": date(2026, 3, 11),
         },
@@ -770,6 +771,7 @@ def test_fetch_release_calendar_rows_uses_sprint_start(monkeypatch):
             "board_id": 12,
             "sprint_name": "Sprint 187",
             "sprint_start_date": date(2026, 3, 25),
+            "base_release_date": date(2026, 3, 24),
             "release_date": date(2026, 3, 24),
             "followup_date": date(2026, 3, 25),
         },
@@ -787,6 +789,7 @@ def test_manual_release_calendar_rows_take_precedence(monkeypatch):
             "board_id": 0,
             "sprint_name": "Release 2026-01-13",
             "sprint_start_date": date(2026, 1, 14),
+            "base_release_date": date(2026, 1, 13),
             "release_date": date(2026, 1, 13),
             "followup_date": date(2026, 1, 14),
         },
@@ -794,19 +797,72 @@ def test_manual_release_calendar_rows_take_precedence(monkeypatch):
             "sprint_id": -2,
             "board_id": 0,
             "sprint_name": "Release 2026-01-30",
-            "sprint_start_date": date(2026, 1, 31),
+            "sprint_start_date": date(2026, 2, 2),
+            "base_release_date": date(2026, 1, 30),
             "release_date": date(2026, 1, 30),
-            "followup_date": date(2026, 1, 31),
+            "followup_date": date(2026, 2, 2),
         },
         {
             "sprint_id": -3,
             "board_id": 0,
             "sprint_name": "Release 2026-02-24",
             "sprint_start_date": date(2026, 2, 25),
+            "base_release_date": date(2026, 2, 24),
             "release_date": date(2026, 2, 24),
             "followup_date": date(2026, 2, 25),
         },
     ]
+
+
+def test_apply_release_overrides_shifts_and_cancels_rows():
+    rows = [
+        {
+            "sprint_id": 1,
+            "board_id": 12,
+            "sprint_name": "Sprint 1",
+            "sprint_start_date": date(2026, 3, 11),
+            "base_release_date": date(2026, 3, 10),
+            "release_date": date(2026, 3, 10),
+            "followup_date": date(2026, 3, 11),
+        },
+        {
+            "sprint_id": 2,
+            "board_id": 12,
+            "sprint_name": "Sprint 2",
+            "sprint_start_date": date(2026, 3, 25),
+            "base_release_date": date(2026, 3, 24),
+            "release_date": date(2026, 3, 24),
+            "followup_date": date(2026, 3, 25),
+        },
+    ]
+    overrides = {
+        date(2026, 3, 10): {"override_release_date": date(2026, 3, 13), "is_cancelled": False},
+        date(2026, 3, 24): {"override_release_date": date(2026, 3, 24), "is_cancelled": True},
+    }
+
+    effective = api._apply_release_overrides(rows, overrides)
+    cancelled = api._apply_release_overrides(rows, overrides, include_cancelled=True)
+
+    assert effective == [
+        {
+            "sprint_id": 1,
+            "board_id": 12,
+            "sprint_name": "Sprint 1",
+            "sprint_start_date": date(2026, 3, 16),
+            "base_release_date": date(2026, 3, 10),
+            "release_date": date(2026, 3, 13),
+            "followup_date": date(2026, 3, 16),
+            "is_cancelled": False,
+        }
+    ]
+    assert cancelled[1]["is_cancelled"] is True
+    assert cancelled[1]["followup_date"] == date(2026, 3, 25)
+
+
+def test_next_business_day_skips_weekend():
+    assert api._next_business_day(date(2026, 4, 10)) == date(2026, 4, 13)
+    assert api._next_business_day(date(2026, 4, 11)) == date(2026, 4, 13)
+    assert api._next_business_day(date(2026, 4, 12)) == date(2026, 4, 13)
 
 
 def test_jira_existing_issue_keys_paths(monkeypatch):

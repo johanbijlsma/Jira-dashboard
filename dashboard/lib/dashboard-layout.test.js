@@ -11,7 +11,7 @@ import {
   toggleCardLockLayout,
   toggleRowExpandCardLayout,
 } from "./dashboard-layout";
-import { createDefaultDashboardLayout } from "./dashboard-constants";
+import { CARD_TITLES, KPI_KEYS, createDefaultDashboardLayout } from "./dashboard-constants";
 
 describe("dashboard-layout", () => {
   it("ships the customized default layout", () => {
@@ -52,6 +52,30 @@ describe("dashboard-layout", () => {
     expect(normalized.showAiCards).toBe(true);
   });
 
+  it("clips overflowing normalized rows into hidden pools", () => {
+    KPI_KEYS.push("syntheticKpi");
+    CARD_TITLES.syntheticCard = "Synthetic";
+    try {
+      const normalized = normalizeDashboardLayout({
+        kpiRow: ["totalTickets", "latestTickets", "currentWeekFlow", "releaseWednesdayWorkload", "ttfrOverdue", "topType", "topSubject", "topPartner", "syntheticKpi"],
+        hiddenKpis: [],
+        cardRows: [
+          ["volume", "onderwerp", "inflowVsClosed", "priority", "assignee", "organizationWeekly"],
+          ["incidentResolution", "vacationServicedesk", "releaseWorkload", "p90", "firstResponseAll", "syntheticCard"],
+        ],
+        hiddenCards: [],
+      });
+      expect(normalized.kpiRow).toHaveLength(8);
+      expect(normalized.hiddenKpis).toContain("syntheticKpi");
+      expect(normalized.cardRows[0]).toHaveLength(5);
+      expect(normalized.cardRows[1]).toHaveLength(5);
+      expect(normalized.hiddenCards.length).toBeGreaterThan(0);
+    } finally {
+      KPI_KEYS.pop();
+      delete CARD_TITLES.syntheticCard;
+    }
+  });
+
   it("normalizes legacy shape and split card order", () => {
     const normalized = normalizeDashboardLayout({
       kpiOrder: ["topType", "totalTickets"],
@@ -80,6 +104,18 @@ describe("dashboard-layout", () => {
     expect(movedAppend.kpiRow.at(-1)).toBe("topPartner");
   });
 
+  it("moves overflowing kpis back to hidden tiles", () => {
+    const base = createDefaultDashboardLayout();
+    const overflowSource = {
+      ...base,
+      kpiRow: [...base.kpiRow, "totalTickets"],
+      hiddenKpis: ["topPartner"],
+    };
+    const moved = moveKpiToVisibleLayout(overflowSource, "topPartner", "totalTickets", "before");
+    expect(moved.kpiRow).toHaveLength(8);
+    expect(moved.hiddenKpis.length).toBeGreaterThan(0);
+  });
+
   it("moves cards, expands and hides", () => {
     const base = createDefaultDashboardLayout();
     const moved = moveCardToRowLayout(base, "firstResponseAll", 0, "priority", "after");
@@ -96,6 +132,36 @@ describe("dashboard-layout", () => {
     expect(moveCardToRowLayout(base, "volume", -1)).toBe(base);
   });
 
+  it("guards expand and lock branches for invalid or repeated actions", () => {
+    const base = createDefaultDashboardLayout();
+    expect(toggleRowExpandCardLayout(base, -1, "volume")).toBe(base);
+    expect(toggleRowExpandCardLayout(base, 0, "missing")).toBe(base);
+
+    const compact = { ...base, cardRows: [base.cardRows[0].slice(0, 4), base.cardRows[1]], expandedByRow: [null, null] };
+    const expanded = toggleRowExpandCardLayout(compact, 0, "volume");
+    expect(expanded.expandedByRow[0]).toBe("volume");
+    const collapsed = toggleRowExpandCardLayout(expanded, 0, "volume");
+    expect(collapsed.expandedByRow[0]).toBeNull();
+
+    const oversized = { ...base, cardRows: [[...base.cardRows[0], "priority", "assignee"], base.cardRows[1]], expandedByRow: [null, null] };
+    expect(toggleRowExpandCardLayout(oversized, 0, "volume")).toBe(oversized);
+    expect(toggleCardLockLayout(base, "missing")).toBe(base);
+  });
+
+  it("handles card overflow and clears stale expanded cards", () => {
+    const base = createDefaultDashboardLayout();
+    const source = {
+      ...base,
+      cardRows: [["volume", "onderwerp", "inflowVsClosed", "assignee", "priority"], base.cardRows[1]],
+      hiddenCards: ["firstResponseAll"],
+      expandedByRow: ["firstResponseAll", null],
+    };
+    const moved = moveCardToRowLayout(source, "firstResponseAll", 0, "priority", "after");
+    expect(moved.cardRows[0]).toHaveLength(5);
+    expect(moved.hiddenCards.length).toBeGreaterThan(0);
+    expect(moved.expandedByRow[0]).toBeNull();
+  });
+
   it("renders row hints", () => {
     const kpiRow = renderKpiRowWithHintLayout(["a", "b"], true, "a", { targetKey: "b", position: "before" });
     expect(kpiRow).toEqual(["__KPI_DROP_HINT__", "b"]);
@@ -106,6 +172,7 @@ describe("dashboard-layout", () => {
       "x",
       "__DROP_HINT__",
     ]);
+    expect(renderKpiRowWithHintLayout(["a"], true, null, { targetKey: null, position: "before" })).toEqual(["a", "__KPI_DROP_HINT__"]);
   });
 
   it("keeps AI insights on their target card when that slot is eligible", () => {
@@ -136,5 +203,18 @@ describe("dashboard-layout", () => {
       ["volume", "organizationWeekly"]
     );
     expect(Array.from(result.keys())).toEqual(["topOnderwerpen", "assignee"]);
+  });
+
+  it("skips removed, downvoted, and unassignable AI insights", () => {
+    const result = mapAiInsightsToCardSlots(
+      [
+        { id: 1, target_card_key: "volume", feedback_status: "downvoted", removed_at: null },
+        { id: 2, target_card_key: "priority", feedback_status: "pending", removed_at: "2026-01-01T00:00:00Z" },
+        { id: 3, target_card_key: "priority", feedback_status: "pending", removed_at: null },
+      ],
+      [["volume"]],
+      ["volume"]
+    );
+    expect(Array.from(result.entries())).toEqual([]);
   });
 });

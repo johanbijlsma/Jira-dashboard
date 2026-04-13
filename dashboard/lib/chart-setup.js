@@ -18,27 +18,44 @@ export function setupChartDefaults(ChartJS) {
   };
 
   function getReleaseMarkers(weeks, opts, xScale) {
-    const anchor = zonedDateTimeParts(opts.anchorIso, opts.timeZone);
-    if (!anchor) return [];
-
-    const intervalDays = Math.max(1, Number(opts.intervalDays) || 14);
     const dayMs = 24 * 60 * 60 * 1000;
     const startIso = weeks[0];
     const endExclusiveIso = addDaysIso(weeks[weeks.length - 1], 7);
-    const secondsSinceMidnight = anchor.hour * 60 * 60 + anchor.minute * 60 + anchor.second;
+    const explicitReleaseEvents = Array.isArray(opts.releaseEvents)
+      ? opts.releaseEvents.filter((item) => item && typeof item.isoDate === "string" && item.isoDate)
+      : [];
+    const explicitReleaseDates = Array.isArray(opts.releaseDates)
+      ? opts.releaseDates.filter((value) => typeof value === "string" && value)
+      : [];
+    const anchor = explicitReleaseEvents.length || explicitReleaseDates.length ? null : zonedDateTimeParts(opts.anchorIso, opts.timeZone);
+    if (!explicitReleaseEvents.length && !explicitReleaseDates.length && !anchor) return [];
 
-    let releaseIso = anchor.isoDate;
-    if (releaseIso < startIso) {
-      const steps = Math.ceil((Date.parse(`${startIso}T00:00:00Z`) - Date.parse(`${releaseIso}T00:00:00Z`)) / dayMs / intervalDays);
-      releaseIso = addDaysIso(releaseIso, steps * intervalDays);
-    } else {
-      const steps = Math.floor((Date.parse(`${releaseIso}T00:00:00Z`) - Date.parse(`${startIso}T00:00:00Z`)) / dayMs / intervalDays);
-      releaseIso = addDaysIso(releaseIso, -steps * intervalDays);
-      while (releaseIso < startIso) releaseIso = addDaysIso(releaseIso, intervalDays);
-    }
+    const releaseItems = explicitReleaseEvents.length ? explicitReleaseEvents : (explicitReleaseDates.length
+      ? explicitReleaseDates.map((isoDate) => ({ isoDate, status: "default" }))
+      : (() => {
+      const intervalDays = Math.max(1, Number(opts.intervalDays) || 14);
+      let releaseIso = anchor.isoDate;
+      if (releaseIso < startIso) {
+        const steps = Math.ceil((Date.parse(`${startIso}T00:00:00Z`) - Date.parse(`${releaseIso}T00:00:00Z`)) / dayMs / intervalDays);
+        releaseIso = addDaysIso(releaseIso, steps * intervalDays);
+      } else {
+        const steps = Math.floor((Date.parse(`${releaseIso}T00:00:00Z`) - Date.parse(`${startIso}T00:00:00Z`)) / dayMs / intervalDays);
+        releaseIso = addDaysIso(releaseIso, -steps * intervalDays);
+        while (releaseIso < startIso) releaseIso = addDaysIso(releaseIso, intervalDays);
+      }
+      const generated = [];
+      while (releaseIso < endExclusiveIso) {
+        generated.push({ isoDate: releaseIso, status: "default" });
+        releaseIso = addDaysIso(releaseIso, intervalDays);
+      }
+      return generated;
+    })());
+    const secondsSinceMidnight = anchor ? anchor.hour * 60 * 60 + anchor.minute * 60 + anchor.second : 17 * 60 * 60;
 
     const markers = [];
-    while (releaseIso < endExclusiveIso) {
+    releaseItems.forEach((item) => {
+      const releaseIso = item.isoDate;
+      if (releaseIso < startIso || releaseIso >= endExclusiveIso) return;
       const weekIso = weekStartIsoFromIsoDate(releaseIso);
       const weekIdx = weeks.indexOf(weekIso);
 
@@ -56,12 +73,12 @@ export function setupChartDefaults(ChartJS) {
         const rawX = xBase + fractionOfWeek * (xNeighbor - xBase);
         markers.push({
           isoDate: releaseIso,
+          status: item.status || "default",
+          label: item.label || "",
           x: Math.max(xScale.left + 1, Math.min(xScale.right - 1, rawX)),
         });
       }
-
-      releaseIso = addDaysIso(releaseIso, intervalDays);
-    }
+    });
 
     return markers;
   }
@@ -193,6 +210,7 @@ export function setupChartDefaults(ChartJS) {
       if (pluginOptions === false) return;
       const opts = {
         weeks: [],
+        releaseDates: [],
         anchorIso: RELEASE_ANCHOR_ISO,
         intervalDays: 14,
         timeZone: AMSTERDAM_TIME_ZONE,
@@ -218,6 +236,8 @@ export function setupChartDefaults(ChartJS) {
         opts.partialWeekFill || computed?.getPropertyValue("--surface-muted")?.trim() || "#f8fafc";
       const partialWeekBorder =
         opts.partialWeekBorder || computed?.getPropertyValue("--text-muted")?.trim() || "#64748b";
+      const adjustedStroke = computed?.getPropertyValue("--warning")?.trim() || "#d97706";
+      const cancelledStroke = computed?.getPropertyValue("--text-muted")?.trim() || "#64748b";
 
       const ctx = chart.ctx;
       ctx.save();
@@ -246,10 +266,6 @@ export function setupChartDefaults(ChartJS) {
         ctx.stroke();
       }
 
-      ctx.strokeStyle = stroke;
-      ctx.lineWidth = Number(opts.lineWidth) || 1;
-      ctx.setLineDash(Array.isArray(opts.dash) ? opts.dash : [6, 4]);
-
       const yTop = yScale.top;
       const yBottom = yScale.bottom;
       const markers = getReleaseMarkers(weeks, opts, xScale);
@@ -261,21 +277,37 @@ export function setupChartDefaults(ChartJS) {
       markers.forEach((marker) => {
         const isActive = chart.$releaseCadence?.activeMarkerIndex >= 0
           && markers[chart.$releaseCadence.activeMarkerIndex]?.isoDate === marker.isoDate;
-        if (isActive) {
-          ctx.save();
-          ctx.lineWidth = Math.max(2, Number(opts.lineWidth) || 1);
-          ctx.setLineDash(Array.isArray(opts.dash) ? opts.dash : [6, 4]);
-        }
-          ctx.beginPath();
-          ctx.moveTo(marker.x, yTop);
-          ctx.lineTo(marker.x, yBottom);
-          ctx.stroke();
-        if (isActive) ctx.restore();
+        ctx.save();
+        ctx.strokeStyle =
+          marker.status === "cancelled"
+            ? cancelledStroke
+            : marker.status === "adjusted"
+              ? adjustedStroke
+              : stroke;
+        ctx.lineWidth = isActive ? Math.max(2, Number(opts.lineWidth) || 1) : Number(opts.lineWidth) || 1;
+        ctx.setLineDash(
+          marker.status === "cancelled"
+            ? [2, 6]
+            : Array.isArray(opts.dash)
+              ? opts.dash
+              : [6, 4]
+        );
+        ctx.beginPath();
+        ctx.moveTo(marker.x, yTop);
+        ctx.lineTo(marker.x, yBottom);
+        ctx.stroke();
+        ctx.restore();
       });
 
       const activeMarker = markers[chart.$releaseCadence?.activeMarkerIndex] || null;
       if (activeMarker) {
-        const label = `Release ${fmtDate(activeMarker.isoDate)}`;
+        const labelSuffix =
+          activeMarker.status === "cancelled"
+            ? " · vervallen"
+            : activeMarker.status === "adjusted"
+              ? " · aangepast"
+              : "";
+        const label = `Release ${fmtDate(activeMarker.isoDate)}${labelSuffix}`;
         ctx.save();
         ctx.setLineDash([]);
         ctx.font = '600 12px "Plus Jakarta Sans", system-ui, sans-serif';

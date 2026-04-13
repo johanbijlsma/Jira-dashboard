@@ -145,6 +145,21 @@ export function addDaysIso(yyyyMmDd, days) {
   return dt.toISOString().slice(0, 10);
 }
 
+export function weekdayIndexFromIsoDate(yyyyMmDd) {
+  if (!yyyyMmDd) return null;
+  const [y, m, d] = String(yyyyMmDd).split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt.getUTCDay();
+}
+
+export function shiftIsoDateToWeekday(yyyyMmDd, weekdayIndex) {
+  const currentWeekday = weekdayIndexFromIsoDate(yyyyMmDd);
+  const nextWeekday = Number(weekdayIndex);
+  if (currentWeekday == null || Number.isNaN(nextWeekday)) return "";
+  return addDaysIso(yyyyMmDd, nextWeekday - currentWeekday);
+}
+
 export function isTextEntryTarget(target) {
   const el = target instanceof HTMLElement ? target : null;
   if (!el) return false;
