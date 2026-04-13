@@ -24,7 +24,9 @@ import {
   num,
   pct,
   sameStringSet,
+  shiftIsoDateToWeekday,
   trimLeadingPartialWeek,
+  weekdayIndexFromIsoDate,
   weekStartIsoFromDate,
   zonedDateTimeParts,
 } from "../lib/dashboard-utils";
@@ -107,6 +109,36 @@ const CHART_RENDER_OVERLAY_MAX_MS = Math.max(
   CHART_RENDER_TIMEOUT_MS + 1000,
   (Number(process.env.NEXT_PUBLIC_CHART_RENDER_OVERLAY_MAX_MS) || 7000)
 );
+const RELEASE_WEEKDAY_OPTIONS = [
+  { value: 1, label: "Maandag" },
+  { value: 2, label: "Dinsdag" },
+  { value: 3, label: "Woensdag" },
+  { value: 4, label: "Donderdag" },
+  { value: 5, label: "Vrijdag" },
+  { value: 6, label: "Zaterdag" },
+  { value: 0, label: "Zondag" },
+];
+
+function releaseSlotStatusMeta(slot, label) {
+  if (!slot?.base_release_date && !slot?.release_date) return null;
+  if (slot?.cancelled) {
+    return {
+      kind: "cancelled",
+      isoDate: slot.base_release_date || slot.release_date,
+      label: `${label} vervallen`,
+      text: `${label} vervallen (${fmtDateWithWeekday(slot.base_release_date || slot.release_date)})`,
+    };
+  }
+  if (slot?.source === "override" && slot?.base_release_date && slot?.release_date && slot.base_release_date !== slot.release_date) {
+    return {
+      kind: "adjusted",
+      isoDate: slot.release_date,
+      label: `${label} aangepast`,
+      text: `Release verschoven naar ${fmtDateWithWeekday(slot.release_date)}`,
+    };
+  }
+  return null;
+}
 
 function alertFaviconDataUri(color, ring = false) {
   const ringSvg = ring
@@ -289,6 +321,12 @@ export default function Home() {
   const [servicedeskOnly, setServicedeskOnly] = useState(DEFAULT_SERVICEDESK_ONLY);
   const [teamConfigSaving, setTeamConfigSaving] = useState(false);
   const [onderwerpConfigSaving, setOnderwerpConfigSaving] = useState(false);
+  const [releaseConfigSaving, setReleaseConfigSaving] = useState(false);
+  const [openReleaseEditor, setOpenReleaseEditor] = useState("");
+  const [releaseDrafts, setReleaseDrafts] = useState({
+    last: { weekday: 2, cancelled: false },
+    next: { weekday: 2, cancelled: false },
+  });
 
   const [syncLoading, setSyncLoading] = useState(false);
   const [syncMessage, setSyncMessage] = useState("");
@@ -457,6 +495,18 @@ export default function Home() {
   useEffect(() => {
     setAiInsightThresholdDraft(Number(servicedeskConfig?.ai_insight_threshold_pct || 75));
   }, [servicedeskConfig?.ai_insight_threshold_pct]);
+  useEffect(() => {
+    setReleaseDrafts({
+      last: {
+        weekday: weekdayIndexFromIsoDate(servicedeskConfig?.saas_releases?.last?.release_date) ?? 2,
+        cancelled: Boolean(servicedeskConfig?.saas_releases?.last?.cancelled),
+      },
+      next: {
+        weekday: weekdayIndexFromIsoDate(servicedeskConfig?.saas_releases?.next?.release_date) ?? 2,
+        cancelled: Boolean(servicedeskConfig?.saas_releases?.next?.cancelled),
+      },
+    });
+  }, [servicedeskConfig?.saas_releases?.last?.cancelled, servicedeskConfig?.saas_releases?.last?.release_date, servicedeskConfig?.saas_releases?.next?.cancelled, servicedeskConfig?.saas_releases?.next?.release_date]);
   const servicedeskTeamMembers = useMemo(() => {
     const values = Array.isArray(servicedeskConfig?.team_members) ? servicedeskConfig.team_members : [];
     return values.length ? values : VACATION_TEAM_MEMBERS;
@@ -751,6 +801,15 @@ export default function Home() {
       prev.includes(name) ? prev.filter((x) => x !== name) : [...prev, name]
     );
   }, [setOnderwerpenDraft]);
+  const updateReleaseDraft = useCallback((slot, patch) => {
+    setReleaseDrafts((prev) => ({
+      ...prev,
+      [slot]: {
+        ...(prev?.[slot] || { weekday: 2, cancelled: false }),
+        ...patch,
+      },
+    }));
+  }, []);
 
   const normalizedOnderwerpenSelection = useCallback((values) => {
     const available = Array.isArray(meta?.onderwerpen) ? meta.onderwerpen : [];
@@ -781,6 +840,13 @@ export default function Home() {
   const cancelAiInsightConfig = useCallback(() => {
     setAiInsightThresholdDraft(Number(servicedeskConfig?.ai_insight_threshold_pct || 75));
   }, [servicedeskConfig?.ai_insight_threshold_pct]);
+  const cancelReleaseConfig = useCallback((slot) => {
+    updateReleaseDraft(slot, {
+      weekday: weekdayIndexFromIsoDate(servicedeskConfig?.saas_releases?.[slot]?.release_date) ?? 2,
+      cancelled: Boolean(servicedeskConfig?.saas_releases?.[slot]?.cancelled),
+    });
+    setOpenReleaseEditor("");
+  }, [servicedeskConfig, updateReleaseDraft]);
 
   const zichtbareOnderwerpenDraft = useMemo(
     () => normalizedOnderwerpenSelection(onderwerpenDraft),
@@ -808,6 +874,13 @@ export default function Home() {
   const aiInsightConfigDirty = useMemo(
     () => Number(aiInsightThresholdDraft) !== Number(servicedeskConfig?.ai_insight_threshold_pct || 75),
     [aiInsightThresholdDraft, servicedeskConfig?.ai_insight_threshold_pct]
+  );
+  const saasReleaseItems = useMemo(
+    () => [
+      { key: "last", label: "Laatste releasedatum" },
+      { key: "next", label: "Komende releasedatum" },
+    ],
+    []
   );
 
   useEffect(() => {
@@ -942,6 +1015,48 @@ export default function Home() {
     teamMembersDraft,
     zichtbareOnderwerpenDraft,
   ]);
+
+  const saveReleaseConfig = useCallback(async (slot) => {
+    const currentSlot = servicedeskConfig?.saas_releases?.[slot];
+    const draft = releaseDrafts?.[slot];
+    const baseReleaseDate = currentSlot?.base_release_date;
+    if (!baseReleaseDate || !draft) {
+      flashToast("Geen release gevonden om aan te passen.", "error");
+      return;
+    }
+    const releaseDate = shiftIsoDateToWeekday(baseReleaseDate, draft.weekday);
+    if (!releaseDate) {
+      flashToast("Kies een geldige dag voor deze releaseweek.", "error");
+      return;
+    }
+    setReleaseConfigSaving(true);
+    try {
+      const res = await fetch(`${API}/config/saas-releases`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          slot,
+          release_date: releaseDate,
+          cancelled: Boolean(draft.cancelled),
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.detail || "Opslaan van releaseconfiguratie mislukt.");
+      }
+      const updated = await res.json();
+      applyServicedeskConfig(updated, normalizedOnderwerpenSelection);
+      await refreshDashboard();
+      await refreshLiveInsights();
+      await refreshInsightLog();
+      setOpenReleaseEditor("");
+      flashToast("SaaS release opgeslagen.");
+    } catch (err) {
+      flashToast(err?.message || "Opslaan van releaseconfiguratie mislukt.", "error");
+    } finally {
+      setReleaseConfigSaving(false);
+    }
+  }, [applyServicedeskConfig, flashToast, normalizedOnderwerpenSelection, refreshDashboard, refreshInsightLog, refreshLiveInsights, releaseDrafts, servicedeskConfig]);
 
   const saveDashboardLayout = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -1710,6 +1825,47 @@ export default function Home() {
     if (trailingPartialWeekIndex < 0 || !weeks[trailingPartialWeekIndex]) return "";
     return `* Laatste week is nog onvolledig (${fmtDate(weeks[trailingPartialWeekIndex])}) en kan lager uitvallen.`;
   }, [trailingPartialWeekIndex, weeks]);
+  const releaseMarkerDates = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (Array.isArray(releaseFollowupWorkload) ? releaseFollowupWorkload : [])
+            .map((row) => String(row?.release_date || ""))
+            .filter(Boolean)
+        )
+      ),
+    [releaseFollowupWorkload]
+  );
+  const releaseStatusMeta = useMemo(() => {
+    const last = releaseSlotStatusMeta(servicedeskConfig?.saas_releases?.last, "Laatste release");
+    const next = releaseSlotStatusMeta(servicedeskConfig?.saas_releases?.next, "Komende release");
+    return [last, next].filter(Boolean);
+  }, [servicedeskConfig]);
+  const releaseStatusEvents = useMemo(
+    () =>
+      releaseStatusMeta.map((item) => ({
+        isoDate: item.isoDate,
+        status: item.kind,
+        label: item.label,
+      })),
+    [releaseStatusMeta]
+  );
+  const releaseCadenceEvents = useMemo(() => {
+    const byIsoDate = new Map(releaseMarkerDates.map((isoDate) => [isoDate, { isoDate, status: "default", label: "" }]));
+    releaseStatusEvents.forEach((item) => {
+      if (item?.isoDate) byIsoDate.set(item.isoDate, item);
+    });
+    return Array.from(byIsoDate.values());
+  }, [releaseMarkerDates, releaseStatusEvents]);
+  const releaseStatusNote = useMemo(
+    () => releaseStatusMeta.map((item) => item.text).join(" · "),
+    [releaseStatusMeta]
+  );
+  const releaseStatusBadge = useMemo(() => {
+    if (releaseStatusMeta.some((item) => item.kind === "cancelled")) return "Release vervallen";
+    if (releaseStatusMeta.some((item) => item.kind === "adjusted")) return "Release aangepast";
+    return "Release";
+  }, [releaseStatusMeta]);
   const weeklyPartialCardKeys = useMemo(
     () => new Set(["volume", "onderwerp", "inflowVsClosed", "incidentResolution", "firstResponseAll", "organizationWeekly"]),
     []
@@ -1745,12 +1901,12 @@ export default function Home() {
     setSlowChartCards((prev) => (prev?.[cardKey] ? { ...prev, [cardKey]: false } : prev));
   }, [clearSlowChartTimer]);
   const releaseCadencePlugin = useMemo(
-    () => ({ weeks, partialWeekIndex: trailingPartialWeekIndex }),
-    [weeks, trailingPartialWeekIndex]
+    () => ({ weeks, partialWeekIndex: trailingPartialWeekIndex, releaseDates: releaseMarkerDates, releaseEvents: releaseCadenceEvents }),
+    [releaseCadenceEvents, releaseMarkerDates, trailingPartialWeekIndex, weeks]
   );
   const releaseCadenceOnderwerpPlugin = useMemo(
-    () => ({ weeks: weeksOnderwerp, partialWeekIndex: trailingPartialWeekIndex }),
-    [weeksOnderwerp, trailingPartialWeekIndex]
+    () => ({ weeks: weeksOnderwerp, partialWeekIndex: trailingPartialWeekIndex, releaseDates: releaseMarkerDates, releaseEvents: releaseCadenceEvents }),
+    [releaseCadenceEvents, releaseMarkerDates, trailingPartialWeekIndex, weeksOnderwerp]
   );
   const fullWeekInfo = useMemo(() => {
     const currentWeek = weekStartIsoFromDate();
@@ -2598,7 +2754,7 @@ export default function Home() {
         dateTo: row.followup_date,
         issueKeys: row.issue_keys || [],
         title: `Release ${fmtDate(row.release_date)}`,
-        meta: `${num(row.tickets)} tickets op de woensdag na release`,
+        meta: `${num(row.tickets)} tickets op de werkdag na release`,
       }
     );
   }, [fetchDrilldown]);
@@ -4175,43 +4331,73 @@ export default function Home() {
 
     if (cardKey === "releaseWorkload") {
       return (
-        <div style={bodyStyle}>
-          {hasDataPoints(releaseWorkloadLineData) ? (
-            <Line
-              key={chartRenderKey("releaseWorkload")}
-              data={releaseWorkloadLineData}
-              options={{
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                  legend: { display: false },
-                  tooltip: {
-                    callbacks: {
-                      title: (items) => {
-                        const row = releaseFollowupWorkload[items?.[0]?.dataIndex || 0];
-                        return row ? `Release ${fmtDate(row.release_date)}` : "";
+        <div style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%", gap: 8 }}>
+          <div style={{ display: "grid", gap: 4, color: "var(--text-muted)", fontSize: 12, lineHeight: 1.35, flexShrink: 0 }}>
+            <div>
+              Laatste release: {kpiStats.releaseWednesdayLatestReleaseDate ? fmtDateWithWeekday(kpiStats.releaseWednesdayLatestReleaseDate) : "—"}
+            </div>
+            {releaseStatusMeta.map((item) => (
+              <div
+                key={`release-status-${item.label}`}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  color: item.kind === "cancelled" ? "var(--text-muted)" : "#b45309",
+                }}
+              >
+                <span
+                  aria-hidden
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: 999,
+                    background: item.kind === "cancelled" ? "var(--text-muted)" : "#d97706",
+                    opacity: item.kind === "cancelled" ? 0.7 : 1,
+                  }}
+                />
+                <span>{item.text}</span>
+              </div>
+            ))}
+          </div>
+          <div style={bodyStyle}>
+            {hasDataPoints(releaseWorkloadLineData) ? (
+              <Line
+                key={chartRenderKey("releaseWorkload")}
+                data={releaseWorkloadLineData}
+                options={{
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                      callbacks: {
+                        title: (items) => {
+                          const row = releaseFollowupWorkload[items?.[0]?.dataIndex || 0];
+                          return row ? `Release ${fmtDate(row.release_date)}` : "";
+                        },
+                        label: (ctx) => `${num(ctx.parsed.y)} tickets`,
                       },
-                      label: (ctx) => `${num(ctx.parsed.y)} tickets`,
                     },
+                    simpleDataLabels: buildSimpleDataLabels({ mode: "line", maxLabels: expanded ? 20 : 10 }),
                   },
-                  simpleDataLabels: buildSimpleDataLabels({ mode: "line", maxLabels: expanded ? 20 : 10 }),
-                },
-                onClick: (_evt, elements) => {
-                  const el = elements?.[0];
-                  if (!el) return;
-                  const row = releaseFollowupWorkload[el.index];
-                  if (!row) return;
-                  openReleaseWorkloadDrilldown(row);
-                },
-                scales: {
-                  x: buildChartAxis({}),
-                  y: buildChartAxis({ title: "Tickets", tickCallback: (value) => num(value) }),
-                },
-              }}
-            />
-          ) : (
-            <EmptyChartState filterLabel="Release workload" style={emptyStyle} />
-          )}
+                  onClick: (_evt, elements) => {
+                    const el = elements?.[0];
+                    if (!el) return;
+                    const row = releaseFollowupWorkload[el.index];
+                    if (!row) return;
+                    openReleaseWorkloadDrilldown(row);
+                  },
+                  scales: {
+                    x: buildChartAxis({}),
+                    y: buildChartAxis({ title: "Tickets", tickCallback: (value) => num(value) }),
+                  },
+                }}
+              />
+            ) : (
+              <EmptyChartState filterLabel="Release workload" style={emptyStyle} />
+            )}
+          </div>
         </div>
       );
     }
@@ -4649,14 +4835,16 @@ export default function Home() {
         badge: "Live",
       },
       releaseWednesdayWorkload: {
-        label: "Workload woensdag na release",
+        label: "Workload werkdag na release",
         value: kpiStats.releaseWednesdayTrendText === "—" ? "—" : `${kpiStats.releaseWednesdayTrendSymbol} ${kpiStats.releaseWednesdayTrendText}`.trim(),
-        sub: `Release (${kpiStats.releaseWednesdayLatestReleaseLabel}): ${num(kpiStats.releaseWednesdayLatestTickets)} tickets`,
+        sub: `Laatste release: ${kpiStats.releaseWednesdayLatestReleaseLabel} · ${num(kpiStats.releaseWednesdayLatestTickets)} tickets`,
         subSecondary:
-          kpiStats.releaseWednesdayPreviousTickets == null
-            ? "Nog geen vorige release-woensdag in de gekozen periode"
-            : `Vorige release (${kpiStats.releaseWednesdayPreviousReleaseLabel}): ${num(kpiStats.releaseWednesdayPreviousTickets)} tickets`,
-        badge: "Release",
+          releaseStatusNote
+            ? releaseStatusNote
+            : kpiStats.releaseWednesdayPreviousTickets == null
+              ? "Nog geen vorige release in de gekozen periode"
+              : `Vorige release (${kpiStats.releaseWednesdayPreviousReleaseLabel}): ${num(kpiStats.releaseWednesdayPreviousTickets)} tickets`,
+        badge: releaseStatusBadge,
         valueStyle: { color: kpiStats.releaseWednesdayTrendColor },
         onClick:
           kpiStats.releaseWednesdayFollowupDate
@@ -5370,6 +5558,118 @@ export default function Home() {
                   Opnieuw beginnen
                 </button>
               ) : null}
+            </div>
+          </details>
+
+          <details style={configDetailsStyle}>
+            <summary style={configSummaryStyle}>SaaS Releases</summary>
+            <div style={{ marginTop: 8, color: "var(--text-muted)", fontSize: 12, lineHeight: 1.5 }}>
+              Past de releaseweek aan voor alle release-afhankelijke berekeningen, grafieken, KPI&apos;s en AI-signalen.
+            </div>
+            <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+              {saasReleaseItems.map(({ key, label }) => {
+                const slot = servicedeskConfig?.saas_releases?.[key];
+                const draft = releaseDrafts?.[key] || { weekday: 2, cancelled: false };
+                const isOpen = openReleaseEditor === key;
+                const previewReleaseDate = slot?.base_release_date ? shiftIsoDateToWeekday(slot.base_release_date, draft.weekday) : "";
+                return (
+                  <div
+                    key={`saas-release-${key}`}
+                    style={{
+                      border: "1px solid var(--border)",
+                      borderRadius: 12,
+                      padding: 12,
+                      background: "color-mix(in srgb, var(--surface-muted) 58%, transparent)",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setOpenReleaseEditor((prev) => (prev === key ? "" : key))}
+                      style={{
+                        width: "100%",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: 12,
+                        background: "transparent",
+                        border: "none",
+                        padding: 0,
+                        cursor: "pointer",
+                        color: "inherit",
+                        textAlign: "left",
+                      }}
+                    >
+                      <span style={{ display: "grid", gap: 4 }}>
+                        <span style={{ fontWeight: 700 }}>{label}</span>
+                        <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
+                          {slot?.release_date ? fmtDateWithWeekday(slot.release_date) : "Nog geen releasedatum beschikbaar"}
+                        </span>
+                      </span>
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 8,
+                          color: slot?.cancelled ? "#b45309" : "var(--text-muted)",
+                          fontSize: 12,
+                          fontWeight: 700,
+                        }}
+                      >
+                        {slot?.cancelled ? "Vervallen" : slot?.source === "override" ? "Aangepast" : "Standaard"}
+                        <span aria-hidden>{isOpen ? "▴" : "▾"}</span>
+                      </span>
+                    </button>
+                    {isOpen ? (
+                      <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+                        <label style={fieldStyle}>
+                          <span style={labelStyle}>Dag in de week</span>
+                          <select
+                            value={draft.weekday}
+                            onChange={(e) => updateReleaseDraft(key, { weekday: Number(e.target.value) })}
+                            style={compactInputStyle}
+                            disabled={!slot?.base_release_date}
+                          >
+                            {RELEASE_WEEKDAY_OPTIONS.map((option) => (
+                              <option key={`release-day-${key}-${option.value}`} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
+                          Preview: {previewReleaseDate ? fmtDateWithWeekday(previewReleaseDate) : "—"}
+                        </div>
+                        <label style={{ display: "flex", gap: 8, alignItems: "center", minHeight: 28 }}>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(draft.cancelled)}
+                            onChange={(e) => updateReleaseDraft(key, { cancelled: e.target.checked })}
+                          />
+                          <span>{key === "last" ? "Deze release is vervallen" : "Deze release komt te vervallen"}</span>
+                        </label>
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button
+                            type="button"
+                            onClick={() => saveReleaseConfig(key)}
+                            disabled={releaseConfigSaving || !slot?.base_release_date}
+                            style={layoutPrimaryButtonStyle}
+                          >
+                            Opslaan
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => cancelReleaseConfig(key)}
+                            disabled={releaseConfigSaving}
+                            style={buttonBaseStyle}
+                          >
+                            Annuleren
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           </details>
 

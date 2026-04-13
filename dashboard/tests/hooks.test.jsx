@@ -739,6 +739,10 @@ describe("dashboard hooks", () => {
           onderwerpen_customized: true,
           updated_at: "2026-01-01T10:00:00Z",
           team_member_avatars: { Alice: "avatar.png" },
+          saas_releases: {
+            last: { base_release_date: "2026-01-13", release_date: "2026-01-13", followup_date: "2026-01-14", cancelled: false },
+            next: { base_release_date: "2026-01-27", release_date: "2026-01-30", followup_date: "2026-01-31", cancelled: true },
+          },
         },
         {
           team_members: ["Bob"],
@@ -747,6 +751,7 @@ describe("dashboard hooks", () => {
           onderwerpen_customized: false,
           updated_at: null,
           team_member_avatars: {},
+          saas_releases: {},
         },
       ],
     });
@@ -756,6 +761,7 @@ describe("dashboard hooks", () => {
     await waitFor(() => expect(result.current.servicedeskConfig.team_members).toEqual(["Alice"]));
     expect(result.current.teamMembersDraft).toEqual(["Alice"]);
     expect(result.current.onderwerpenDraft).toEqual(["email"]);
+    expect(result.current.servicedeskConfig.saas_releases.next.cancelled).toBe(true);
 
     act(() => {
       result.current.applyServicedeskConfig(
@@ -766,6 +772,7 @@ describe("dashboard hooks", () => {
           onderwerpen_customized: false,
           updated_at: null,
           team_member_avatars: {},
+          saas_releases: {},
         },
         (values) => values.map((value) => String(value).toUpperCase())
       );
@@ -786,6 +793,7 @@ describe("dashboard hooks", () => {
 
     expect(result.current.servicedeskConfig.team_members).toEqual([]);
     expect(result.current.servicedeskConfig.team_member_avatars).toEqual({});
+    expect(result.current.servicedeskConfig.saas_releases.last.release_date).toBeNull();
     expect(result.current.teamMembersDraft).toEqual([]);
     expect(result.current.onderwerpenDraft).toEqual([]);
   });

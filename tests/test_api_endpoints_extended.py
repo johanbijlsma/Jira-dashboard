@@ -138,6 +138,81 @@ def test_update_servicedesk_config_success(monkeypatch):
     assert response.json()["ai_insight_threshold_pct"] == 82
 
 
+def test_update_saas_release_config_persists_override_and_refreshes(monkeypatch):
+    cursor = _CursorStub()
+    _patch_conn(monkeypatch, cursor)
+    monkeypatch.setattr(
+        api,
+        "_resolve_release_config_slots",
+        lambda cur: {
+            "last": {
+                "base_release_date": date(2026, 3, 10),
+                "release_date": date(2026, 3, 10),
+                "followup_date": date(2026, 3, 11),
+                "is_cancelled": False,
+            },
+            "next": None,
+        },
+    )
+    monkeypatch.setattr(api, "_fetch_release_overrides", lambda cur: {})
+    monkeypatch.setattr(
+        api,
+        "_fetch_release_calendar_rows",
+        lambda: [
+            {
+                "sprint_id": 1,
+                "board_id": 2,
+                "sprint_name": "Sprint",
+                "sprint_start_date": date(2026, 3, 11),
+                "base_release_date": date(2026, 3, 10),
+                "release_date": date(2026, 3, 10),
+                "followup_date": date(2026, 3, 11),
+            }
+        ],
+    )
+    monkeypatch.setattr(api, "_refresh_release_calendar", lambda cur: cur.execute("select refresh_release_calendar", None))
+    monkeypatch.setattr(api, "_refresh_release_workload_snapshots", lambda cur: cur.execute("select refresh_release_workload", None))
+    monkeypatch.setattr(api, "get_servicedesk_config", lambda: {"ok": True})
+
+    response = client.put(
+        "/config/saas-releases",
+        json={"slot": "last", "release_date": "2026-03-13", "cancelled": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    queries = [_query_text(query).lower() for query, _ in cursor.executed]
+    assert any("insert into release_calendar_overrides" in query for query in queries)
+    assert any("refresh_release_calendar" in query for query in queries)
+    assert any("refresh_release_workload" in query for query in queries)
+
+
+def test_update_saas_release_config_rejects_cross_week_changes(monkeypatch):
+    cursor = _CursorStub()
+    _patch_conn(monkeypatch, cursor)
+    monkeypatch.setattr(
+        api,
+        "_resolve_release_config_slots",
+        lambda cur: {
+            "last": None,
+            "next": {
+                "base_release_date": date(2026, 3, 24),
+                "release_date": date(2026, 3, 24),
+                "followup_date": date(2026, 3, 25),
+                "is_cancelled": False,
+            },
+        },
+    )
+
+    response = client.put(
+        "/config/saas-releases",
+        json={"slot": "next", "release_date": "2026-03-30", "cancelled": False},
+    )
+
+    assert response.status_code == 400
+    assert "dezelfde releaseweek" in response.json()["detail"]
+
+
 def test_insights_logs_returns_mapped_rows(monkeypatch):
     cursor = _CursorStub(
         fetchall_values=[
@@ -412,6 +487,7 @@ def test_get_servicedesk_config_uses_baseline_when_not_customized(monkeypatch):
     monkeypatch.setattr(api, "ensure_schema", lambda: None)
     monkeypatch.setattr(api, "conn", lambda: _ConnStub(cursor))
     monkeypatch.setattr(api, "_allowed_servicedesk_onderwerpen", lambda cur: ["Performance", "Vraag"])
+    monkeypatch.setattr(api, "_resolve_release_config_slots", lambda cur: {"last": None, "next": None})
 
     data = api.get_servicedesk_config()
 
@@ -432,12 +508,32 @@ def test_get_servicedesk_config_uses_saved_selection_when_customized(monkeypatch
     monkeypatch.setattr(api, "ensure_schema", lambda: None)
     monkeypatch.setattr(api, "conn", lambda: _ConnStub(cursor))
     monkeypatch.setattr(api, "_allowed_servicedesk_onderwerpen", lambda cur: ["Performance", "Vraag"])
+    monkeypatch.setattr(
+        api,
+        "_resolve_release_config_slots",
+        lambda cur: {
+            "last": {
+                "base_release_date": date(2026, 2, 24),
+                "release_date": date(2026, 2, 24),
+                "followup_date": date(2026, 2, 25),
+                "is_cancelled": False,
+            },
+            "next": {
+                "base_release_date": date(2026, 3, 10),
+                "release_date": date(2026, 3, 13),
+                "followup_date": date(2026, 3, 14),
+                "is_cancelled": True,
+            },
+        },
+    )
 
     data = api.get_servicedesk_config()
 
     assert data["onderwerpen"] == ["Performance"]
     assert data["onderwerpen_baseline"] == ["Performance", "Vraag"]
     assert data["onderwerpen_customized"] is True
+    assert data["saas_releases"]["next"]["release_date"] == "2026-03-13"
+    assert data["saas_releases"]["next"]["cancelled"] is True
 
 
 def test_seed_servicedesk_config_defaults_updates_dashboard_config(monkeypatch):

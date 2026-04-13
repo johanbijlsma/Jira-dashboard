@@ -14,7 +14,9 @@ import {
   num,
   pct,
   sameStringSet,
+  shiftIsoDateToWeekday,
   trimLeadingPartialWeek,
+  weekdayIndexFromIsoDate,
   weekStartIsoFromDate,
   weekStartIsoFromIsoDate,
   zonedDateTimeParts,
@@ -68,6 +70,8 @@ describe("dashboard-utils", () => {
 
   it("handles list/numeric helpers", () => {
     expect(addDaysIso("2026-02-25", 2)).toBe("2026-02-27");
+    expect(weekdayIndexFromIsoDate("2026-02-25")).toBe(3);
+    expect(shiftIsoDateToWeekday("2026-02-25", 5)).toBe("2026-02-27");
     expect(hasDataPoints(null)).toBe(false);
     expect(hasDataPoints({})).toBe(false);
     expect(hasDataPoints({ datasets: [{ data: [0, 1] }] })).toBe(true);

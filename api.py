@@ -983,6 +983,16 @@ def ensure_schema():  # pragma: no cover
             );
             """
         )
+        cur.execute(
+            """
+            create table if not exists release_calendar_overrides (
+              base_release_date date primary key,
+              override_release_date date,
+              is_cancelled boolean not null default false,
+              updated_at timestamptz not null default now()
+            );
+            """
+        )
         cur.execute("insert into sync_state(id, last_sync) values (1, null) on conflict (id) do nothing;")
         cur.execute("alter table issues add column if not exists request_type text;")
         cur.execute("alter table issues add column if not exists issue_summary text;")
@@ -1086,6 +1096,9 @@ def ensure_schema():  # pragma: no cover
         cur.execute("create index if not exists alert_logs_scope_detected_at_idx on alert_logs(servicedesk_only, detected_at desc, id desc);")
         cur.execute("create index if not exists release_workload_snapshots_followup_idx on release_workload_snapshots(followup_date desc);")
         cur.execute("create index if not exists release_calendar_followup_idx on release_calendar(followup_date desc);")
+        cur.execute("alter table release_calendar_overrides add column if not exists override_release_date date;")
+        cur.execute("alter table release_calendar_overrides add column if not exists is_cancelled boolean not null default false;")
+        cur.execute("alter table release_calendar_overrides add column if not exists updated_at timestamptz not null default now();")
         cur.execute("drop index if exists alert_logs_daily_dedupe_idx;")
         cur.execute(
             """
@@ -1196,6 +1209,12 @@ class ServicedeskConfigPayload(BaseModel):
     ai_insight_threshold_pct: Optional[int] = None
 
 
+class SaasReleaseConfigPayload(BaseModel):
+    slot: str
+    release_date: Optional[str] = None
+    cancelled: bool = False
+
+
 class InsightFeedbackPayload(BaseModel):
     vote: str
     reason: Optional[str] = None
@@ -1254,6 +1273,7 @@ def get_servicedesk_config():
     ensure_schema()
     with conn() as c, c.cursor() as cur:
         _seed_servicedesk_config_defaults(cur)
+        saas_releases = _resolve_release_config_slots(cur)
         cur.execute(
             """
             select servicedesk_team_members, servicedesk_onderwerpen, servicedesk_onderwerpen_customized, updated_at, ai_insight_threshold_pct
@@ -1293,6 +1313,7 @@ def get_servicedesk_config():
             "ai_insight_threshold_pct": DEFAULT_AI_INSIGHT_THRESHOLD_PCT,
             "updated_at": None,
             "team_member_avatars": {},
+            "saas_releases": {"last": _serialize_release_slot(saas_releases.get("last")), "next": _serialize_release_slot(saas_releases.get("next"))},
         }
     team_members = list(row[0] or [])
     stored_onderwerpen = list(row[1] or [])
@@ -1306,6 +1327,7 @@ def get_servicedesk_config():
         "ai_insight_threshold_pct": int(row[4] or DEFAULT_AI_INSIGHT_THRESHOLD_PCT) if len(row) > 4 else DEFAULT_AI_INSIGHT_THRESHOLD_PCT,
         "updated_at": row[3].isoformat() if row[3] else None,
         "team_member_avatars": {name: avatar_map.get(name) for name in team_members if avatar_map.get(name)},
+        "saas_releases": {"last": _serialize_release_slot(saas_releases.get("last")), "next": _serialize_release_slot(saas_releases.get("next"))},
     }
 
 
@@ -2026,6 +2048,170 @@ def _parse_optional_iso_datetime(value: Optional[str]) -> Optional[datetime]:
         return parse_jira_datetime(str(value))
 
 
+def _week_start_for_date(value: date) -> date:
+    return value - timedelta(days=value.weekday())
+
+
+def _next_business_day(value: date) -> date:
+    candidate = value + timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate = candidate + timedelta(days=1)
+    return candidate
+
+
+def _release_row_sort_key(row: Dict[str, Any]):
+    release_date = row.get("release_date") or row.get("base_release_date")
+    followup_date = row.get("followup_date") or (_next_business_day(release_date) if isinstance(release_date, date) else date.max)
+    return (followup_date, release_date or date.max, int(row.get("sprint_id") or 0))
+
+
+def _default_release_slot_rows(now_date: Optional[date] = None) -> List[Dict[str, Any]]:
+    today = now_date or datetime.now(timezone.utc).astimezone(REPORT_TIMEZONE).date()
+    base_rows = _release_followup_dates(
+        anchor_iso=RELEASE_ANCHOR_ISO,
+        interval_days=RELEASE_INTERVAL_DAYS,
+        date_from=(today - timedelta(days=35)).isoformat(),
+        date_to=(today + timedelta(days=35)).isoformat(),
+    )
+    rows = []
+    for idx, row in enumerate(base_rows, start=1):
+        release_date = row["release_date"]
+        followup_date = row["followup_date"]
+        rows.append(
+            {
+                "sprint_id": -1000000 - idx,
+                "board_id": 0,
+                "sprint_name": f"Standaard release {release_date.isoformat()}",
+                "sprint_start_date": followup_date,
+                "release_date": release_date,
+                "followup_date": followup_date,
+                "base_release_date": release_date,
+            }
+        )
+    return rows
+
+
+def _fetch_release_overrides(cur) -> Dict[date, Dict[str, Any]]:
+    cur.execute(
+        """
+        select base_release_date, override_release_date, is_cancelled, updated_at
+        from release_calendar_overrides;
+        """
+    )
+    overrides = {}
+    for base_release_date, override_release_date, is_cancelled, updated_at in cur.fetchall() or []:
+        if not base_release_date:
+            continue
+        overrides[base_release_date] = {
+            "base_release_date": base_release_date,
+            "override_release_date": override_release_date,
+            "is_cancelled": bool(is_cancelled),
+            "updated_at": updated_at,
+        }
+    return overrides
+
+
+def _apply_release_overrides(
+    rows: List[Dict[str, Any]],
+    overrides: Dict[date, Dict[str, Any]],
+    *,
+    include_cancelled: bool = False,
+) -> List[Dict[str, Any]]:
+    merged = []
+    seen = set()
+    for row in rows:
+        base_release_date = row.get("base_release_date") or row.get("release_date")
+        if not isinstance(base_release_date, date) or base_release_date in seen:
+            continue
+        seen.add(base_release_date)
+        override = overrides.get(base_release_date) or {}
+        effective_release_date = override.get("override_release_date") or base_release_date
+        is_cancelled = bool(override.get("is_cancelled"))
+        if is_cancelled and not include_cancelled:
+            continue
+        followup_date = _next_business_day(effective_release_date)
+        merged.append(
+            {
+                **row,
+                "base_release_date": base_release_date,
+                "release_date": effective_release_date,
+                "followup_date": followup_date,
+                "sprint_start_date": followup_date,
+                "is_cancelled": is_cancelled,
+            }
+        )
+    return sorted(merged, key=_release_row_sort_key)
+
+
+def _base_release_rows_for_config(now_date: Optional[date] = None) -> List[Dict[str, Any]]:
+    rows = _fetch_release_calendar_rows()
+    today = now_date or datetime.now(timezone.utc).astimezone(REPORT_TIMEZONE).date()
+    if rows:
+        has_past = any(isinstance(row.get("release_date"), date) and row["release_date"] <= today for row in rows)
+        has_future = any(isinstance(row.get("release_date"), date) and row["release_date"] >= today for row in rows)
+        if has_past and has_future:
+            return rows
+    fallback_rows = _default_release_slot_rows(today)
+    combined = []
+    seen = set()
+    for row in [*rows, *fallback_rows]:
+        base_release_date = row.get("base_release_date") or row.get("release_date")
+        if not isinstance(base_release_date, date) or base_release_date in seen:
+            continue
+        seen.add(base_release_date)
+        combined.append({**row, "base_release_date": base_release_date})
+    return sorted(combined, key=_release_row_sort_key)
+
+
+def _resolve_release_config_slots(cur, now_date: Optional[date] = None) -> Dict[str, Optional[Dict[str, Any]]]:
+    today = now_date or datetime.now(timezone.utc).astimezone(REPORT_TIMEZONE).date()
+    overrides = _fetch_release_overrides(cur)
+    rows = _apply_release_overrides(_base_release_rows_for_config(today), overrides, include_cancelled=True)
+    last_slot = None
+    next_slot = None
+    for row in rows:
+        release_date = row.get("release_date")
+        if not isinstance(release_date, date):
+            continue
+        if release_date <= today:
+            last_slot = row
+        if release_date >= today and next_slot is None:
+            next_slot = row
+    return {"last": last_slot, "next": next_slot}
+
+
+def _serialize_release_slot(slot: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not slot:
+        return None
+    release_date = slot.get("release_date")
+    base_release_date = slot.get("base_release_date")
+    followup_date = slot.get("followup_date")
+    return {
+        "base_release_date": base_release_date.isoformat() if isinstance(base_release_date, date) else None,
+        "release_date": release_date.isoformat() if isinstance(release_date, date) else None,
+        "followup_date": followup_date.isoformat() if isinstance(followup_date, date) else None,
+        "cancelled": bool(slot.get("is_cancelled")),
+        "source": "override" if base_release_date != release_date or bool(slot.get("is_cancelled")) else "default",
+    }
+
+
+def _upsert_release_override(cur, *, base_release_date: date, release_date: date, cancelled: bool):
+    if not cancelled and release_date == base_release_date:
+        cur.execute("delete from release_calendar_overrides where base_release_date = %s;", (base_release_date,))
+        return
+    cur.execute(
+        """
+        insert into release_calendar_overrides(base_release_date, override_release_date, is_cancelled, updated_at)
+        values (%s, %s, %s, now())
+        on conflict (base_release_date) do update
+        set override_release_date = excluded.override_release_date,
+            is_cancelled = excluded.is_cancelled,
+            updated_at = now();
+        """,
+        (base_release_date, release_date, bool(cancelled)),
+    )
+
+
 def _manual_release_dates() -> List[date]:
     values = []
     seen = set()
@@ -2044,13 +2230,14 @@ def _manual_release_dates() -> List[date]:
 def _manual_release_calendar_rows() -> List[Dict[str, Any]]:
     rows = []
     for idx, release_date in enumerate(_manual_release_dates(), start=1):
-        followup_date = release_date + timedelta(days=1)
+        followup_date = _next_business_day(release_date)
         rows.append(
             {
                 "sprint_id": -idx,
                 "board_id": 0,
                 "sprint_name": f"Release {release_date.isoformat()}",
                 "sprint_start_date": followup_date,
+                "base_release_date": release_date,
                 "release_date": release_date,
                 "followup_date": followup_date,
             }
@@ -2102,6 +2289,7 @@ def _fetch_release_calendar_rows() -> List[Dict[str, Any]]:
                     "board_id": int(board_id),
                     "sprint_name": str(sprint.get("name") or f"Sprint {sprint.get('id')}"),
                     "sprint_start_date": sprint_start_local,
+                    "base_release_date": sprint_start_local - timedelta(days=1),
                     "release_date": sprint_start_local - timedelta(days=1),
                     "followup_date": sprint_start_local,
                 }
@@ -2113,7 +2301,8 @@ def _fetch_release_calendar_rows() -> List[Dict[str, Any]]:
 
 
 def _refresh_release_calendar(cur):
-    rows = _fetch_release_calendar_rows()
+    overrides = _fetch_release_overrides(cur)
+    rows = _apply_release_overrides(_base_release_rows_for_config(), overrides)
     cur.execute("delete from release_calendar;")
     if not rows:
         return
@@ -2230,12 +2419,9 @@ def _refresh_release_workload_snapshots(cur):
 def _ensure_release_workload_snapshots_ready():
     ensure_schema()
     with conn() as c, c.cursor() as cur:
+        _refresh_release_calendar(cur)
         cur.execute("select count(*) from release_calendar;")
         release_calendar_count = int((cur.fetchone() or [0])[0] or 0)
-        if release_calendar_count == 0:
-            _refresh_release_calendar(cur)
-            cur.execute("select count(*) from release_calendar;")
-            release_calendar_count = int((cur.fetchone() or [0])[0] or 0)
         cur.execute(
             """
             select
@@ -3359,6 +3545,51 @@ def update_servicedesk_config(payload: ServicedeskConfigPayload):
             """,
             (team_members, onderwerpen_to_save, ai_insight_threshold_pct, onderwerpen_customized),
         )
+        c.commit()
+    return get_servicedesk_config()
+
+
+@app.put("/config/saas-releases")
+def update_saas_release_config(payload: SaasReleaseConfigPayload):
+    ensure_schema()
+    slot_key = str(payload.slot or "").strip().lower()
+    if slot_key not in {"last", "next"}:
+        raise HTTPException(status_code=400, detail="Ongeldige release-slot. Gebruik 'last' of 'next'.")
+    with conn() as c, c.cursor() as cur:
+        slots = _resolve_release_config_slots(cur)
+        slot = slots.get(slot_key)
+        if not slot:
+            raise HTTPException(status_code=404, detail="Geen release-slot gevonden om aan te passen.")
+        base_release_date = slot.get("base_release_date")
+        if not isinstance(base_release_date, date):
+            raise HTTPException(status_code=400, detail="De basis releasedatum kon niet worden bepaald.")
+        release_date = _parse_iso_date_or_raise(payload.release_date, "release_date") if payload.release_date else base_release_date
+        if _week_start_for_date(release_date) != _week_start_for_date(base_release_date):
+            raise HTTPException(status_code=400, detail="Kies een dag binnen dezelfde releaseweek.")
+
+        overrides = _fetch_release_overrides(cur)
+        _upsert_release_override(
+            cur,
+            base_release_date=base_release_date,
+            release_date=release_date,
+            cancelled=bool(payload.cancelled),
+        )
+        candidate_overrides = dict(overrides)
+        if bool(payload.cancelled) or release_date != base_release_date:
+            candidate_overrides[base_release_date] = {
+                "base_release_date": base_release_date,
+                "override_release_date": release_date,
+                "is_cancelled": bool(payload.cancelled),
+            }
+        else:
+            candidate_overrides.pop(base_release_date, None)
+        effective_rows = _apply_release_overrides(_base_release_rows_for_config(), candidate_overrides)
+        followup_dates = [row["followup_date"] for row in effective_rows if isinstance(row.get("followup_date"), date)]
+        if len(followup_dates) != len(set(followup_dates)):
+            raise HTTPException(status_code=400, detail="Deze wijziging botst met een andere releaseweek.")
+
+        _refresh_release_calendar(cur)
+        _refresh_release_workload_snapshots(cur)
         c.commit()
     return get_servicedesk_config()
 
