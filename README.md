@@ -6,6 +6,7 @@ Use the same native stack locally as in production:
 - Postgres running on your machine
 - FastAPI via `make dev-api`
 - Next.js via `make dev-frontend`
+- Safe local mode with auto-sync but without Teams alerts via `make dev-local-no-alerts`
 
 Create `.env` from [`.env.example`](/Users/johanbijlsma/Repos/Jira-dashboard/.env.example), install backend and frontend dependencies, make sure Postgres is reachable on the configured host/port, then verify with `make db-check` and `make dev-check`. See [LOCAL_SETUP.md](/Users/johanbijlsma/Repos/Jira-dashboard/docs/LOCAL_SETUP.md) for the full flow.
 

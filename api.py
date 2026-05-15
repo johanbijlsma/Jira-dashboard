@@ -47,6 +47,9 @@ ALERT_P1_ACTIVE_STATUSES = [
     if s.strip()
 ]
 ALERT_TEAMS_WEBHOOK_URL = (os.environ.get("ALERT_TEAMS_WEBHOOK_URL") or "").strip()
+ALERT_TEAMS_NOTIFICATIONS_ENABLED = str(
+    os.environ.get("ALERT_TEAMS_NOTIFICATIONS_ENABLED", "true")
+).strip().lower() in {"1", "true", "yes", "on"}
 ALERT_TEAMS_TIMEOUT_SECONDS = float(os.environ.get("ALERT_TEAMS_TIMEOUT_SECONDS", "3"))
 AUTO_SYNC_ENABLED = str(os.environ.get("AUTO_SYNC_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
 SYNC_INCREMENTAL_INTERVAL_SECONDS = max(15, int(os.environ.get("SYNC_INCREMENTAL_INTERVAL_SECONDS", "45")))
@@ -3163,6 +3166,10 @@ def _send_teams_alert_notification(events, *, bypass_business_window: bool = Fal
         "skipped": False,
         "skipped_reason": None,
     }
+    if not ALERT_TEAMS_NOTIFICATIONS_ENABLED:
+        result["skipped"] = True
+        result["skipped_reason"] = "notifications_disabled"
+        return result
     if not ALERT_TEAMS_WEBHOOK_URL or not events:
         return result
     if not bypass_business_window and not _is_teams_alert_business_window():

@@ -1,5 +1,5 @@
 .PHONY: sync sync-full dev-api dev-api-no-reload dev-frontend dev-frontend-network dev-check \
-	serve-local \
+	dev-local-no-alerts serve-local \
 	prod-api prod-frontend prod-frontend-network prod-build prod-check db-check \
 	install-hooks test-api test-dashboard test semgrep-local
 
@@ -25,6 +25,9 @@ dev-frontend-network:
 
 dev-check:
 	curl -sS http://127.0.0.1:8000/status
+
+dev-local-no-alerts:
+	./scripts/dev-local-no-alerts.sh
 
 serve-local: prod-build
 	./scripts/serve-local.sh
