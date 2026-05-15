@@ -54,3 +54,17 @@ make dev-check
 Open:
 - `http://127.0.0.1:8000/status`
 - `http://127.0.0.1:3000`
+
+## Safe local mode without Teams alerts
+
+If you want to use the dashboard locally without sending duplicate Teams alerts, use:
+
+```bash
+make dev-local-no-alerts
+```
+
+This starts both the API and the frontend locally, with:
+- `ALERT_TEAMS_NOTIFICATIONS_ENABLED=false`, so no Teams notifications are sent
+- auto-sync left enabled, so local SLA/live warning data keeps updating as usual
+
+You can still trigger a manual sync from the status page or by running `make sync`.
