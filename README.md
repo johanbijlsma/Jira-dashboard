@@ -1,64 +1,93 @@
-# Dashboard
+# Jira Dashboard
 
-## Local development
+Een volledige Laravel 11 rewrite van het Jira servicedesk-dashboard, opgebouwd rond MySQL, Tailwind CSS en Livewire.
 
-Use the same native stack locally as in production:
-- Postgres running on your machine
-- FastAPI via `make dev-api`
-- Next.js via `make dev-frontend`
-- Safe local mode with auto-sync but without Teams alerts via `make dev-local-no-alerts`
+## Stack
 
-Create `.env` from [`.env.example`](/Users/johanbijlsma/Repos/Jira-dashboard/.env.example), install backend and frontend dependencies, make sure Postgres is reachable on the configured host/port, then verify with `make db-check` and `make dev-check`. See [LOCAL_SETUP.md](/Users/johanbijlsma/Repos/Jira-dashboard/docs/LOCAL_SETUP.md) for the full flow.
+- PHP 8.2+
+- Laravel 11
+- MySQL 8
+- Livewire 3
+- Tailwind CSS
+- Vite
 
-## Security baseline
+## Lokale setup
 
-This repository includes baseline security checks for secrets, SAST, and dependency vulnerabilities.
+1. Installeer PHP 8.2+, Composer, Node.js 20+ en MySQL 8 lokaal.
+2. Kopieer de voorbeeldconfiguratie:
 
-### Local setup
+```bash
+cp .env.example .env
+```
 
-1. Install pre-commit:
-   ```bash
-   python -m pip install pre-commit
-   ```
-2. Install hooks:
-   ```bash
-   pre-commit install
-   ```
-3. Run all local hooks:
-   ```bash
-   pre-commit run --all-files
-   ```
-4. Install Python dev tools:
-   ```bash
-   python3 -m pip install -r requirements.txt -r requirements-dev.txt
-   ```
+3. Installeer dependencies:
 
-### Local security scans
+```bash
+composer install
+npm install
+```
 
-- Secrets in current tree:
-  ```bash
-  gitleaks dir . --config .gitleaks.toml --redact
-  ```
-- Secrets in git history:
-  ```bash
-  gitleaks git --config .gitleaks.toml --redact
-  ```
-- Semgrep against the same default app-code scope as CI:
-  ```bash
-  make semgrep-local
-  ```
-  This target installs the pinned Semgrep CLI automatically before scanning.
+4. Genereer de app key en maak de database klaar:
 
-### CI security workflow
+```bash
+php artisan key:generate
+php artisan migrate
+```
 
-GitHub Actions workflow `.github/workflows/security.yml` runs:
+5. Start de applicatie:
 
-- Gitleaks on pull requests and weekly schedule
-- Semgrep (`auto` + `p/owasp-top-ten`)
-- Dependency scans (`npm audit` and `pip-audit`)
+```bash
+make dev
+```
 
-Semgrep is scoped to application code only: `api.py`, `import_issues.py`, `dashboard/components`, `dashboard/lib`, and `dashboard/pages`. Workflow files, CI helpers, generated assets, and test fixtures stay outside the default scan scope unless we intentionally expand it.
+Dit start:
+- de Laravel webserver
+- de Vite dev server
+- de Laravel scheduler voor automatische syncs
 
-On pull requests, the Semgrep gate only blocks on findings that land on lines changed by the PR. When it fails, the job logs each blocking finding with file, line, rule id, severity, and message so the fix is directly diagnosable from CI output.
+## Sync live volgen
 
-See `docs/SECURITY_PLAYBOOK.md` for remediation procedures.
+Als je de Jira-sync net als vroeger direct in je terminal wilt volgen, gebruik dan:
+
+```bash
+make sync-now
+```
+
+Voor een volledige sync:
+
+```bash
+make sync-full-now
+```
+
+Deze commando's draaien de sync in de voorgrond en tonen live:
+- Jira requests per pagina
+- response tijden
+- batch upserts
+- totalen en afronding
+
+## Automatische sync
+
+De oude dashboard-opzet synchroniseerde automatisch. Deze Laravel-versie doet dat nu ook weer via de scheduler.
+
+- `AUTO_SYNC_ENABLED=true` zet automatische sync aan
+- `SYNC_INCREMENTAL_INTERVAL_SECONDS=45` bepaalt de interval voor incremental syncs
+
+Lokaal wordt dit automatisch meegenomen door `make dev`. Los starten kan ook met:
+
+```bash
+make schedule
+```
+
+Automatische full syncs zijn uitgeschakeld. Een full sync start alleen nog handmatig via `/status` of `make sync-full-now`.
+
+## Belangrijkste onderdelen
+
+- `/` toont het Livewire-dashboard
+- `/status` toont sync- en queue-status
+- `/api/*` bevat JSON-endpoints voor filters, metrics, alerts, insights, vakanties en sync-beheer
+- `app/Services` bevat de businesslogica voor Jira-sync, metrics, alerts en configuratie
+- `database/migrations` bevat de volledige MySQL-schema-opbouw
+
+## Historische data
+
+De rewrite is voorbereid op een schone MySQL-start. Als historische data mee moet, voeg dan een eenmalige importstap toe via een artisan command voordat de oude omgeving definitief wordt uitgefaseerd.

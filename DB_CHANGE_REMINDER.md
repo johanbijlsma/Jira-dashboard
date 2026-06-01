@@ -1,9 +1,7 @@
-# DB Change Reminder
+# Database change reminder
 
-Whenever you change the database schema (add/rename/drop columns), run a **full backfill** so historical rows are populated.
+Bij iedere schemawijziging:
 
-Options:
-- Full sync endpoint: `POST /sync/full`
-- Or run `import_issues.py` for a complete reload
-
-Tip: After schema changes, also restart the backend to pick up any new logic.
+1. Voeg een nieuwe Laravel migration toe onder `database/migrations`.
+2. Werk eventueel Eloquent casts en services bij.
+3. Valideer de wijziging met `php artisan test`.

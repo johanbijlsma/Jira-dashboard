@@ -1,70 +1,77 @@
-# Local Setup
+# Local setup
 
-Use the same native stack locally as in production: Postgres, FastAPI, and Next.js.
+## Vereisten
 
-## 1) Configure `.env`
+- PHP 8.2+
+- Composer
+- Node.js 20+
+- MySQL 8
 
-Create `.env` from `.env.example` and use local values:
+## Setup
 
-```bash
-cp .env.example .env
-```
-
-Recommended local defaults:
-- `POSTGRES_HOST=localhost`
-- `POSTGRES_PORT=5432`
-- `POSTGRES_DB=jsm_analytics`
-- `NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000`
-- `BACKEND_CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000`
-
-## 2) Start Postgres
-
-Install and start a native Postgres instance on your machine, then create the database and user from `.env`.
-
-## 3) Install dependencies
+1. Maak een lokale database aan, bijvoorbeeld `jira_dashboard`.
+2. Kopieer `.env.example` naar `.env`.
+3. Installeer dependencies:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python3 -m pip install -r requirements.txt
-npm --prefix dashboard ci
+composer install
+npm install
 ```
 
-## 4) Run the app
-
-In one terminal:
+4. Genereer de app key:
 
 ```bash
-make dev-api
+php artisan key:generate
 ```
 
-In a second terminal:
+5. Draai de migraties:
 
 ```bash
-make dev-frontend
+php artisan migrate
 ```
 
-## 5) Verify health
+6. Start de applicatie:
 
 ```bash
-make db-check
-make dev-check
+make dev
 ```
 
-Open:
+Dit start in een keer:
+- `php artisan serve`
+- `npm run dev`
+- `php artisan schedule:work`
+
+## Sync live in terminal volgen
+
+Voor zichtbare sync-output in je terminal:
+
+```bash
+make sync-now
+```
+
+Voor een full sync:
+
+```bash
+make sync-full-now
+```
+
+## Automatische sync
+
+De app start lokaal ook automatische syncs, net als de oude Python-versie.
+
+- `AUTO_SYNC_ENABLED=true`
+- `SYNC_INCREMENTAL_INTERVAL_SECONDS=45`
+
+De scheduler draait standaard mee via `make dev`. Alleen de scheduler starten kan met:
+
+```bash
+make schedule
+```
+
+Automatische full syncs zijn uitgeschakeld. Voor een full sync gebruik je handmatig `/status` of `make sync-full-now`.
+
+## Beschikbare URLs
+
+- `http://127.0.0.1:8000/`
 - `http://127.0.0.1:8000/status`
-- `http://127.0.0.1:3000`
-
-## Safe local mode without Teams alerts
-
-If you want to use the dashboard locally without sending duplicate Teams alerts, use:
-
-```bash
-make dev-local-no-alerts
-```
-
-This starts both the API and the frontend locally, with:
-- `ALERT_TEAMS_NOTIFICATIONS_ENABLED=false`, so no Teams notifications are sent
-- auto-sync left enabled, so local SLA/live warning data keeps updating as usual
-
-You can still trigger a manual sync from the status page or by running `make sync`.
+- `http://127.0.0.1:8000/api/status`
