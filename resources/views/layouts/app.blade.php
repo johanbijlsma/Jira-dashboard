@@ -3,23 +3,22 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Jira Dashboard</title>
+    <title>Dashboard Servicedesk Planningsagenda</title>
     @vite(['resources/css/app.css', 'resources/js/app.js'])
     @livewireStyles
 </head>
-<body class="min-h-screen bg-slate-950 text-slate-100">
+<body class="min-h-screen bg-slate-100 text-slate-900">
     @php
         $navLinkClass = static function (bool $active): string {
             return $active
-                ? 'rounded-full border border-cyan-300 bg-cyan-400/10 px-4 py-2 text-white shadow-[0_0_0_1px_rgba(34,211,238,0.2)]'
-                : 'rounded-full border border-white/15 px-4 py-2 text-slate-200 transition hover:border-cyan-300 hover:text-white';
+                ? 'rounded-full border border-blue-300 bg-blue-50 px-4 py-2 text-blue-700 shadow-sm'
+                : 'rounded-full border border-slate-200 bg-white px-4 py-2 text-slate-600 transition hover:border-blue-300 hover:text-blue-700';
         };
     @endphp
-    <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        <header class="mb-8 flex flex-col gap-3 border-b border-white/10 pb-6 md:flex-row md:items-end md:justify-between">
+    <div class="w-full px-4 py-6 sm:px-6 xl:px-8 2xl:px-10">
+        <header class="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
-                <p class="text-sm uppercase tracking-[0.3em] text-cyan-300">Servicedesk Analytics</p>
-                <h1 class="mt-2 text-4xl font-semibold tracking-tight text-white">Jira Dashboard</h1>
+                <p class="text-sm font-medium text-slate-500">Planningsagenda / Jira</p>
             </div>
             <nav class="flex gap-3 text-sm">
                 <a class="{{ $navLinkClass(request()->routeIs('dashboard')) }}" href="{{ route('dashboard') }}" aria-current="{{ request()->routeIs('dashboard') ? 'page' : 'false' }}">Dashboard</a>

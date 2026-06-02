@@ -17,6 +17,7 @@ class JiraSyncService
     public function run(bool $full = false): array
     {
         set_time_limit(0);
+        $syncStartedAt = CarbonImmutable::now('UTC');
 
         $this->logProgress(sprintf('%s sync gestart.', $full ? 'Full' : 'Incremental'));
 
@@ -101,8 +102,13 @@ class JiraSyncService
             ));
         } while (!$isLast && $nextPageToken);
 
-        $effectiveSyncTime = $maxUpdatedAt
-            ?? ($lastSync ? CarbonImmutable::parse($lastSync) : CarbonImmutable::now('UTC'));
+        // Advance the sync checkpoint to at least the start of this run.
+        // With the 5-minute overlap in buildJql(), this prevents the same
+        // overlap window from being processed forever when Jira returns no
+        // newer updated timestamps than the prior checkpoint.
+        $effectiveSyncTime = $maxUpdatedAt && $maxUpdatedAt->gt($syncStartedAt)
+            ? $maxUpdatedAt
+            : $syncStartedAt;
 
         SyncState::query()->updateOrCreate(
             ['id' => 1],

@@ -5,8 +5,8 @@
 @layer base {
   body {
     background:
-      radial-gradient(circle at top, rgba(34, 211, 238, 0.14), transparent 28%),
-      radial-gradient(circle at bottom right, rgba(244, 114, 182, 0.14), transparent 24%),
-      #020617;
+      radial-gradient(circle at top, rgba(59, 130, 246, 0.08), transparent 28%),
+      radial-gradient(circle at bottom right, rgba(251, 146, 60, 0.08), transparent 24%),
+      #f1f5f9;
   }
 }
