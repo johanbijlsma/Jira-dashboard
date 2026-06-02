@@ -12,3 +12,6 @@
 /.vscode
 /.env
 /.DS_Store
+/.npm-cache/
+/.phpunit.result.cache
+/public/hot

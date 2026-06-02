@@ -282,22 +282,24 @@ class SyncService
             File::put($logFile, '');
         }
 
-        $command = [
+        $command = sprintf(
+            '%s %s dashboard:sync-run --run-id=%d%s',
             escapeshellarg(PHP_BINARY),
             escapeshellarg(base_path('artisan')),
-            'dashboard:sync-run',
-            '--run-id='.escapeshellarg((string) $runId),
-        ];
+            $runId,
+            $full ? ' --full' : ''
+        );
 
-        if ($full) {
-            $command[] = '--full';
-        }
+        // Detach the child so the HTTP request can end without terminating the sync process.
+        $shellCommand = sprintf(
+            'nohup %s >> %s 2>&1 &',
+            $command,
+            escapeshellarg($logFile)
+        );
 
-        $commandLine = implode(' ', $command).' >> '.escapeshellarg($logFile).' 2>&1';
-
-        $process = Process::fromShellCommandline($commandLine, base_path());
-        $process->setTimeout(null);
-        $process->start();
+        $process = Process::fromShellCommandline($shellCommand, base_path());
+        $process->disableOutput();
+        $process->run();
     }
 
     protected function appendSyncLog(string $message): void

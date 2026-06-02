@@ -4,7 +4,8 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite",
-    "test": "echo \"No frontend test runner configured yet\""
+    "lint": "npm run build",
+    "test": "npm run build"
   },
   "devDependencies": {
     "@tailwindcss/forms": "^0.5.9",
