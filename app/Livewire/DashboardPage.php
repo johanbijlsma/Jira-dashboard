@@ -105,6 +105,7 @@ class DashboardPage extends Component
 
         $metrics = app(MetricsService::class);
         $config = app(DashboardConfigService::class)->get();
+        $meta = $metrics->meta();
         $syncStatus = app(SyncService::class)->status();
         $volumeWeekly = $metrics->volumeWeekly($filters);
         $inflowVsClosed = $metrics->inflowVsClosedWeekly($filters);
@@ -120,7 +121,7 @@ class DashboardPage extends Component
         $fullWeeks = $this->fullWeeks($volumeWeekly);
 
         $payload = [
-            'meta' => $metrics->meta(),
+            'meta' => $meta,
             'config' => $config,
             'syncStatus' => $syncStatus,
             'volumeWeekly' => $volumeWeekly,
@@ -139,8 +140,7 @@ class DashboardPage extends Component
             'kpiStats' => $this->buildKpiStats($volumeWeekly, $currentWeekFlow, $syncStatus),
             'topCards' => $this->buildTopCards($volumeWeekly, $currentWeekFlow, $timeSummary, $issues, $fullWeeks),
             'summaryCards' => $this->buildSummaryCards($volumeWeekly, $inflowVsClosed, $issues, $insights),
-            'weeklyTicketRows' => $this->buildWeeklyTicketRows($inflowVsClosed),
-            'weeklyTicketChartConfig' => $this->buildWeeklyTicketChartConfig($inflowVsClosed),
+            'weeklyTicketChartConfig' => $this->buildWeeklyTicketChartConfig($volumeWeekly, $meta['request_types'] ?? []),
             'onderwerpTrendRows' => $this->buildOnderwerpTrendRows($issues),
             'closedVsIncomingRows' => $this->buildClosedVsIncomingRows($inflowVsClosed),
             'aiCount' => count($insights),
@@ -302,7 +302,7 @@ class DashboardPage extends Component
                 'tone' => 'default',
             ],
             [
-                'title' => 'Lopende week',
+                'title' => 'Lopende week *',
                 'badge' => 'Live',
                 'value' => (string) ($currentWeekFlow['current_received'] ?? 0),
                 'secondary_value' => (string) ($currentWeekFlow['current_closed'] ?? 0),
@@ -420,59 +420,89 @@ class DashboardPage extends Component
         ];
     }
 
-    protected function buildWeeklyTicketRows(array $inflowVsClosed): array
+    protected function buildWeeklyTicketChartConfig(array $volumeWeekly, array $requestTypes): array
     {
-        $max = max(1, (int) collect($inflowVsClosed)->max('incoming_count'));
+        $weeks = collect($volumeWeekly)
+            ->pluck('week')
+            ->filter()
+            ->map(fn (string $week) => substr($week, 0, 10))
+            ->unique()
+            ->sort()
+            ->values()
+            ->all();
+        $currentWeekStart = CarbonImmutable::now('Europe/Amsterdam')->startOfWeek()->toDateString();
+        $labels = array_map(function (string $week) use ($currentWeekStart): string {
+            $label = $this->formatDate($week);
 
-        return collect($inflowVsClosed)
-            ->map(function (array $row) use ($max) {
-                $incoming = (int) ($row['incoming_count'] ?? 0);
-                $closed = (int) ($row['closed_count'] ?? 0);
+            return $week === $currentWeekStart ? $label.' *' : $label;
+        }, $weeks);
+        $volumeLookup = $this->weeklyVolumeLookup($volumeWeekly);
+        $types = $this->weeklyTicketTypes($volumeWeekly, $requestTypes, $weeks);
+        $typeCount = max(1, count($types));
 
+        $typeDatasets = collect($types)
+            ->values()
+            ->map(function (string $type, int $index) use ($weeks, $volumeLookup, $typeCount): array {
                 return [
-                    'week' => $row['week'],
-                    'incoming_count' => $incoming,
-                    'closed_count' => $closed,
-                    'incoming_width' => max(8, (int) round(($incoming / $max) * 100)),
-                    'closed_width' => max(8, (int) round(($closed / $max) * 100)),
+                    'type' => 'line',
+                    'label' => $type,
+                    'data' => array_map(
+                        fn (string $week) => (int) ($volumeLookup[$week][$type] ?? 0),
+                        $weeks
+                    ),
+                    'borderColor' => $this->chartTypeColor($type, $index, $typeCount),
+                    'backgroundColor' => $this->chartTypeColor($type, $index, $typeCount),
+                    'pointBackgroundColor' => $this->chartTypeColor($type, $index, $typeCount),
+                    'pointBorderColor' => $this->chartTypeColor($type, $index, $typeCount),
+                    'borderWidth' => 3,
+                    'tension' => 0.2,
+                    'fill' => false,
+                    'pointRadius' => 3,
+                    'pointHoverRadius' => 4,
                 ];
             })
             ->all();
-    }
 
-    protected function buildWeeklyTicketChartConfig(array $inflowVsClosed): array
-    {
+        $totalData = array_map(function (string $week) use ($volumeLookup, $types): int {
+            return collect($types)->sum(fn (string $type) => (int) ($volumeLookup[$week][$type] ?? 0));
+        }, $weeks);
+
+        $movingAverageData = $this->movingAverage($totalData, 4);
+
         return [
             'type' => 'line',
             'data' => [
-                'labels' => array_map(
-                    fn ($row) => $this->formatWeekLabel($row['week'] ?? null),
-                    $inflowVsClosed
-                ),
-                'datasets' => [
+                'labels' => $labels,
+                'datasets' => array_merge($typeDatasets, [
                     [
-                        'label' => 'Binnengekomen',
-                        'data' => array_map(fn ($row) => (int) ($row['incoming_count'] ?? 0), $inflowVsClosed),
-                        'borderColor' => '#2563eb',
-                        'backgroundColor' => 'rgba(37, 99, 235, 0.12)',
-                        'tension' => 0.35,
+                        'type' => 'line',
+                        'label' => 'Totaal',
+                        'data' => $totalData,
+                        'borderColor' => '#374151',
+                        'backgroundColor' => '#374151',
+                        'borderDash' => [6, 4],
+                        'pointRadius' => 0,
+                        'pointHoverRadius' => 0,
+                        'tension' => 0.25,
+                        'borderWidth' => 2.5,
                         'fill' => false,
-                        'borderWidth' => 3,
-                        'pointRadius' => 3,
-                        'pointHoverRadius' => 4,
+                        'order' => 100,
                     ],
                     [
-                        'label' => 'Afgesloten',
-                        'data' => array_map(fn ($row) => (int) ($row['closed_count'] ?? 0), $inflowVsClosed),
-                        'borderColor' => '#15803d',
-                        'backgroundColor' => 'rgba(21, 128, 61, 0.12)',
-                        'tension' => 0.35,
+                        'type' => 'line',
+                        'label' => 'Voortschrijdend gemiddelde (4 weken)',
+                        'data' => $movingAverageData,
+                        'borderColor' => '#c62828',
+                        'backgroundColor' => '#c62828',
+                        'borderDash' => [2, 4],
+                        'pointRadius' => 0,
+                        'pointHoverRadius' => 0,
+                        'tension' => 0.25,
+                        'borderWidth' => 2.5,
                         'fill' => false,
-                        'borderWidth' => 3,
-                        'pointRadius' => 3,
-                        'pointHoverRadius' => 4,
+                        'order' => 101,
                     ],
-                ],
+                ]),
             ],
             'options' => [
                 'responsive' => true,
@@ -487,7 +517,12 @@ class DashboardPage extends Component
                         'align' => 'end',
                         'labels' => [
                             'usePointStyle' => true,
-                            'boxWidth' => 8,
+                            'boxWidth' => 10,
+                            'boxHeight' => 10,
+                            'pointStyleWidth' => 14,
+                            'padding' => 20,
+                            'useBorderRadius' => true,
+                            'borderRadius' => 999,
                             'color' => '#334155',
                             'font' => [
                                 'size' => 12,
@@ -568,6 +603,123 @@ class DashboardPage extends Component
                 ];
             })
             ->all();
+    }
+
+    protected function weeklyVolumeLookup(array $volumeWeekly): array
+    {
+        return collect($volumeWeekly)
+            ->groupBy(fn (array $row) => substr((string) ($row['week'] ?? ''), 0, 10))
+            ->map(function (Collection $rows): array {
+                return $rows
+                    ->mapWithKeys(function (array $row): array {
+                        $type = trim((string) ($row['request_type'] ?? 'Onbekend')) ?: 'Onbekend';
+
+                        return [$type => (int) ($row['tickets'] ?? 0)];
+                    })
+                    ->all();
+            })
+            ->all();
+    }
+
+    protected function weeklyTicketTypes(array $volumeWeekly, array $requestTypes, array $weeks): array
+    {
+        $candidateTypes = collect($requestTypes)
+            ->map(fn ($type) => trim((string) $type))
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($candidateTypes->isEmpty()) {
+            $candidateTypes = collect($volumeWeekly)
+                ->pluck('request_type')
+                ->map(fn ($type) => trim((string) $type))
+                ->filter()
+                ->unique()
+                ->values();
+        }
+
+        $preferredOrder = [
+            'incident' => 0,
+            'incidenten' => 0,
+            'vraag' => 1,
+            'vragen' => 1,
+            'rfc' => 2,
+            'service request' => 3,
+            'servicerequest' => 3,
+        ];
+
+        $weekSet = collect($weeks)->flip();
+        $totals = $candidateTypes
+            ->mapWithKeys(function (string $type) use ($volumeWeekly, $weekSet): array {
+                $total = collect($volumeWeekly)
+                    ->filter(function (array $row) use ($type, $weekSet): bool {
+                        $week = substr((string) ($row['week'] ?? ''), 0, 10);
+                        $currentType = trim((string) ($row['request_type'] ?? 'Onbekend')) ?: 'Onbekend';
+
+                        return $week !== '' && $weekSet->has($week) && $currentType === $type;
+                    })
+                    ->sum(fn (array $row) => (int) ($row['tickets'] ?? 0));
+
+                return [$type => $total];
+            });
+
+        $ordered = $candidateTypes
+            ->sort(function (string $a, string $b) use ($totals, $preferredOrder): int {
+                $rankA = $preferredOrder[mb_strtolower($a)] ?? 50;
+                $rankB = $preferredOrder[mb_strtolower($b)] ?? 50;
+
+                if ($rankA === $rankB) {
+                    $totalA = (int) ($totals[$a] ?? 0);
+                    $totalB = (int) ($totals[$b] ?? 0);
+
+                    return $totalB <=> $totalA ?: strcasecmp($a, $b);
+                }
+
+                return $rankA <=> $rankB;
+            })
+            ->values()
+            ->all();
+
+        return $ordered ?: ['Onbekend'];
+    }
+
+    protected function movingAverage(array $values, int $windowSize = 4): array
+    {
+        $windowSize = max(1, $windowSize);
+
+        return array_map(function (int $index) use ($values, $windowSize): ?float {
+            $start = max(0, $index - $windowSize + 1);
+            $slice = array_slice($values, $start, $index - $start + 1);
+            $numeric = array_values(array_filter($slice, fn ($value) => $value !== null));
+
+            if ($numeric === []) {
+                return null;
+            }
+
+            return array_sum($numeric) / count($numeric);
+        }, array_keys($values));
+    }
+
+    protected function chartTypeColor(string $type, int $index, int $total): string
+    {
+        $normalized = mb_strtolower(trim($type));
+
+        return match ($normalized) {
+            'incident', 'incidenten' => '#c62828',
+            'vraag', 'vragen' => '#e65100',
+            'rfc' => '#2e7d32',
+            'service request', 'servicerequest' => '#1565c0',
+            'totaal' => '#374151',
+            default => $this->fallbackChartColor($index, $total),
+        };
+    }
+
+    protected function fallbackChartColor(int $index, int $total): string
+    {
+        $safeTotal = max(1, $total);
+        $hue = (int) round((($index * 360) / $safeTotal + 15) % 360);
+
+        return sprintf('hsl(%d 70%% 45%%)', $hue);
     }
 
     protected function fullWeeks(array $volumeWeekly): Collection

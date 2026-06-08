@@ -119,15 +119,16 @@
             <div class="flex items-center justify-between gap-3">
                 <div>
                     <h2 class="text-2xl font-semibold text-slate-900">Aantal tickets per week</h2>
-                    <span class="mt-1 inline-flex rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">Lopende week</span>
+                    <span class="mt-1 inline-flex rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">Lopende week *</span>
                 </div>
             </div>
-            @if (!empty($weeklyTicketRows))
+            <p class="mt-2 text-sm text-slate-500">Tickets per soort met gestippelde lijnen voor totaal en voortschrijdend gemiddelde.</p>
+            @if (!empty($weeklyTicketChartConfig))
                 <div
                     wire:key="weekly-ticket-chart-{{ $dateFrom }}-{{ $dateTo }}-{{ $servicedeskOnly ? 1 : 0 }}"
                     wire:ignore
                     x-data='lineChart(@json($weeklyTicketChartConfig))'
-                    class="relative mt-4 h-[340px] w-full"
+                    class="relative mt-4 h-[420px] w-full"
                 >
                     <canvas x-ref="canvas" class="h-full w-full"></canvas>
                 </div>
@@ -140,7 +141,7 @@
             <div class="flex items-center justify-between gap-3">
                 <div>
                     <h2 class="text-2xl font-semibold text-slate-900">Onderwerp trends</h2>
-                    <span class="mt-1 inline-flex rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">Lopende week</span>
+                    <span class="mt-1 inline-flex rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">Lopende week *</span>
                 </div>
             </div>
             <div class="mt-3 grid gap-4 lg:grid-cols-[0.95fr,1.15fr]">
@@ -179,7 +180,7 @@
             <div class="flex items-center justify-between gap-3">
                 <div>
                     <h2 class="text-2xl font-semibold text-slate-900">Binnengekomen vs afgesloten</h2>
-                    <span class="mt-1 inline-flex rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">Lopende week</span>
+                    <span class="mt-1 inline-flex rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">Lopende week *</span>
                 </div>
             </div>
             <div class="mt-4 space-y-3">

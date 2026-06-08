@@ -306,6 +306,69 @@ class AlertsTest extends TestCase
             ->assertDontSee('SD-401');
     }
 
+    public function test_weekly_ticket_chart_uses_stacked_bars_and_guides(): void
+    {
+        $component = new DashboardPage();
+
+        $reflected = new \ReflectionMethod(DashboardPage::class, 'buildWeeklyTicketChartConfig');
+        $reflected->setAccessible(true);
+
+        $config = $reflected->invoke(
+            $component,
+            [
+                ['week' => '2026-05-18', 'request_type' => 'Incident', 'tickets' => 2],
+                ['week' => '2026-05-18', 'request_type' => 'Service Request', 'tickets' => 1],
+                ['week' => '2026-05-25', 'request_type' => 'Incident', 'tickets' => 3],
+                ['week' => '2026-05-25', 'request_type' => 'Service Request', 'tickets' => 0],
+                ['week' => '2026-06-01', 'request_type' => 'Incident', 'tickets' => 4],
+                ['week' => '2026-06-01', 'request_type' => 'Service Request', 'tickets' => 2],
+            ],
+            ['Incident', 'Service Request']
+        );
+
+        $this->assertSame('line', $config['type']);
+        $this->assertSame(['18-05-2026', '25-05-2026', '01-06-2026'], $config['data']['labels']);
+
+        $datasets = $config['data']['datasets'];
+
+        $this->assertSame('Incident', $datasets[0]['label']);
+        $this->assertSame('line', $datasets[0]['type']);
+        $this->assertSame([2, 3, 4], $datasets[0]['data']);
+        $this->assertSame('Service Request', $datasets[1]['label']);
+        $this->assertSame([1, 0, 2], $datasets[1]['data']);
+
+        $this->assertSame('Totaal', $datasets[2]['label']);
+        $this->assertSame('line', $datasets[2]['type']);
+        $this->assertSame([3, 3, 6], $datasets[2]['data']);
+        $this->assertSame([6, 4], $datasets[2]['borderDash']);
+
+        $this->assertSame('Voortschrijdend gemiddelde (4 weken)', $datasets[3]['label']);
+        $this->assertSame('line', $datasets[3]['type']);
+        $this->assertSame([3.0, 3.0, 4.0], array_map(fn ($value) => round((float) $value, 1), $datasets[3]['data']));
+        $this->assertSame([2, 4], $datasets[3]['borderDash']);
+    }
+
+    public function test_weekly_ticket_chart_marks_current_week_with_asterisk(): void
+    {
+        Carbon::setTestNow(CarbonImmutable::create(2026, 6, 8, 10, 0, 0, 'Europe/Amsterdam'));
+
+        $component = new DashboardPage();
+        $reflected = new \ReflectionMethod(DashboardPage::class, 'buildWeeklyTicketChartConfig');
+        $reflected->setAccessible(true);
+
+        $config = $reflected->invoke(
+            $component,
+            [
+                ['week' => '2026-05-25', 'request_type' => 'Incident', 'tickets' => 3],
+                ['week' => '2026-06-01', 'request_type' => 'Incident', 'tickets' => 4],
+                ['week' => '2026-06-08', 'request_type' => 'Incident', 'tickets' => 5],
+            ],
+            ['Incident']
+        );
+
+        $this->assertSame(['25-05-2026', '01-06-2026', '08-06-2026 *'], $config['data']['labels']);
+    }
+
     protected function mockDashboardDependencies(array $alerts, ?int $captureCount = null, array $logs = []): void
     {
         $this->mock(MetricsService::class, function (MockInterface $mock): void {
