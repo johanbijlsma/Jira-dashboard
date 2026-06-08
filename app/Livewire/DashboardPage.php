@@ -24,6 +24,8 @@ class DashboardPage extends Component
     public string $dateTo;
     public bool $servicedeskOnly = true;
     public bool $showFilters = false;
+    public ?string $alertSnapshotMessage = null;
+    public string $alertLogKindFilter = 'all';
 
     public function mount(): void
     {
@@ -70,6 +72,27 @@ class DashboardPage extends Component
         $this->showFilters = false;
     }
 
+    public function jiraIssueUrl(?string $issueKey): string
+    {
+        return rtrim((string) config('jira.base'), '/').'/browse/'.rawurlencode((string) $issueKey);
+    }
+
+    public function captureAlertSnapshot(): void
+    {
+        $captured = app(AlertService::class)->captureLiveSnapshot($this->servicedeskOnly);
+        $this->alertSnapshotMessage = sprintf(
+            'Alert snapshot opgeslagen: %d item(s) voor %s.',
+            $captured,
+            $this->servicedeskOnly ? 'servicedesk' : 'alle data'
+        );
+    }
+
+    public function clearAlertLogs(): void
+    {
+        app(AlertService::class)->clear($this->servicedeskOnly);
+        $this->alertSnapshotMessage = 'Alert logboek is leeggemaakt.';
+    }
+
     public function render()
     {
         $startedAt = microtime(true);
@@ -88,7 +111,8 @@ class DashboardPage extends Component
         $timeSummary = $metrics->timeSummary($filters);
         $currentWeekFlow = $metrics->currentWeekFlow($filters);
         $alerts = app(AlertService::class)->live($this->servicedeskOnly);
-        $alertLogs = app(AlertService::class)->logs(20, $this->servicedeskOnly);
+        $alertLogs = app(AlertService::class)->logs(300, $this->servicedeskOnly);
+        $alertLogGroups = $this->buildAlertLogGroups($alertLogs, $this->alertLogKindFilter);
         $insights = app(InsightService::class)->live($filters);
         $vacationsToday = app(VacationService::class)->today();
         $vacationsUpcoming = app(VacationService::class)->upcoming(3);
@@ -105,6 +129,10 @@ class DashboardPage extends Component
             'currentWeekFlow' => $currentWeekFlow,
             'alerts' => $alerts,
             'alertLogs' => $alertLogs,
+            'alertLogGroups' => $alertLogGroups,
+            'alertLogGroupCount' => count($alertLogGroups),
+            'alertLogTotalCount' => count($alertLogs),
+            'alertLogKindOptions' => $this->alertLogKindOptions($alertLogs),
             'insights' => $insights,
             'vacationsToday' => $vacationsToday,
             'vacationsUpcoming' => $vacationsUpcoming,
@@ -112,10 +140,12 @@ class DashboardPage extends Component
             'topCards' => $this->buildTopCards($volumeWeekly, $currentWeekFlow, $timeSummary, $issues, $fullWeeks),
             'summaryCards' => $this->buildSummaryCards($volumeWeekly, $inflowVsClosed, $issues, $insights),
             'weeklyTicketRows' => $this->buildWeeklyTicketRows($inflowVsClosed),
+            'weeklyTicketChartConfig' => $this->buildWeeklyTicketChartConfig($inflowVsClosed),
             'onderwerpTrendRows' => $this->buildOnderwerpTrendRows($issues),
             'closedVsIncomingRows' => $this->buildClosedVsIncomingRows($inflowVsClosed),
             'aiCount' => count($insights),
             'notificationCount' => $this->notificationCount($alerts),
+            'alertSnapshotMessage' => $this->alertSnapshotMessage,
         ];
 
         Log::info('[dashboard] render', [
@@ -410,6 +440,94 @@ class DashboardPage extends Component
             ->all();
     }
 
+    protected function buildWeeklyTicketChartConfig(array $inflowVsClosed): array
+    {
+        return [
+            'type' => 'line',
+            'data' => [
+                'labels' => array_map(
+                    fn ($row) => $this->formatWeekLabel($row['week'] ?? null),
+                    $inflowVsClosed
+                ),
+                'datasets' => [
+                    [
+                        'label' => 'Binnengekomen',
+                        'data' => array_map(fn ($row) => (int) ($row['incoming_count'] ?? 0), $inflowVsClosed),
+                        'borderColor' => '#2563eb',
+                        'backgroundColor' => 'rgba(37, 99, 235, 0.12)',
+                        'tension' => 0.35,
+                        'fill' => false,
+                        'borderWidth' => 3,
+                        'pointRadius' => 3,
+                        'pointHoverRadius' => 4,
+                    ],
+                    [
+                        'label' => 'Afgesloten',
+                        'data' => array_map(fn ($row) => (int) ($row['closed_count'] ?? 0), $inflowVsClosed),
+                        'borderColor' => '#15803d',
+                        'backgroundColor' => 'rgba(21, 128, 61, 0.12)',
+                        'tension' => 0.35,
+                        'fill' => false,
+                        'borderWidth' => 3,
+                        'pointRadius' => 3,
+                        'pointHoverRadius' => 4,
+                    ],
+                ],
+            ],
+            'options' => [
+                'responsive' => true,
+                'maintainAspectRatio' => false,
+                'interaction' => [
+                    'mode' => 'index',
+                    'intersect' => false,
+                ],
+                'plugins' => [
+                    'legend' => [
+                        'position' => 'top',
+                        'align' => 'end',
+                        'labels' => [
+                            'usePointStyle' => true,
+                            'boxWidth' => 8,
+                            'color' => '#334155',
+                            'font' => [
+                                'size' => 12,
+                                'weight' => '600',
+                            ],
+                        ],
+                    ],
+                    'tooltip' => [
+                        'backgroundColor' => '#0f172a',
+                        'titleColor' => '#f8fafc',
+                        'bodyColor' => '#e2e8f0',
+                        'displayColors' => true,
+                    ],
+                ],
+                'scales' => [
+                    'x' => [
+                        'ticks' => [
+                            'color' => '#64748b',
+                            'maxRotation' => 0,
+                            'autoSkip' => true,
+                        ],
+                        'grid' => [
+                            'color' => 'rgba(148, 163, 184, 0.18)',
+                        ],
+                    ],
+                    'y' => [
+                        'beginAtZero' => true,
+                        'ticks' => [
+                            'color' => '#64748b',
+                            'precision' => 0,
+                        ],
+                        'grid' => [
+                            'color' => 'rgba(148, 163, 184, 0.18)',
+                        ],
+                    ],
+                ],
+            ],
+        ];
+    }
+
     protected function buildOnderwerpTrendRows(Collection $issues): array
     {
         $counts = $issues
@@ -575,6 +693,174 @@ class DashboardPage extends Component
         return collect($alerts)
             ->filter(fn ($value) => is_array($value))
             ->sum(fn ($value) => count($value));
+    }
+
+    protected function buildAlertLogGroups(array $alertLogs, string $kindFilter): array
+    {
+        return collect($alertLogs)
+            ->filter(fn (array $log) => $kindFilter === 'all' || ($log['kind'] ?? null) === $kindFilter)
+            ->groupBy(fn (array $log) => implode('|', [
+                $log['kind'] ?? '',
+                $log['issue_key'] ?? '',
+                $log['status'] ?? '',
+            ]))
+            ->map(function (Collection $group): array {
+                $latest = $group->sortByDesc('detected_at')->first();
+
+                return [
+                    'detected_at' => $latest['detected_at'] ?? null,
+                    'kind' => $latest['kind'] ?? '',
+                    'kind_label' => $this->alertKindLabel($latest['kind'] ?? ''),
+                    'issue_key' => $latest['issue_key'] ?? '',
+                    'status' => $latest['status'] ?? '',
+                    'meta' => $latest['meta'] ?? '',
+                    'count' => $group->count(),
+                ];
+            })
+            ->sortByDesc('detected_at')
+            ->values()
+            ->all();
+    }
+
+    protected function alertLogKindOptions(array $alertLogs): array
+    {
+        return collect($alertLogs)
+            ->pluck('kind')
+            ->filter()
+            ->unique()
+            ->sort()
+            ->values()
+            ->map(fn (string $kind) => [
+                'value' => $kind,
+                'label' => $this->alertKindLabel($kind),
+            ])
+            ->prepend(['value' => 'all', 'label' => 'Alle soorten'])
+            ->all();
+    }
+
+    protected function alertKindLabel(string $kind): string
+    {
+        return match ($kind) {
+            'priority1' => 'Priority 1',
+            'first_response_due_warning' => 'SLA bijna',
+            'first_response_due_critical' => 'SLA kritiek',
+            'first_response_overdue' => 'SLA verlopen',
+            'time_to_resolution_warning' => 'TTR bijna',
+            'time_to_resolution_critical' => 'TTR kritiek',
+            'time_to_resolution_overdue' => 'TTR verlopen',
+            default => $kind,
+        };
+    }
+
+    protected function alertKindBadgeClasses(string $kind): string
+    {
+        return match ($kind) {
+            'priority1' => 'border-rose-300 bg-rose-50 text-rose-700',
+            'first_response_due_warning' => 'border-amber-300 bg-amber-50 text-amber-700',
+            'first_response_due_critical' => 'border-red-300 bg-red-50 text-red-700',
+            'first_response_overdue' => 'border-fuchsia-300 bg-fuchsia-50 text-fuchsia-700',
+            'time_to_resolution_warning' => 'border-blue-300 bg-blue-50 text-blue-700',
+            'time_to_resolution_critical' => 'border-cyan-300 bg-cyan-50 text-cyan-700',
+            'time_to_resolution_overdue' => 'border-slate-300 bg-slate-100 text-slate-700',
+            default => 'border-slate-300 bg-slate-50 text-slate-700',
+        };
+    }
+
+    protected function buildWarningCards(array $alerts): array
+    {
+        $priority1 = collect($alerts['priority1'] ?? [])->values();
+        $ttfrOverdue = collect($alerts['first_response_overdue'] ?? [])->values();
+        $ttfrCritical = collect($alerts['first_response_due_critical'] ?? [])->values();
+        $ttfrWarning = collect($alerts['first_response_due_warning'] ?? [])->values();
+        $ttrOverdue = collect($alerts['time_to_resolution_overdue'] ?? [])->values();
+        $ttrCritical = collect($alerts['time_to_resolution_critical'] ?? [])->values();
+        $ttrWarning = collect($alerts['time_to_resolution_warning'] ?? [])->values();
+
+        return [
+            [
+                'title' => 'Prio 1',
+                'count' => $priority1->count(),
+                'tone' => $priority1->isNotEmpty() ? 'critical' : 'quiet',
+                'status' => $priority1->isNotEmpty() ? 'Direct aandacht nodig' : 'Geen actieve Prio 1 tickets',
+                'items' => $priority1->take(3)->map(fn (array $alert) => [
+                    'issue_key' => $alert['issue_key'] ?? 'Onbekend',
+                    'summary' => $alert['issue_summary'] ?? '',
+                    'meta' => $alert['status'] ?? 'Open',
+                    ])->all(),
+            ],
+            [
+                'title' => 'SLA (TTFR)',
+                'count' => $ttfrOverdue->count() + $ttfrCritical->count() + $ttfrWarning->count(),
+                'tone' => $this->warningTone($ttfrOverdue, $ttfrCritical, $ttfrWarning),
+                'status' => $this->warningStatus($ttfrOverdue, $ttfrCritical, $ttfrWarning, 'Geen SLA-risico\'s'),
+                'items' => $this->warningItems($ttfrOverdue, $ttfrCritical, $ttfrWarning),
+            ],
+            [
+                'title' => 'TTR',
+                'count' => $ttrOverdue->count() + $ttrCritical->count() + $ttrWarning->count(),
+                'tone' => $this->warningTone($ttrOverdue, $ttrCritical, $ttrWarning),
+                'status' => $this->warningStatus($ttrOverdue, $ttrCritical, $ttrWarning, 'Geen TTR-risico\'s'),
+                'items' => $this->warningItems($ttrOverdue, $ttrCritical, $ttrWarning),
+            ],
+        ];
+    }
+
+    protected function warningTone(Collection $overdue, Collection $critical, Collection $warning): string
+    {
+        if ($overdue->isNotEmpty() || $critical->isNotEmpty()) {
+            return 'critical';
+        }
+
+        if ($warning->isNotEmpty()) {
+            return 'warning';
+        }
+
+        return 'quiet';
+    }
+
+    protected function warningStatus(Collection $overdue, Collection $critical, Collection $warning, string $emptyLabel): string
+    {
+        if ($overdue->isNotEmpty()) {
+            return sprintf('%d overdue · %d kritiek', $overdue->count(), $critical->count());
+        }
+
+        if ($critical->isNotEmpty()) {
+            return sprintf('%d kritiek · %d waarschuwing', $critical->count(), $warning->count());
+        }
+
+        if ($warning->isNotEmpty()) {
+            return sprintf('%d waarschuwing', $warning->count());
+        }
+
+        return $emptyLabel;
+    }
+
+    protected function warningItems(Collection $overdue, Collection $critical, Collection $warning): array
+    {
+        return $overdue
+            ->merge($critical)
+            ->merge($warning)
+            ->take(3)
+            ->map(fn (array $alert) => [
+                'issue_key' => $alert['issue_key'] ?? 'Onbekend',
+                'summary' => $alert['issue_summary'] ?? '',
+                'meta' => array_key_exists('minutes_left', $alert)
+                    ? $this->formatAlertLeadTime((int) $alert['minutes_left'])
+                    : ($alert['status'] ?? 'Open'),
+            ])->all();
+    }
+
+    protected function formatAlertLeadTime(int $minutesLeft): string
+    {
+        if ($minutesLeft < 0) {
+            return sprintf('%d min overdue', abs($minutesLeft));
+        }
+
+        if ($minutesLeft < 60) {
+            return sprintf('%d min resterend', $minutesLeft);
+        }
+
+        return sprintf('%s uur resterend', $this->formatDecimal($minutesLeft / 60, 1));
     }
 
     protected function trendMeta(int $current, int $previous): array

@@ -15,6 +15,7 @@ class SyncService
 
     public function __construct(
         protected JiraSyncService $jiraSyncService,
+        protected AlertService $alertService,
     ) {
     }
 
@@ -174,6 +175,8 @@ class SyncService
             'set_last_sync' => $result['set_last_sync'] ?? null,
             'error' => null,
         ])->save();
+        $this->alertService->captureLiveSnapshot(true);
+        $this->alertService->captureLiveSnapshot(false);
         $this->appendSyncLog(sprintf(
             '[%s] run #%d succesvol afgerond (%d upserts)',
             now()->toDateTimeString(),

@@ -1,4 +1,4 @@
-<div wire:poll.5s class="space-y-5">
+<div wire:poll.5s x-data="{ notificationsOpen: false }" @keydown.escape.window="notificationsOpen = false" class="space-y-5">
     @if ($syncStatus['running'] ?? false)
         <section class="rounded-2xl border border-sky-200 bg-sky-50 px-5 py-4 text-sky-900 shadow-sm">
             <div class="flex flex-wrap items-center justify-between gap-3">
@@ -31,7 +31,12 @@
                 AI
                 <span class="inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-xs">{{ $aiCount }}</span>
             </button>
-            <button type="button" class="relative inline-flex items-center rounded-xl bg-blue-600 px-3 py-2 text-white shadow-sm" aria-label="Notificaties">
+            <button
+                type="button"
+                @click="notificationsOpen = true"
+                class="relative inline-flex items-center rounded-xl bg-blue-600 px-3 py-2 text-white shadow-sm"
+                aria-label="Notificaties"
+            >
                 <span class="text-sm font-semibold">●</span>
                 @if ($notificationCount > 0)
                     <span class="absolute -right-1 -top-1 inline-flex min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-xs font-semibold text-white">{{ $notificationCount }}</span>
@@ -117,38 +122,18 @@
                     <span class="mt-1 inline-flex rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">Lopende week</span>
                 </div>
             </div>
-            <div class="mt-4 space-y-3">
-                @forelse ($weeklyTicketRows as $row)
-                    <div class="rounded-xl border border-slate-100 bg-slate-50 p-3">
-                        <div class="mb-2 flex items-center justify-between gap-3">
-                            <p class="text-sm font-semibold text-slate-700">{{ $this->formatWeekLabel($row['week']) }}</p>
-                            <p class="text-xs text-slate-500">{{ $row['incoming_count'] }} tickets</p>
-                        </div>
-                        <div class="space-y-2">
-                            <div>
-                                <div class="mb-1 flex justify-between text-xs text-slate-500">
-                                    <span>Binnengekomen</span>
-                                    <span>{{ $row['incoming_count'] }}</span>
-                                </div>
-                                <div class="h-2 rounded-full bg-slate-200">
-                                    <div class="h-2 rounded-full bg-blue-500" style="width: {{ $row['incoming_width'] }}%"></div>
-                                </div>
-                            </div>
-                            <div>
-                                <div class="mb-1 flex justify-between text-xs text-slate-500">
-                                    <span>Afgesloten</span>
-                                    <span>{{ $row['closed_count'] }}</span>
-                                </div>
-                                <div class="h-2 rounded-full bg-slate-200">
-                                    <div class="h-2 rounded-full bg-emerald-500" style="width: {{ $row['closed_width'] }}%"></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                @empty
-                    <p class="text-sm text-slate-500">Nog geen weekdata beschikbaar.</p>
-                @endforelse
-            </div>
+            @if (!empty($weeklyTicketRows))
+                <div
+                    wire:key="weekly-ticket-chart-{{ $dateFrom }}-{{ $dateTo }}-{{ $servicedeskOnly ? 1 : 0 }}"
+                    wire:ignore
+                    x-data='lineChart(@json($weeklyTicketChartConfig))'
+                    class="relative mt-4 h-[340px] w-full"
+                >
+                    <canvas x-ref="canvas" class="h-full w-full"></canvas>
+                </div>
+            @else
+                <p class="mt-4 text-sm text-slate-500">Nog geen weekdata beschikbaar.</p>
+            @endif
         </article>
 
         <article class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -226,31 +211,7 @@
         </article>
     </section>
 
-    <section class="grid gap-4 xl:grid-cols-[1.2fr,1fr,1fr]">
-        <article class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <h2 class="text-xl font-semibold text-slate-900">Live alerts</h2>
-            <div class="mt-4 space-y-3">
-                @foreach (['priority1' => 'P1', 'first_response_due_critical' => 'SLA kritiek', 'time_to_resolution_warning' => 'TTR waarschuwing'] as $key => $label)
-                    <div class="rounded-xl border border-slate-100 bg-slate-50 p-3">
-                        <div class="mb-2 flex items-center justify-between gap-3">
-                            <p class="text-sm font-semibold text-slate-700">{{ $label }}</p>
-                            <span class="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">{{ count($alerts[$key] ?? []) }}</span>
-                        </div>
-                        <div class="space-y-2">
-                            @forelse (($alerts[$key] ?? []) as $alert)
-                                <div class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
-                                    <p class="font-semibold text-slate-900">{{ $alert['issue_key'] }}</p>
-                                    <p>{{ $alert['issue_summary'] }}</p>
-                                </div>
-                            @empty
-                                <p class="text-sm text-slate-500">Geen actieve meldingen.</p>
-                            @endforelse
-                        </div>
-                    </div>
-                @endforeach
-            </div>
-        </article>
-
+    <section class="grid gap-4 xl:grid-cols-[1fr,1fr]">
         <article class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <h2 class="text-xl font-semibold text-slate-900">AI insights</h2>
             <div class="mt-4 space-y-3">
@@ -299,29 +260,134 @@
         </article>
     </section>
 
-    <section class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div class="mb-4 flex items-center justify-between gap-3">
-            <h2 class="text-xl font-semibold text-slate-900">Alert logboek</h2>
-            <span class="text-xs uppercase tracking-[0.25em] text-slate-500">{{ count($alertLogs) }} items</span>
-        </div>
-        <div class="space-y-3">
-            @forelse ($alertLogs as $log)
-                <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-                    <div>
-                        <p class="font-semibold text-slate-900">{{ $log['issue_key'] }}</p>
-                        <p>{{ $log['kind'] }} · {{ $log['status'] ?: 'status onbekend' }}</p>
-                    </div>
-                    <p class="text-slate-500">{{ $this->formatDateTime($log['detected_at']) }}</p>
-                </div>
-            @empty
-                <p class="text-sm text-slate-500">Nog geen alert events.</p>
-            @endforelse
-        </div>
-    </section>
-
     <section class="flex justify-end">
         <div class="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm text-slate-700 shadow-sm">
             Bijgewerkt: {{ $kpiStats['sync_last_updated_label'] }}@if($kpiStats['sync_last_upserts_label']) · {{ $kpiStats['sync_last_upserts_label'] }}@endif
         </div>
     </section>
+
+    <div
+        x-cloak
+        x-show="notificationsOpen"
+        x-transition.opacity
+        class="fixed inset-0 z-40 bg-slate-950/30"
+        @click="notificationsOpen = false"
+    ></div>
+
+    <aside
+        x-cloak
+        x-show="notificationsOpen"
+        x-transition:enter="transform transition ease-out duration-300"
+        x-transition:enter-start="translate-x-full"
+        x-transition:enter-end="translate-x-0"
+        x-transition:leave="transform transition ease-in duration-200"
+        x-transition:leave-start="translate-x-0"
+        x-transition:leave-end="translate-x-full"
+        class="fixed inset-y-0 right-0 z-50 flex h-full w-[min(96vw,1400px)] max-w-none flex-col border-l border-slate-200 bg-slate-50 shadow-2xl"
+        aria-label="Notificaties paneel"
+    >
+        <div class="flex items-center justify-between gap-4 border-b border-slate-200 bg-white px-6 py-5">
+            <div>
+                <p class="text-xs font-semibold uppercase tracking-[0.25em] text-slate-500">Notificaties</p>
+                <h2 class="mt-2 text-2xl font-semibold text-slate-900">Alert logboek</h2>
+                @if ($alertSnapshotMessage)
+                    <p class="mt-2 text-sm text-emerald-700">{{ $alertSnapshotMessage }}</p>
+                @endif
+            </div>
+            <button type="button" @click="notificationsOpen = false" class="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600 shadow-sm">
+                Sluiten
+            </button>
+        </div>
+
+        <div class="border-b border-slate-200 bg-white px-6 py-4">
+            <p class="text-sm text-slate-500">Alerts logboek - {{ $alertLogGroupCount }} groepen / {{ $alertLogTotalCount }} gebeurtenissen</p>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-6 py-4">
+            <div class="flex flex-wrap items-center gap-3">
+                <span class="text-sm text-slate-500">Meest recente alerts bovenaan</span>
+                <label class="flex items-center gap-2 text-sm text-slate-500">
+                    <span>Soort</span>
+                    <select wire:model.live="alertLogKindFilter" class="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm text-slate-900 shadow-sm">
+                        @foreach ($alertLogKindOptions as $option)
+                            <option value="{{ $option['value'] }}">{{ $option['label'] }}</option>
+                        @endforeach
+                    </select>
+                </label>
+            </div>
+            <div class="flex flex-wrap items-center gap-3">
+                <button
+                    wire:click="captureAlertSnapshot"
+                    wire:loading.attr="disabled"
+                    wire:target="captureAlertSnapshot"
+                    type="button"
+                    class="inline-flex items-center rounded-xl border border-blue-300 bg-white px-4 py-2 text-sm font-semibold text-blue-700 shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    <span wire:loading.remove wire:target="captureAlertSnapshot">Snapshot nu</span>
+                    <span wire:loading wire:target="captureAlertSnapshot">Opslaan...</span>
+                </button>
+                <button
+                    wire:click="clearAlertLogs"
+                    wire:loading.attr="disabled"
+                    wire:target="clearAlertLogs"
+                    type="button"
+                    class="inline-flex items-center rounded-xl border border-rose-300 bg-white px-4 py-2 text-sm font-semibold text-rose-700 shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    Logboek legen
+                </button>
+            </div>
+        </div>
+
+        <div class="flex-1 overflow-y-auto px-6 py-5">
+            <div class="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+                <table class="min-w-full text-left text-sm text-slate-700">
+                    <thead class="bg-slate-50 text-slate-900">
+                        <tr class="border-b border-slate-200">
+                            <th class="px-4 py-3 font-semibold">Tijd</th>
+                            <th class="px-4 py-3 font-semibold">Soort</th>
+                            <th class="px-4 py-3 font-semibold">Issue</th>
+                            <th class="px-4 py-3 font-semibold">Laatste info</th>
+                            <th class="px-4 py-3 font-semibold text-right">Aantal</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @forelse ($alertLogGroups as $log)
+                            <tr class="border-b border-slate-100 align-top">
+                                <td class="px-4 py-3 text-slate-700">{{ $this->formatDateTime($log['detected_at']) }}</td>
+                                <td class="px-4 py-3">
+                                    <span class="inline-flex rounded-full border px-3 py-1 text-xs font-semibold {{ $this->alertKindBadgeClasses($log['kind']) }}">
+                                        {{ $log['kind_label'] }}
+                                    </span>
+                                </td>
+                                <td class="px-4 py-3">
+                                    @if ($log['issue_key'])
+                                        <a
+                                            href="{{ $this->jiraIssueUrl($log['issue_key']) }}"
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            class="font-semibold text-blue-600 underline decoration-blue-200 underline-offset-4"
+                                        >
+                                            {{ $log['issue_key'] }}
+                                        </a>
+                                    @else
+                                        <span class="text-slate-400">-</span>
+                                    @endif
+                                </td>
+                                <td class="px-4 py-3 text-slate-700">{{ $log['meta'] ?: '—' }}</td>
+                                <td class="px-4 py-3 text-right">
+                                    <span class="inline-flex rounded-xl border border-slate-200 bg-white px-3 py-1 text-sm font-semibold text-slate-700">
+                                        {{ $log['count'] }}x
+                                    </span>
+                                </td>
+                            </tr>
+                        @empty
+                            <tr>
+                                <td colspan="5" class="px-4 py-6 text-sm text-slate-500">Nog geen alert events.</td>
+                            </tr>
+                        @endforelse
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </aside>
 </div>

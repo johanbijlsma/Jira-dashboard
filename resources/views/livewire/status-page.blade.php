@@ -15,6 +15,12 @@
         </section>
     @endif
 
+    @if ($lastAlertResult)
+        <section class="rounded-2xl border {{ ($lastAlertResult['ok'] ?? true) ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-rose-200 bg-rose-50 text-rose-900' }} px-5 py-4 text-sm shadow-sm">
+            {{ $lastAlertResult['message'] ?? 'Alertactie uitgevoerd.' }}
+        </section>
+    @endif
+
     @if ($status['running'] ?? false)
         <section class="rounded-2xl border border-sky-200 bg-sky-50 px-5 py-4 text-sky-900 shadow-sm">
             <div class="flex flex-wrap items-center justify-between gap-3">
@@ -59,6 +65,32 @@
         @if ($status['running'])
             <button wire:click="resetRunningSyncs" wire:loading.attr="disabled" class="rounded-xl border border-amber-300 bg-amber-50 px-5 py-3 text-sm font-semibold text-amber-800 shadow-sm disabled:cursor-not-allowed disabled:opacity-60">Reset hangende syncs</button>
         @endif
+    </section>
+
+    <section class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div class="flex flex-wrap items-center justify-between gap-4">
+            <div>
+                <h2 class="text-2xl font-semibold text-slate-900">Dev alerts</h2>
+                <p class="mt-1 text-sm text-slate-500">Maak dezelfde test alert aan als in het oude dashboard om P1 en TTFR direct te controleren.</p>
+            </div>
+            <div class="rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700">
+                Actief: {{ $devAlertState['count'] ?? 0 }}
+            </div>
+        </div>
+        <div class="mt-4 flex flex-wrap gap-3">
+            <button wire:click="triggerTestAlert" wire:loading.attr="disabled" class="rounded-xl bg-rose-600 px-5 py-3 text-sm font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-60">Test alert</button>
+            <button wire:click="clearTestAlerts" wire:loading.attr="disabled" class="rounded-xl border border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-700 shadow-sm disabled:cursor-not-allowed disabled:opacity-60">Verwijder test</button>
+        </div>
+        <div class="mt-4 rounded-xl border border-slate-100 bg-slate-50 p-4">
+            <p class="text-sm font-semibold text-slate-900">Actieve test issue keys</p>
+            <div class="mt-2 space-y-1 text-sm text-slate-600">
+                @forelse (($devAlertState['keys'] ?? []) as $issueKey)
+                    <p>{{ $issueKey }}</p>
+                @empty
+                    <p>Geen actieve test alerts.</p>
+                @endforelse
+            </div>
+        </div>
     </section>
 
     <section class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">

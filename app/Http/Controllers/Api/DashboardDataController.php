@@ -131,6 +131,21 @@ class DashboardDataController extends Controller
         return response()->json($this->alerts->clear((bool) $request->boolean('servicedesk_only', true)));
     }
 
+    public function devAlertsTrigger(Request $request)
+    {
+        return response()->json($this->alerts->triggerDevAlert((bool) $request->boolean('servicedesk_only', true)));
+    }
+
+    public function devAlertsClear(Request $request)
+    {
+        return response()->json($this->alerts->clearDevAlert($request->string('issue_key')->toString() ?: null));
+    }
+
+    public function devAlertsTestState()
+    {
+        return response()->json($this->alerts->devAlertTestState());
+    }
+
     public function vacations(Request $request)
     {
         return response()->json($this->vacations->list((bool) $request->boolean('include_past')));

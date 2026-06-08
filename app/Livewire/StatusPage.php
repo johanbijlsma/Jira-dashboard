@@ -2,12 +2,14 @@
 
 namespace App\Livewire;
 
+use App\Services\AlertService;
 use App\Services\SyncService;
 use Livewire\Component;
 
 class StatusPage extends Component
 {
     public ?array $lastSyncResult = null;
+    public ?array $lastAlertResult = null;
 
     public function mount(): void
     {
@@ -36,6 +38,24 @@ class StatusPage extends Component
         $this->lastSyncResult = app(SyncService::class)->resetRunningRuns();
     }
 
+    public function triggerTestAlert(): void
+    {
+        $result = app(AlertService::class)->triggerDevAlert(true);
+        $this->lastAlertResult = [
+            'ok' => (bool) ($result['ok'] ?? false),
+            'message' => sprintf('Test alert aangemaakt: %s', $result['issue_key'] ?? 'onbekend'),
+        ];
+    }
+
+    public function clearTestAlerts(): void
+    {
+        app(AlertService::class)->clearDevAlert();
+        $this->lastAlertResult = [
+            'ok' => true,
+            'message' => 'Test alerts zijn verwijderd.',
+        ];
+    }
+
     public function render()
     {
         $status = app(SyncService::class)->status();
@@ -62,7 +82,9 @@ class StatusPage extends Component
         return view('livewire.status-page', [
             'status' => $status,
             'lastSyncResult' => $this->lastSyncResult,
+            'lastAlertResult' => $this->lastAlertResult,
             'config' => app(\App\Services\DashboardConfigService::class)->get(),
+            'devAlertState' => app(AlertService::class)->devAlertTestState(),
         ]);
     }
 
