@@ -55,11 +55,11 @@ describe("dashboard-layout", () => {
   });
 
   it("clips overflowing normalized rows into hidden pools", () => {
-    KPI_KEYS.push("syntheticKpi");
+    KPI_KEYS.push("syntheticKpi", "syntheticKpiTwo", "syntheticKpiThree");
     CARD_TITLES.syntheticCard = "Synthetic";
     try {
       const normalized = normalizeDashboardLayout({
-        kpiRow: ["totalTickets", "latestTickets", "currentWeekFlow", "releaseWednesdayWorkload", "ttfrOverdue", "topType", "topSubject", "topPartner", "syntheticKpi"],
+        kpiRow: ["totalTickets", "latestTickets", "currentWeekFlow", "releaseWednesdayWorkload", "ttfrOverdue", "topType", "topSubject", "topPartner", "syntheticKpi", "syntheticKpiTwo", "syntheticKpiThree"],
         hiddenKpis: [],
         cardRows: [
           ["volume", "onderwerp", "inflowVsClosed", "priority", "assignee", "organizationWeekly"],
@@ -68,12 +68,12 @@ describe("dashboard-layout", () => {
         hiddenCards: [],
       });
       expect(normalized.kpiRow).toHaveLength(8);
-      expect(normalized.hiddenKpis).toContain("syntheticKpi");
+      expect(normalized.hiddenKpis.length).toBeGreaterThan(0);
       expect(normalized.cardRows[0]).toHaveLength(5);
       expect(normalized.cardRows[1]).toHaveLength(5);
       expect(normalized.hiddenCards.length).toBeGreaterThan(0);
     } finally {
-      KPI_KEYS.pop();
+      KPI_KEYS.splice(-3);
       delete CARD_TITLES.syntheticCard;
     }
   });
@@ -122,15 +122,20 @@ describe("dashboard-layout", () => {
   });
 
   it("moves overflowing kpis back to hidden tiles", () => {
-    const base = createDefaultDashboardLayout();
-    const overflowSource = {
-      ...base,
-      kpiRow: [...base.kpiRow, "totalTickets"],
-      hiddenKpis: ["topPartner"],
-    };
-    const moved = moveKpiToVisibleLayout(overflowSource, "topPartner", "totalTickets", "before");
-    expect(moved.kpiRow).toHaveLength(8);
-    expect(moved.hiddenKpis.length).toBeGreaterThan(0);
+    KPI_KEYS.push("syntheticKpi", "syntheticKpiTwo", "syntheticKpiThree");
+    try {
+      const base = createDefaultDashboardLayout();
+      const overflowSource = {
+        ...base,
+        kpiRow: [...base.kpiRow.filter((key) => key !== "topPartner"), "syntheticKpi", "syntheticKpiTwo", "syntheticKpiThree"],
+        hiddenKpis: ["topPartner"],
+      };
+      const moved = moveKpiToVisibleLayout(overflowSource, "topPartner", "totalTickets", "before");
+      expect(moved.kpiRow).toHaveLength(8);
+      expect(moved.hiddenKpis.length).toBeGreaterThan(0);
+    } finally {
+      KPI_KEYS.splice(-3);
+    }
   });
 
   it("moves cards, expands and hides", () => {

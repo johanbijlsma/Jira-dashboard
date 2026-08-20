@@ -146,6 +146,8 @@ describe("dashboard hooks", () => {
       "/metrics/ttfr_overdue_weekly?": [{ week: "2026-01-05", overdue: 2 }],
       "/metrics/release_followup_workload?": [[{ release_date: "2026-01-13", followup_date: "2026-01-14", tickets: 4, issue_keys: ["SD-1"] }]],
       "/metrics/current_week_flow?": { current_received: 8, previous_received: 5, current_closed: 3, previous_closed: 2 },
+      "/metrics/in_progress_count": { count: 4 },
+      "/metrics/new_melding_count": { count: 2 },
       "/metrics/leadtime_p90_by_type?": [{ request_type: "Incident", p90_hours: 12 }],
       "/meta": [
         { request_types: ["Incident"], onderwerpen: ["Email"], priorities: ["High"], assignees: ["A"], organizations: ["Org"] },
@@ -219,6 +221,8 @@ describe("dashboard hooks", () => {
         { current_received: 2, previous_received: 1, current_closed: 1, previous_closed: 0 },
         { current_received: 3, previous_received: 2, current_closed: 1, previous_closed: 1 },
       ],
+      "/metrics/in_progress_count": { count: 4 },
+      "/metrics/new_melding_count": { count: 2 },
       "/meta": [{ request_types: [], onderwerpen: [], priorities: [], assignees: [], organizations: [] }],
     });
 
@@ -270,6 +274,8 @@ describe("dashboard hooks", () => {
       "/metrics/ttfr_overdue_weekly?": [],
       "/metrics/release_followup_workload?": [],
       "/metrics/current_week_flow?": { current_received: 0, previous_received: 0, current_closed: 0, previous_closed: 0 },
+      "/metrics/in_progress_count": { count: 0 },
+      "/metrics/new_melding_count": { count: 0 },
       "/meta": [{ request_types: [], onderwerpen: [], priorities: [], assignees: [], organizations: [] }],
     });
 
