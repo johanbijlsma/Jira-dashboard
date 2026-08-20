@@ -3347,6 +3347,21 @@ def upsert_issues(issues):
 
 
 
+def reconcile_full_sync_issues(issue_keys):
+    """Remove local SD issues that a successful full Jira sync no longer returns."""
+    keys = [str(key) for key in issue_keys if key]
+    if not keys:
+        return 0
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            "delete from issues where issue_key like 'SD-%%' and issue_key <> all(%s::text[]);",
+            (keys,),
+        )
+        removed = int(cur.rowcount or 0)
+        c.commit()
+    return removed
+
+
 def run_sync_once(full: bool = False, trigger_type: str = "manual"):
     """
     Incremental sync op basis van 'updated' sinds last_sync.
@@ -3388,6 +3403,7 @@ def run_sync_once(full: bool = False, trigger_type: str = "manual"):
 
         next_token = None
         total = 0
+        full_sync_issue_keys = set()
         max_updated = None
 
         while True:
@@ -3396,6 +3412,8 @@ def run_sync_once(full: bool = False, trigger_type: str = "manual"):
             if batch:
                 upsert_issues(batch)
                 total += len(batch)
+                if full:
+                    full_sync_issue_keys.update(issue.get("key") for issue in batch if issue.get("key"))
                 for issue in batch:
                     updated_raw = issue.get("fields", {}).get("updated")
                     updated_dt = parse_jira_datetime(updated_raw)
@@ -3405,6 +3423,9 @@ def run_sync_once(full: bool = False, trigger_type: str = "manual"):
             next_token = data.get("nextPageToken")
             if data.get("isLast") or not next_token:
                 break
+
+        if full:
+            reconcile_full_sync_issues(full_sync_issue_keys)
 
         # Zet last_sync op max(updated) om clock/indexing skew te voorkomen
         if max_updated is not None:
@@ -4286,7 +4307,9 @@ def in_progress_count():
             from issues
             where issue_key like 'SD-%%'
               and current_status = 'In behandeling'
-              and lower(coalesce(onderwerp_logging, '')) <> all(%s::text[])
+              and onderwerp_logging is not null
+              and btrim(onderwerp_logging) <> ''
+              and lower(btrim(onderwerp_logging)) <> all(%s::text[])
             """,
             (list(IN_PROGRESS_EXCLUDED_ONDERWERPEN_LOWER),),
         )

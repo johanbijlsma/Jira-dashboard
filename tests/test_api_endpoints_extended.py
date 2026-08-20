@@ -721,7 +721,8 @@ def test_metrics_in_progress_count_excludes_configured_onderwerpen(monkeypatch):
     query, params = cursor.executed[0]
     assert "issue_key like 'SD-%%'" in query
     assert "current_status = 'In behandeling'" in query
-    assert "onderwerp_logging" in query
+    assert "onderwerp_logging is not null" in query
+    assert "btrim(onderwerp_logging) <> ''" in query
     assert set(params[0]) == {
         "koppelingen",
         "migratie",

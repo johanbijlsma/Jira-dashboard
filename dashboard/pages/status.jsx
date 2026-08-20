@@ -280,7 +280,7 @@ export default function StatusPage() {
   return (
     <main style={pageStyle}>
       <Head>
-        <title>Status | Dashboard Servicedesk Planningsagenda</title>
+        <title>Status | Dashboard Servicedesk Twentecs</title>
         <link rel="icon" href={faviconHref} />
       </Head>
       <div style={shellStyle}>
@@ -460,50 +460,59 @@ export default function StatusPage() {
       <style>{`
         :root {
           color-scheme: light dark;
-          --page-bg: #f1f5f9;
-          --surface: #ffffff;
-          --surface-muted: #f8fafc;
-          --text-main: #0f172a;
-          --text-subtle: #334155;
-          --text-muted: #64748b;
-          --text-faint: #94a3b8;
-          --border: #cbd5e1;
-          --border-strong: #e2e8f0;
-          --accent: #2563eb;
-          --danger: #dc2626;
-          --ok: #15803d;
-          --overlay-bg: rgba(15, 23, 42, 0.55);
-          --overlay-soft: rgba(0, 0, 0, 0.35);
-          --shadow-medium: rgba(0, 0, 0, 0.25);
-          --shadow-strong: rgba(2, 6, 23, 0.35);
-          --indicator-border: rgba(0, 0, 0, 0.15);
+          --brand-red: #ab1f23;
+          --brand-light-blue: #366475;
+          --brand-dark-blue: #192c2e;
+          --brand-beige: #fff8e9;
+          --brand-yellow: #ffdf80;
+          --brand-rose: #f4b19f;
+          --brand-soft-red: #f26d5d;
+          --page-bg: var(--brand-beige);
+          --surface: #fffefa;
+          --surface-muted: #fff4d8;
+          --text-main: var(--brand-dark-blue);
+          --text-subtle: #2a4d55;
+          --text-muted: #466871;
+          --text-faint: #718d90;
+          --border: #b8cdcc;
+          --border-strong: #d9e5d7;
+          --accent: var(--brand-red);
+          --danger: #a31e22;
+          --warning: #8a5c00;
+          --ok: #226044;
+          --overlay-bg: rgba(25, 44, 46, 0.58);
+          --overlay-soft: rgba(25, 44, 46, 0.36);
+          --shadow-medium: rgba(25, 44, 46, 0.14);
+          --shadow-strong: rgba(25, 44, 46, 0.28);
+          --indicator-border: rgba(25, 44, 46, 0.18);
         }
         @media (prefers-color-scheme: dark) {
           :root {
-            --page-bg: #020617;
-            --surface: #0f172a;
-            --surface-muted: #111c31;
-            --text-main: #e5e7eb;
-            --text-subtle: #cbd5e1;
-            --text-muted: #94a3b8;
-            --text-faint: #64748b;
-            --border: #334155;
-            --border-strong: #475569;
-            --accent: #60a5fa;
-            --danger: #f87171;
-            --ok: #4ade80;
-            --overlay-bg: rgba(2, 6, 23, 0.72);
-            --overlay-soft: rgba(2, 6, 23, 0.55);
-            --shadow-medium: rgba(0, 0, 0, 0.45);
-            --shadow-strong: rgba(0, 0, 0, 0.62);
-            --indicator-border: rgba(148, 163, 184, 0.35);
+            --page-bg: #102426;
+            --surface: var(--brand-dark-blue);
+            --surface-muted: #213c3f;
+            --text-main: var(--brand-beige);
+            --text-subtle: #d7e5df;
+            --text-muted: #adc4c0;
+            --text-faint: #76928e;
+            --border: #426568;
+            --border-strong: #54787a;
+            --accent: var(--brand-soft-red);
+            --danger: #ff9a8e;
+            --warning: var(--brand-yellow);
+            --ok: #83d0a5;
+            --overlay-bg: rgba(10, 25, 27, 0.76);
+            --overlay-soft: rgba(10, 25, 27, 0.58);
+            --shadow-medium: rgba(0, 0, 0, 0.3);
+            --shadow-strong: rgba(0, 0, 0, 0.55);
+            --indicator-border: rgba(215, 229, 223, 0.28);
           }
         }
         html,
         body {
           background: var(--page-bg);
           color: var(--text-main);
-          font-family: var(--font-sans), "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+          font-family: var(--font-body);
           margin: 0;
           min-height: 100%;
           overflow: auto;

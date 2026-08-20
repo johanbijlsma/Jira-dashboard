@@ -56,7 +56,12 @@ export const CARD_TITLES = {
   vacationServicedesk: "Vakantie Servicedesk",
 };
 
-export const KPI_KEYS = ["totalTickets", "latestTickets", "currentWeekFlow", "releaseWednesdayWorkload", "ttfrOverdue", "topType", "topSubject", "topPartner"];
+export const KPI_KEYS = ["liveStatus", "totalTickets", "latestTickets", "releaseWednesdayWorkload", "ttfrOverdue", "topPartner"];
+export const DEFAULT_LIVE_KPI_SETTINGS = {
+  currentWeekFlow: true,
+  inProgress: true,
+  newMelding: true,
+};
 export const NON_KPI_CARD_KEYS = ["topOnderwerpen", ...Object.keys(CARD_TITLES)];
 export const MAX_CARDS_PER_ROW = 5;
 export const MAX_KPI_TILES = 8;
@@ -100,5 +105,6 @@ export function createDefaultDashboardLayout() {
     expandedByRow: ["onderwerp", null],
     lockedCards: ["volume", "organizationWeekly", "onderwerp", "vacationServicedesk"],
     chartSettings: {},
+    liveKpiSettings: { ...DEFAULT_LIVE_KPI_SETTINGS },
   };
 }

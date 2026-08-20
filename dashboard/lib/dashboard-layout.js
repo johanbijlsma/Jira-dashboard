@@ -4,6 +4,7 @@ import {
   MAX_KPI_TILES,
   NON_KPI_CARD_KEYS,
   CHART_CARD_SETTING_CAPABILITIES,
+  DEFAULT_LIVE_KPI_SETTINGS,
   createDefaultDashboardLayout,
 } from "./dashboard-constants";
 
@@ -19,8 +20,11 @@ export function normalizeDashboardLayout(input) {
   const allKpis = new Set(KPI_KEYS);
   const allCards = new Set(NON_KPI_CARD_KEYS);
 
+  const legacyLiveKeys = new Set(["currentWeekFlow", "topType", "topSubject"]);
+  const hadLegacyLiveKpi = [...(input.kpiRow || []), ...(input.hiddenKpis || [])].some((key) => legacyLiveKeys.has(key));
   let kpiRow = normalizeList(input.kpiRow, allKpis);
   let hiddenKpis = normalizeList(input.hiddenKpis, allKpis).filter((key) => !kpiRow.includes(key));
+  if (hadLegacyLiveKpi && !kpiRow.includes("liveStatus") && !hiddenKpis.includes("liveStatus")) kpiRow.unshift("liveStatus");
   KPI_KEYS.forEach((key) => {
     if (!kpiRow.includes(key) && !hiddenKpis.includes(key)) kpiRow.push(key);
   });
@@ -104,7 +108,12 @@ export function normalizeDashboardLayout(input) {
     return result;
   }, {});
 
-  return { showAiCards, kpiRow, hiddenKpis, cardRows, hiddenCards, expandedByRow, lockedCards, chartSettings };
+  const liveKpiSettings = Object.keys(DEFAULT_LIVE_KPI_SETTINGS).reduce((result, key) => {
+    result[key] = input.liveKpiSettings?.[key] !== false;
+    return result;
+  }, {});
+
+  return { showAiCards, kpiRow, hiddenKpis, cardRows, hiddenCards, expandedByRow, lockedCards, chartSettings, liveKpiSettings };
 }
 
 export function moveKpiToVisibleLayout(prev, key, targetKey = null, position = "before") {

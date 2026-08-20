@@ -17,7 +17,7 @@ describe("dashboard-layout", () => {
   it("ships the customized default layout", () => {
     expect(createDefaultDashboardLayout()).toEqual({
       showAiCards: true,
-      kpiRow: ["totalTickets", "latestTickets", "currentWeekFlow", "releaseWednesdayWorkload", "ttfrOverdue", "topType", "topSubject", "topPartner"],
+      kpiRow: ["liveStatus", "totalTickets", "latestTickets", "releaseWednesdayWorkload", "ttfrOverdue", "topPartner"],
       hiddenKpis: [],
       cardRows: [
         ["volume", "onderwerp", "inflowVsClosed", "ttrOverdue"],
@@ -27,6 +27,7 @@ describe("dashboard-layout", () => {
       expandedByRow: ["onderwerp", null],
       lockedCards: ["volume", "organizationWeekly", "onderwerp", "vacationServicedesk"],
       chartSettings: {},
+      liveKpiSettings: { currentWeekFlow: true, inProgress: true, newMelding: true },
     });
   });
 
@@ -84,7 +85,7 @@ describe("dashboard-layout", () => {
       cardOrder: ["volume", "assignee", "priority"],
       cardVisibility: { assignee: false },
     });
-    expect(normalized.kpiRow[0]).toBe("topType");
+    expect(normalized.kpiRow[0]).toBe("liveStatus");
     expect(normalized.hiddenKpis).toContain("totalTickets");
     expect(normalized.hiddenCards).toContain("assignee");
   });
@@ -112,8 +113,8 @@ describe("dashboard-layout", () => {
   it("moves and hides kpis", () => {
     const base = createDefaultDashboardLayout();
     const hiddenBase = { ...base, hiddenKpis: ["topPartner"], kpiRow: base.kpiRow.filter((k) => k !== "topPartner") };
-    const moved = moveKpiToVisibleLayout(hiddenBase, "topPartner", "topType", "before");
-    expect(moved.kpiRow.indexOf("topPartner")).toBeLessThan(moved.kpiRow.indexOf("topType"));
+    const moved = moveKpiToVisibleLayout(hiddenBase, "topPartner", "liveStatus", "before");
+    expect(moved.kpiRow.indexOf("topPartner")).toBeLessThan(moved.kpiRow.indexOf("liveStatus"));
     const hidden = hideKpiLayout(moved, "topPartner");
     expect(hidden.hiddenKpis).toContain("topPartner");
     const movedAppend = moveKpiToVisibleLayout(hiddenBase, "topPartner");

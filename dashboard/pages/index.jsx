@@ -5,6 +5,7 @@ import {
   CHART_CARD_SETTING_CAPABILITIES,
   DASHBOARD_CONFIG_STORAGE_KEY,
   DEFAULT_CHART_CARD_SETTINGS,
+  DEFAULT_LIVE_KPI_SETTINGS,
   DEFAULT_SERVICEDESK_ONLY,
   JIRA_BASE,
   TV_MODE_STORAGE_KEY,
@@ -420,6 +421,7 @@ export default function Home() {
   const [layoutStorageScope, setLayoutStorageScope] = useState("local");
   const [layoutSaving, setLayoutSaving] = useState(false);
   const [openCardSettings, setOpenCardSettings] = useState("");
+  const [openLiveKpiSettings, setOpenLiveKpiSettings] = useState(false);
   const [hiddenOverlayHeight, setHiddenOverlayHeight] = useState(0);
   const [cardDropHint, setCardDropHint] = useState(null);
   const [kpiDropHint, setKpiDropHint] = useState(null);
@@ -493,6 +495,17 @@ export default function Home() {
           [settingKey]: Boolean(value),
         },
       },
+    }));
+  }, []);
+
+  const liveKpiSettings = useMemo(
+    () => ({ ...DEFAULT_LIVE_KPI_SETTINGS, ...(dashboardLayout.liveKpiSettings || {}) }),
+    [dashboardLayout.liveKpiSettings]
+  );
+  const updateLiveKpiSetting = useCallback((settingKey, value) => {
+    setDashboardLayout((previous) => ({
+      ...previous,
+      liveKpiSettings: { ...(previous.liveKpiSettings || {}), [settingKey]: Boolean(value) },
     }));
   }, []);
 
@@ -1559,7 +1572,7 @@ export default function Home() {
 
   useEffect(() => {
     if (typeof document !== "undefined") {
-      document.title = "Dashboard Servicedesk Planningsagenda";
+      document.title = "Dashboard Servicedesk Twentecs";
     }
   }, []);
 
@@ -2556,12 +2569,6 @@ export default function Home() {
     const previousReleaseRow = effectiveLatestIndex > 0 ? releaseRows[effectiveLatestIndex - 1] : null;
     const releaseTrend = trendInfo(latestReleaseRow?.tickets, previousReleaseRow?.tickets);
     const currentFlow = currentWeekFlow || {};
-    const currentWeekFlowRefreshedAtDate = currentWeekFlowRefreshedAt ? new Date(currentWeekFlowRefreshedAt) : null;
-    const currentWeekFlowRefreshedMinutes =
-      currentWeekFlowRefreshedAtDate && !Number.isNaN(currentWeekFlowRefreshedAtDate.getTime())
-        ? Math.max(0, Math.floor((Date.now() - currentWeekFlowRefreshedAtDate.getTime()) / 60000))
-        : null;
-
     return {
       totalTickets,
       latestTickets,
@@ -2603,7 +2610,6 @@ export default function Home() {
               timeZone: AMSTERDAM_TIME_ZONE,
             }).format(new Date(currentFlow.current_cutoff))
           : "—",
-      currentWeekLiveUpdatedMinutes: currentWeekFlowRefreshedMinutes,
       periodLabel: fullWeekInfo.periodLabel,
       completeWeeksCount: fullWeekInfo.count,
     };
@@ -2616,7 +2622,6 @@ export default function Home() {
     ttfrOverdueWeekly,
     releaseFollowupWorkload,
       currentWeekFlow,
-      currentWeekFlowRefreshedAt,
   ]);
 
   const topOnderwerpRows = useMemo(() => {
@@ -3045,7 +3050,7 @@ export default function Home() {
   const pagePaddingTop = pagePaddingX;
   const pagePaddingBottom = "clamp(20px, 3dvh, 40px)";
   const pageStyle = {
-    fontFamily: 'var(--font-sans), "Plus Jakarta Sans", system-ui, sans-serif',
+    fontFamily: "var(--font-body)",
     paddingTop: pagePaddingTop,
     paddingRight: pagePaddingX,
     paddingBottom: pagePaddingBottom,
@@ -3096,6 +3101,39 @@ export default function Home() {
     background: "var(--surface)",
     padding: "8px 10px",
     minWidth: 0,
+  };
+  const liveKpiCardStyle = {
+    borderColor: "color-mix(in srgb, var(--accent) 64%, var(--border))",
+    background: "linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, var(--surface)), var(--surface) 62%)",
+    boxShadow: "inset 3px 0 0 var(--accent), 0 8px 18px color-mix(in srgb, var(--accent) 12%, transparent)",
+  };
+  const liveKpiStatusStyle = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 7,
+    marginBottom: 7,
+    padding: "4px 9px",
+    borderRadius: 999,
+    border: "1px solid color-mix(in srgb, var(--accent) 38%, var(--border))",
+    background: "color-mix(in srgb, var(--accent) 10%, var(--surface))",
+    color: "var(--text-subtle)",
+    fontSize: 11,
+    fontWeight: 600,
+  };
+  const liveKpiBadgeStyle = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 5,
+    padding: "2px 8px",
+    borderRadius: 999,
+    borderColor: "color-mix(in srgb, var(--accent) 58%, var(--border))",
+    background: "color-mix(in srgb, var(--accent) 12%, var(--surface))",
+    color: "var(--accent)",
+    border: "1px solid color-mix(in srgb, var(--accent) 58%, var(--border))",
+    fontSize: 11,
+    fontWeight: 700,
+    lineHeight: 1.2,
+    whiteSpace: "nowrap",
   };
   const kpiLabelStyle = {
     fontSize: 12,
@@ -4962,6 +5000,62 @@ export default function Home() {
     return null;
   }
 
+  const liveKpiUpdateLabel = useMemo(() => {
+    const refreshedAt = currentWeekFlowRefreshedAt ? new Date(currentWeekFlowRefreshedAt) : null;
+    if (!refreshedAt || Number.isNaN(refreshedAt.getTime())) return "Live gegevens worden geladen";
+    return `Live KPI’s · bijgewerkt om ${new Intl.DateTimeFormat("nl-NL", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: AMSTERDAM_TIME_ZONE,
+    }).format(refreshedAt)}`;
+  }, [currentWeekFlowRefreshedAt]);
+
+  const liveKpiItems = useMemo(
+    () => {
+      const receivedTrend = trendInfo(kpiStats.currentWeekReceived, kpiStats.previousWeekReceived);
+      const closedTrend = trendInfo(kpiStats.currentWeekClosed, kpiStats.previousWeekClosed);
+
+      return [
+      liveKpiSettings.currentWeekFlow
+        ? {
+            key: "currentWeekFlow",
+            label: "Lopende week",
+            content: (
+              <>
+                <span style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+                  <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", lineHeight: 1.2 }}>Ontvangen</span>
+                    <span><strong style={{ fontSize: 20 }}>{num(kpiStats.currentWeekReceived)}</strong> <span style={{ color: receivedTrend.color, fontSize: 20 }}>{receivedTrend.symbol}</span></span>
+                  </span>
+                  <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", lineHeight: 1.2 }}>Gesloten</span>
+                    <span><strong style={{ fontSize: 20 }}>{num(kpiStats.currentWeekClosed)}</strong> <span style={{ color: closedTrend.color, fontSize: 20 }}>{closedTrend.symbol}</span></span>
+                  </span>
+                </span>
+                <span style={{ color: "var(--text-muted)", fontSize: 11 }}>
+                  Vorige week: {num(kpiStats.previousWeekReceived)} ontvangen · {num(kpiStats.previousWeekClosed)} gesloten
+                </span>
+              </>
+            ),
+          }
+        : null,
+      liveKpiSettings.inProgress
+        ? { key: "inProgress", label: "In behandeling", value: num(inProgressCount) }
+        : null,
+      liveKpiSettings.newMelding
+        ? {
+            key: "newMelding",
+            label: "Nieuwe meldingen",
+            value: num(newMeldingCount),
+            valueColor: newMeldingCount < 5 ? "var(--ok)" : newMeldingCount < 10 ? "#d97706" : "var(--danger)",
+          }
+        : null,
+      ].filter(Boolean);
+    },
+    [inProgressCount, kpiStats.currentWeekClosed, kpiStats.currentWeekReceived, kpiStats.previousWeekClosed, kpiStats.previousWeekReceived, liveKpiSettings, newMeldingCount]
+  );
+
   const kpiTiles = useMemo(
     () => ({
       totalTickets: {
@@ -4986,48 +5080,22 @@ export default function Home() {
         sub: `Week van ${kpiStats.lastCompletedWeekLabel} · WoW: ${pct(kpiStats.wowChangePct)}`,
         badge: "Periode: laatste week",
       },
-      currentWeekFlow: {
-        label: "Lopende week",
+      liveStatus: {
+        label: "Live",
+        live: true,
+        gridSpan: Math.max(1, liveKpiItems.length),
         value: (
-          <span style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, width: "100%" }}>
-            <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-              <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", lineHeight: 1.2 }}>Ontvangen</span>
-              <span>
-                {num(kpiStats.currentWeekReceived)}{" "}
-                <span
-                  style={{
-                    fontSize: "0.7em",
-                    color: trendInfo(kpiStats.currentWeekReceived, kpiStats.previousWeekReceived).color,
-                    verticalAlign: "middle",
-                  }}
-                >
-                  {trendInfo(kpiStats.currentWeekReceived, kpiStats.previousWeekReceived).symbol}
-                </span>
+          <span style={{ display: "grid", gridTemplateColumns: `repeat(${Math.max(1, liveKpiItems.length)}, minmax(0, 1fr))`, gap: 14, width: "100%" }}>
+            {liveKpiItems.length ? liveKpiItems.map((item) => (
+              <span key={item.key} style={{ display: "grid", gap: 3, minWidth: 0 }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)" }}>{item.label}</span>
+                {item.content || <strong style={{ fontSize: 22, color: item.valueColor || "var(--text-main)" }}>{item.value}</strong>}
               </span>
-            </span>
-            <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-              <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", lineHeight: 1.2 }}>Gesloten</span>
-              <span>
-                {num(kpiStats.currentWeekClosed)}{" "}
-                <span
-                  style={{
-                    fontSize: "0.7em",
-                    color: trendInfo(kpiStats.currentWeekClosed, kpiStats.previousWeekClosed).color,
-                    verticalAlign: "middle",
-                  }}
-                >
-                  {trendInfo(kpiStats.currentWeekClosed, kpiStats.previousWeekClosed).symbol}
-                </span>
-              </span>
-            </span>
+            )) : <span style={{ color: "var(--text-muted)", fontSize: 12 }}>Kies minimaal één live statistiek in de instellingen.</span>}
           </span>
         ),
-        sub: `Vorige week: ${num(kpiStats.previousWeekReceived)} ontvangen · ${num(kpiStats.previousWeekClosed)} gesloten`,
-        subSecondary:
-          kpiStats.currentWeekLiveUpdatedMinutes == null
-            ? `Laatst bijgewerkt (${kpiStats.currentWeekCutoffTimeLabel})`
-            : `Laatst bijgewerkt ${kpiStats.currentWeekLiveUpdatedMinutes} min geleden (${kpiStats.currentWeekCutoffTimeLabel})`,
-        subSecondaryStyle: { whiteSpace: "nowrap" },
+        sub: liveKpiUpdateLabel,
+        subStyle: { textAlign: "right" },
         badge: "Live",
       },
       releaseWednesdayWorkload: {
@@ -5059,21 +5127,6 @@ export default function Home() {
         sub: `Laatste week: ${num(kpiStats.ttfrOverdueLatest)} · WoW: ${pct(kpiStats.ttfrOverdueWowPct)}`,
         badge: "SLA",
       },
-      topType: {
-        label: "Tickets in behandeling",
-        value: num(inProgressCount),
-        sub: "Actuele stand · excl. niet-servicedesk onderwerpen",
-        badge: "Live",
-      },
-      topSubject: {
-        label: "Tickets in Nieuwe meldingen",
-        value: num(newMeldingCount),
-        sub: "Actuele stand · excl. niet-servicedesk onderwerpen",
-        badge: "Live",
-        valueStyle: {
-          color: newMeldingCount < 5 ? "var(--ok)" : newMeldingCount < 10 ? "#d97706" : "var(--danger)",
-        },
-      },
       topPartner: {
         label: "Partner met meeste tickets volledige week",
         value: (
@@ -5091,7 +5144,7 @@ export default function Home() {
         ),
       },
     }),
-    [inProgressCount, kpiStats, newMeldingCount, openReleaseWorkloadDrilldown, releaseStatusBadge, releaseStatusNote]
+    [inProgressCount, kpiStats, liveKpiItems, liveKpiUpdateLabel, newMeldingCount, openReleaseWorkloadDrilldown, releaseStatusBadge, releaseStatusNote]
   );
 
   const visibleKpiKeys = dashboardLayout.kpiRow;
@@ -5247,7 +5300,7 @@ export default function Home() {
   return (
     <div style={pageStyle}>
       <Head>
-        <title>Dashboard Servicedesk Planningsagenda</title>
+        <title>Dashboard Servicedesk Twentecs</title>
         <link rel="icon" href={faviconSignal.href} />
       </Head>
       <Toast message={syncMessage} kind={syncMessageKind} onClose={() => setSyncMessage("")} />
@@ -5270,7 +5323,7 @@ export default function Home() {
         ?
       </button>
       <div style={headerRowStyle}>
-        <h1 style={titleStyle}>Dashboard Servicedesk Planningsagenda</h1>
+        <h1 style={titleStyle}>Dashboard Servicedesk Twentecs</h1>
         {vacationBanner ? (
           <div style={vacationBannerStyle}>
             <VacationAvatar
@@ -5953,18 +6006,19 @@ export default function Home() {
       ) : (() => {
         const renderedKpis = renderKpiRowWithHint(visibleKpiKeys);
         const hintActive = renderedKpis.includes("__KPI_DROP_HINT__");
+        const kpiColumnCount = Math.max(2, renderedKpis.reduce((count, key) => count + Math.max(1, Number(kpiTiles[key]?.gridSpan) || 1), 0));
         return (
           <div
-            style={{
-              ...kpiGridStyle,
-              gridTemplateColumns: `repeat(${Math.max(2, renderedKpis.length || 2)}, minmax(0, 1fr))`,
-            }}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={() => {
-              const hint = kpiDropHint;
-              moveKpiToVisible(hint?.targetKey || null, hint?.position || "after");
-            }}
-          >
+              style={{
+                ...kpiGridStyle,
+                gridTemplateColumns: `repeat(${kpiColumnCount}, minmax(0, 1fr))`,
+              }}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={() => {
+                const hint = kpiDropHint;
+                moveKpiToVisible(hint?.targetKey || null, hint?.position || "after");
+              }}
+            >
         {renderedKpis.length ? renderedKpis.map((key) => {
           if (key === "__KPI_DROP_HINT__") {
             return <div key="kpi-drop-hint" style={dropSkeletonStyle} />;
@@ -5977,6 +6031,8 @@ export default function Home() {
               key={key}
               style={{
                 ...kpiCardStyle,
+                ...(tile.live ? liveKpiCardStyle : null),
+                gridColumn: `span ${Math.max(1, Number(tile.gridSpan) || 1)}`,
                 cursor: isLayoutEditing ? "grab" : isClickable ? "pointer" : "default",
                 transform: hintActive ? "scale(0.86)" : "scale(1)",
                 transformOrigin: "center center",
@@ -5999,23 +6055,40 @@ export default function Home() {
               }}
             >
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 2 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  {isLayoutEditing ? (
-                    <span style={dragHandleStyle} aria-hidden>
-                      <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-                        <circle cx="2" cy="2" r="1" />
-                        <circle cx="2" cy="5" r="1" />
-                        <circle cx="2" cy="8" r="1" />
-                        <circle cx="8" cy="2" r="1" />
-                        <circle cx="8" cy="5" r="1" />
-                        <circle cx="8" cy="8" r="1" />
-                      </svg>
-                    </span>
-                  ) : null}
-                  <div style={{ ...kpiLabelStyle, marginBottom: 0 }}>{tile.label}</div>
-                </div>
+                {key === "liveStatus" && !isLayoutEditing ? <span /> : (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    {isLayoutEditing ? (
+                      <span style={dragHandleStyle} aria-hidden>
+                        <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                          <circle cx="2" cy="2" r="1" />
+                          <circle cx="2" cy="5" r="1" />
+                          <circle cx="2" cy="8" r="1" />
+                          <circle cx="8" cy="2" r="1" />
+                          <circle cx="8" cy="5" r="1" />
+                          <circle cx="8" cy="8" r="1" />
+                        </svg>
+                      </span>
+                    ) : null}
+                    <div style={{ ...kpiLabelStyle, marginBottom: 0 }}>{tile.label}</div>
+                  </div>
+                )}
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  {tile.badge ? <span style={fixedMetricBadgeStyle}>{tile.badge}</span> : null}
+                  {tile.badge ? <span style={tile.live ? liveKpiBadgeStyle : fixedMetricBadgeStyle}>{tile.badge}</span> : null}
+                  {isLayoutEditing ? (
+                    key === "liveStatus" ? (
+                      <button
+                        type="button"
+                        onClick={(event) => { event.stopPropagation(); setOpenLiveKpiSettings((open) => !open); }}
+                        style={iconButtonStyle}
+                        title="Live KPI-instellingen"
+                        aria-label="Live KPI-instellingen"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                          <path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06-2.12 2.12-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V20h-3v-.08a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06-2.12-2.12.06-.06A1.65 1.65 0 0 0 7.17 15a1.65 1.65 0 0 0-1.51-1H5.6v-3h.08a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82L6.8 8.12 8.92 6l.06.06A1.65 1.65 0 0 0 10.8 6.4a1.65 1.65 0 0 0 1-1.51V4.8h3v.08a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06 2.12 2.12-.06.06A1.65 1.65 0 0 0 19.4 10c.2.61.76 1 1.4 1h.08v3h-.08c-.64 0-1.2.39-1.4 1Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </button>
+                    ) : null
+                  ) : null}
                   {isLayoutEditing ? (
                     <button
                       type="button"
@@ -6031,8 +6104,23 @@ export default function Home() {
                   ) : null}
                 </div>
               </div>
+              {isLayoutEditing && key === "liveStatus" && openLiveKpiSettings ? (
+                <div style={{ display: "grid", gap: 6, marginBottom: 8, padding: 8, borderRadius: 8, background: "color-mix(in srgb, var(--accent) 8%, var(--surface))" }}>
+                  <strong style={{ fontSize: 12 }}>Live KPI-instellingen</strong>
+                  {[
+                    ["currentWeekFlow", "Lopende week"],
+                    ["inProgress", "Tickets in behandeling"],
+                    ["newMelding", "Nieuwe meldingen"],
+                  ].map(([settingKey, label]) => (
+                    <label key={settingKey} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12 }}>
+                      <input type="checkbox" checked={liveKpiSettings[settingKey]} onChange={(event) => updateLiveKpiSetting(settingKey, event.target.checked)} />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              ) : null}
               <div style={{ ...kpiValueStyle, ...(tile.valueStyle || null), fontSize: key === "topType" || key === "topSubject" ? 20 : 20 }}>{tile.value}</div>
-              <div style={kpiSubStyle}>{tile.sub}</div>
+              <div style={{ ...kpiSubStyle, ...(tile.subStyle || null) }}>{tile.sub}</div>
               {tile.subSecondary ? (
                 <div style={{ ...kpiSubStyle, marginTop: 2, fontSize: 11, ...(tile.subSecondaryStyle || null) }}>
                   {tile.subSecondary}
@@ -6045,7 +6133,7 @@ export default function Home() {
             KPI-rij is leeg. Sleep KPI-kaarten terug vanuit Verborgen kaarten.
           </div>
         )}
-      </div>
+          </div>
         );
       })()}
 
@@ -7357,49 +7445,59 @@ export default function Home() {
       <style jsx global>{`
         :root {
           color-scheme: light dark;
-          --page-bg: #f1f5f9;
-          --surface: #ffffff;
-          --surface-muted: #f8fafc;
-          --text-main: #0f172a;
-          --text-subtle: #334155;
-          --text-muted: #64748b;
-          --text-faint: #94a3b8;
-          --border: #cbd5e1;
-          --border-strong: #e2e8f0;
-          --accent: #2563eb;
-          --danger: #dc2626;
-          --ok: #15803d;
-          --overlay-bg: rgba(15, 23, 42, 0.55);
-          --overlay-soft: rgba(0, 0, 0, 0.35);
-          --shadow-medium: rgba(0, 0, 0, 0.25);
-          --shadow-strong: rgba(2, 6, 23, 0.35);
-          --indicator-border: rgba(0, 0, 0, 0.15);
+          --brand-red: #ab1f23;
+          --brand-light-blue: #366475;
+          --brand-dark-blue: #192c2e;
+          --brand-beige: #fff8e9;
+          --brand-yellow: #ffdf80;
+          --brand-rose: #f4b19f;
+          --brand-soft-red: #f26d5d;
+          --page-bg: var(--brand-beige);
+          --surface: #fffefa;
+          --surface-muted: #fff4d8;
+          --text-main: var(--brand-dark-blue);
+          --text-subtle: #2a4d55;
+          --text-muted: #466871;
+          --text-faint: #718d90;
+          --border: #b8cdcc;
+          --border-strong: #d9e5d7;
+          --accent: var(--brand-red);
+          --danger: #a31e22;
+          --warning: #8a5c00;
+          --ok: #226044;
+          --overlay-bg: rgba(25, 44, 46, 0.58);
+          --overlay-soft: rgba(25, 44, 46, 0.36);
+          --shadow-medium: rgba(25, 44, 46, 0.14);
+          --shadow-strong: rgba(25, 44, 46, 0.28);
+          --indicator-border: rgba(25, 44, 46, 0.18);
         }
         @media (prefers-color-scheme: dark) {
           :root {
-            --page-bg: #020617;
-            --surface: #0f172a;
-            --surface-muted: #111c31;
-            --text-main: #e5e7eb;
-            --text-subtle: #cbd5e1;
-            --text-muted: #94a3b8;
-            --text-faint: #64748b;
-            --border: #334155;
-            --border-strong: #475569;
-            --accent: #60a5fa;
-            --danger: #f87171;
-            --ok: #4ade80;
-            --overlay-bg: rgba(2, 6, 23, 0.72);
-            --overlay-soft: rgba(2, 6, 23, 0.55);
-            --shadow-medium: rgba(0, 0, 0, 0.45);
-            --shadow-strong: rgba(0, 0, 0, 0.62);
-            --indicator-border: rgba(148, 163, 184, 0.35);
+            --page-bg: #102426;
+            --surface: var(--brand-dark-blue);
+            --surface-muted: #213c3f;
+            --text-main: var(--brand-beige);
+            --text-subtle: #d7e5df;
+            --text-muted: #adc4c0;
+            --text-faint: #76928e;
+            --border: #426568;
+            --border-strong: #54787a;
+            --accent: var(--brand-soft-red);
+            --danger: #ff9a8e;
+            --warning: var(--brand-yellow);
+            --ok: #83d0a5;
+            --overlay-bg: rgba(10, 25, 27, 0.76);
+            --overlay-soft: rgba(10, 25, 27, 0.58);
+            --shadow-medium: rgba(0, 0, 0, 0.3);
+            --shadow-strong: rgba(0, 0, 0, 0.55);
+            --indicator-border: rgba(215, 229, 223, 0.28);
           }
         }
         html,
         body {
           background: var(--page-bg);
           color: var(--text-main);
+          font-family: var(--font-body);
           margin: 0;
           height: 100%;
           overflow: hidden;
