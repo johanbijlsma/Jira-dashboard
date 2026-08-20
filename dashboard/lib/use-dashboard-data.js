@@ -60,6 +60,8 @@ export function useDashboardData({
   const [releaseFollowupWorkload, setReleaseFollowupWorkload] = useState([]);
   const [currentWeekFlow, setCurrentWeekFlow] = useState(null);
   const [currentWeekFlowRefreshedAt, setCurrentWeekFlowRefreshedAt] = useState("");
+  const [inProgressCount, setInProgressCount] = useState(0);
+  const [newMeldingCount, setNewMeldingCount] = useState(0);
 
   const buildMetricParams = useCallback(() => {
     const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
@@ -102,7 +104,6 @@ export function useDashboardData({
     return fetchJson(`${API}/metrics/current_week_flow?` + params.toString())
       .then((data) => {
         setCurrentWeekFlow(data);
-        setCurrentWeekFlowRefreshedAt(new Date().toISOString());
         return data;
       })
       .catch(() => {
@@ -110,6 +111,17 @@ export function useDashboardData({
         return null;
       });
   }, [buildMetricParams]);
+
+  const refreshLiveKpis = useCallback(() => {
+    const updateCount = (setter) => (data) => setter(Math.max(0, Number(data?.count) || 0));
+    return Promise.all([
+      refreshCurrentWeekFlow(),
+      fetchJson(`${API}/metrics/in_progress_count`).then(updateCount(setInProgressCount)).catch(() => setInProgressCount(0)),
+      fetchJson(`${API}/metrics/new_melding_count`).then(updateCount(setNewMeldingCount)).catch(() => setNewMeldingCount(0)),
+    ]).then(() => {
+      setCurrentWeekFlowRefreshedAt(new Date().toISOString());
+    });
+  }, [refreshCurrentWeekFlow]);
 
   const refreshMetrics = useCallback(() => {
     const params = buildMetricParams();
@@ -146,7 +158,7 @@ export function useDashboardData({
       .then(setArrayState(setReleaseFollowupWorkload))
       .catch(() => setReleaseFollowupWorkload([]));
 
-    refreshCurrentWeekFlow();
+    refreshLiveKpis();
 
     if (!p90Period.hasData) {
       setP90([]);
@@ -160,7 +172,7 @@ export function useDashboardData({
     buildP90Params,
     buildReleaseWorkloadParams,
     p90Period.hasData,
-    refreshCurrentWeekFlow,
+    refreshLiveKpis,
     setIncidentResolutionWeekly,
     setP90,
   ]);
@@ -183,10 +195,10 @@ export function useDashboardData({
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      refreshCurrentWeekFlow();
+      refreshLiveKpis();
     }, isPageVisible ? CURRENT_WEEK_FLOW_VISIBLE_POLL_MS : CURRENT_WEEK_FLOW_HIDDEN_POLL_MS);
     return () => window.clearInterval(timer);
-  }, [isPageVisible, refreshCurrentWeekFlow]);
+  }, [isPageVisible, refreshLiveKpis]);
 
   return {
     meta,
@@ -203,6 +215,8 @@ export function useDashboardData({
     releaseFollowupWorkload,
     currentWeekFlow,
     currentWeekFlowRefreshedAt,
+    inProgressCount,
+    newMeldingCount,
     refreshDashboard,
   };
 }

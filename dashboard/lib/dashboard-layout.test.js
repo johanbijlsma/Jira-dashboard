@@ -17,15 +17,17 @@ describe("dashboard-layout", () => {
   it("ships the customized default layout", () => {
     expect(createDefaultDashboardLayout()).toEqual({
       showAiCards: true,
-      kpiRow: ["totalTickets", "latestTickets", "currentWeekFlow", "releaseWednesdayWorkload", "ttfrOverdue", "topType", "topSubject", "topPartner"],
+      kpiRow: ["liveStatus", "totalTickets", "latestTickets", "releaseWednesdayWorkload", "ttfrOverdue", "topPartner"],
       hiddenKpis: [],
       cardRows: [
-        ["volume", "onderwerp", "inflowVsClosed"],
+        ["volume", "onderwerp", "inflowVsClosed", "ttrOverdue"],
         ["assignee", "priority", "organizationWeekly", "incidentResolution", "vacationServicedesk"],
       ],
       hiddenCards: ["topOnderwerpen", "releaseWorkload", "p90", "firstResponseAll"],
       expandedByRow: ["onderwerp", null],
       lockedCards: ["volume", "organizationWeekly", "onderwerp", "vacationServicedesk"],
+      chartSettings: {},
+      liveKpiSettings: { currentWeekFlow: true, inProgress: true, newMelding: true },
     });
   });
 
@@ -53,11 +55,11 @@ describe("dashboard-layout", () => {
   });
 
   it("clips overflowing normalized rows into hidden pools", () => {
-    KPI_KEYS.push("syntheticKpi");
+    KPI_KEYS.push("syntheticKpi", "syntheticKpiTwo", "syntheticKpiThree");
     CARD_TITLES.syntheticCard = "Synthetic";
     try {
       const normalized = normalizeDashboardLayout({
-        kpiRow: ["totalTickets", "latestTickets", "currentWeekFlow", "releaseWednesdayWorkload", "ttfrOverdue", "topType", "topSubject", "topPartner", "syntheticKpi"],
+        kpiRow: ["totalTickets", "latestTickets", "currentWeekFlow", "releaseWednesdayWorkload", "ttfrOverdue", "topType", "topSubject", "topPartner", "syntheticKpi", "syntheticKpiTwo", "syntheticKpiThree"],
         hiddenKpis: [],
         cardRows: [
           ["volume", "onderwerp", "inflowVsClosed", "priority", "assignee", "organizationWeekly"],
@@ -66,12 +68,12 @@ describe("dashboard-layout", () => {
         hiddenCards: [],
       });
       expect(normalized.kpiRow).toHaveLength(8);
-      expect(normalized.hiddenKpis).toContain("syntheticKpi");
+      expect(normalized.hiddenKpis.length).toBeGreaterThan(0);
       expect(normalized.cardRows[0]).toHaveLength(5);
       expect(normalized.cardRows[1]).toHaveLength(5);
       expect(normalized.hiddenCards.length).toBeGreaterThan(0);
     } finally {
-      KPI_KEYS.pop();
+      KPI_KEYS.splice(-3);
       delete CARD_TITLES.syntheticCard;
     }
   });
@@ -83,7 +85,7 @@ describe("dashboard-layout", () => {
       cardOrder: ["volume", "assignee", "priority"],
       cardVisibility: { assignee: false },
     });
-    expect(normalized.kpiRow[0]).toBe("topType");
+    expect(normalized.kpiRow[0]).toBe("liveStatus");
     expect(normalized.hiddenKpis).toContain("totalTickets");
     expect(normalized.hiddenCards).toContain("assignee");
   });
@@ -93,11 +95,26 @@ describe("dashboard-layout", () => {
     expect(normalized.showAiCards).toBe(false);
   });
 
+  it("keeps only supported chart settings", () => {
+    const normalized = normalizeDashboardLayout({
+      chartSettings: {
+        volume: { legend: true, total: false, movingAverage: false, unexpected: true },
+        priority: { legend: true, total: false },
+        missing: { legend: false },
+      },
+    });
+
+    expect(normalized.chartSettings).toEqual({
+      volume: { legend: true, total: false, movingAverage: false },
+      priority: { legend: true },
+    });
+  });
+
   it("moves and hides kpis", () => {
     const base = createDefaultDashboardLayout();
     const hiddenBase = { ...base, hiddenKpis: ["topPartner"], kpiRow: base.kpiRow.filter((k) => k !== "topPartner") };
-    const moved = moveKpiToVisibleLayout(hiddenBase, "topPartner", "topType", "before");
-    expect(moved.kpiRow.indexOf("topPartner")).toBeLessThan(moved.kpiRow.indexOf("topType"));
+    const moved = moveKpiToVisibleLayout(hiddenBase, "topPartner", "liveStatus", "before");
+    expect(moved.kpiRow.indexOf("topPartner")).toBeLessThan(moved.kpiRow.indexOf("liveStatus"));
     const hidden = hideKpiLayout(moved, "topPartner");
     expect(hidden.hiddenKpis).toContain("topPartner");
     const movedAppend = moveKpiToVisibleLayout(hiddenBase, "topPartner");
@@ -105,15 +122,20 @@ describe("dashboard-layout", () => {
   });
 
   it("moves overflowing kpis back to hidden tiles", () => {
-    const base = createDefaultDashboardLayout();
-    const overflowSource = {
-      ...base,
-      kpiRow: [...base.kpiRow, "totalTickets"],
-      hiddenKpis: ["topPartner"],
-    };
-    const moved = moveKpiToVisibleLayout(overflowSource, "topPartner", "totalTickets", "before");
-    expect(moved.kpiRow).toHaveLength(8);
-    expect(moved.hiddenKpis.length).toBeGreaterThan(0);
+    KPI_KEYS.push("syntheticKpi", "syntheticKpiTwo", "syntheticKpiThree");
+    try {
+      const base = createDefaultDashboardLayout();
+      const overflowSource = {
+        ...base,
+        kpiRow: [...base.kpiRow.filter((key) => key !== "topPartner"), "syntheticKpi", "syntheticKpiTwo", "syntheticKpiThree"],
+        hiddenKpis: ["topPartner"],
+      };
+      const moved = moveKpiToVisibleLayout(overflowSource, "topPartner", "totalTickets", "before");
+      expect(moved.kpiRow).toHaveLength(8);
+      expect(moved.hiddenKpis.length).toBeGreaterThan(0);
+    } finally {
+      KPI_KEYS.splice(-3);
+    }
   });
 
   it("moves cards, expands and hides", () => {

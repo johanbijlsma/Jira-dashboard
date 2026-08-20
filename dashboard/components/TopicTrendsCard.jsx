@@ -124,8 +124,9 @@ function TopicDetailChart({
   releaseCadencePlugin,
   markChartReady,
   onPointClick,
+  showLegend,
+  showMovingAverage,
 }) {
-  const [showMovingAverage, setShowMovingAverage] = useState(false);
   const values = topic.buckets.map((bucket) => bucket.count);
   const movingAverage = useMemo(() => buildMovingAverage(values, 3), [values]);
   const data = useMemo(() => ({
@@ -185,22 +186,6 @@ function TopicDetailChart({
             {num(topic.total)} tickets in de gekozen periode
           </div>
         </div>
-        <label
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 8,
-            fontSize: 13,
-            color: "var(--text-muted)",
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={showMovingAverage}
-            onChange={(event) => setShowMovingAverage(event.target.checked)}
-          />
-          Voortschrijdend gemiddelde
-        </label>
       </div>
       <div style={{ flex: 1, minHeight: 220 }}>
         <Line
@@ -218,7 +203,7 @@ function TopicDetailChart({
               onPointClick(bucket.label, topic.topic);
             },
             plugins: {
-              legend: { display: false },
+              legend: { display: showLegend, position: "top" },
               tooltip: { mode: "index", intersect: false },
               releaseCadence: releaseCadencePlugin,
               renderWatch: { onReady: markChartReady },
@@ -268,6 +253,8 @@ export default function TopicTrendsCard({
   markChartReady,
   renderOverlay,
   expanded = false,
+  showLegend = false,
+  showMovingAverage = false,
 }) {
   const selected = topics.find((topic) => topic.topic === selectedTopic) || topics[0] || null;
 
@@ -322,8 +309,10 @@ export default function TopicTrendsCard({
             chartKey={chartKey}
             animation={animation}
             releaseCadencePlugin={releaseCadencePlugin}
-            markChartReady={markChartReady}
-            onPointClick={onDetailPointClick}
+                markChartReady={markChartReady}
+                onPointClick={onDetailPointClick}
+                showLegend={showLegend}
+                showMovingAverage={showMovingAverage}
           />
           {renderOverlay()}
         </div>

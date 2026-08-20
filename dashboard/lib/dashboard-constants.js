@@ -52,13 +52,45 @@ export const CARD_TITLES = {
   incidentResolution: "Time to Resolution",
   firstResponseAll: "Time to First Response (alle tickets)",
   organizationWeekly: "Tickets per partner per week",
+  ttrOverdue: "Incident TTR verlopen",
   vacationServicedesk: "Vakantie Servicedesk",
 };
 
-export const KPI_KEYS = ["totalTickets", "latestTickets", "currentWeekFlow", "releaseWednesdayWorkload", "ttfrOverdue", "topType", "topSubject", "topPartner"];
+export const KPI_KEYS = ["liveStatus", "totalTickets", "latestTickets", "releaseWednesdayWorkload", "ttfrOverdue", "topPartner"];
+export const DEFAULT_LIVE_KPI_SETTINGS = {
+  currentWeekFlow: true,
+  inProgress: true,
+  newMelding: true,
+};
 export const NON_KPI_CARD_KEYS = ["topOnderwerpen", ...Object.keys(CARD_TITLES)];
 export const MAX_CARDS_PER_ROW = 5;
 export const MAX_KPI_TILES = 8;
+
+export const CHART_CARD_SETTING_CAPABILITIES = {
+  volume: { legend: true, total: true, movingAverage: true },
+  onderwerp: { legend: true, movingAverage: true },
+  priority: { legend: true },
+  assignee: { legend: true },
+  p90: { legend: true },
+  inflowVsClosed: { legend: true },
+  releaseWorkload: { legend: true },
+  incidentResolution: { legend: true },
+  firstResponseAll: { legend: true },
+  organizationWeekly: { legend: true },
+};
+
+export const DEFAULT_CHART_CARD_SETTINGS = {
+  volume: { legend: false, total: true, movingAverage: true },
+  onderwerp: { legend: false, movingAverage: false },
+  priority: { legend: false },
+  assignee: { legend: false },
+  p90: { legend: true },
+  inflowVsClosed: { legend: true },
+  releaseWorkload: { legend: false },
+  incidentResolution: { legend: true },
+  firstResponseAll: { legend: true },
+  organizationWeekly: { legend: true },
+};
 
 export function createDefaultDashboardLayout() {
   return {
@@ -66,11 +98,13 @@ export function createDefaultDashboardLayout() {
     kpiRow: [...KPI_KEYS],
     hiddenKpis: [],
     cardRows: [
-      ["volume", "onderwerp", "inflowVsClosed"],
+      ["volume", "onderwerp", "inflowVsClosed", "ttrOverdue"],
       ["assignee", "priority", "organizationWeekly", "incidentResolution", "vacationServicedesk"],
     ],
     hiddenCards: ["topOnderwerpen", "releaseWorkload", "p90", "firstResponseAll"],
     expandedByRow: ["onderwerp", null],
     lockedCards: ["volume", "organizationWeekly", "onderwerp", "vacationServicedesk"],
+    chartSettings: {},
+    liveKpiSettings: { ...DEFAULT_LIVE_KPI_SETTINGS },
   };
 }

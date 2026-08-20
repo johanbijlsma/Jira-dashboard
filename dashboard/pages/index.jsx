@@ -2,7 +2,10 @@ import {
   AI_INSIGHT_DOWNVOTE_REASONS,
   API,
   CARD_TITLES,
+  CHART_CARD_SETTING_CAPABILITIES,
   DASHBOARD_CONFIG_STORAGE_KEY,
+  DEFAULT_CHART_CARD_SETTINGS,
+  DEFAULT_LIVE_KPI_SETTINGS,
   DEFAULT_SERVICEDESK_ONLY,
   JIRA_BASE,
   TV_MODE_STORAGE_KEY,
@@ -256,6 +259,19 @@ function formatDurationHoursForTooltip(value) {
   return `${hours.toFixed(1)} uur`;
 }
 
+function formatOverdueMinutes(value) {
+  let remainingMinutes = Math.max(0, Math.round(Number(value) || 0));
+  const days = Math.floor(remainingMinutes / 1440);
+  remainingMinutes -= days * 1440;
+  const hours = Math.floor(remainingMinutes / 60);
+  const minutes = remainingMinutes - hours * 60;
+  const parts = [];
+  if (days) parts.push(`${days} d`);
+  if (hours) parts.push(`${hours} u`);
+  if (minutes || !parts.length) parts.push(`${minutes} min`);
+  return parts.join(" ");
+}
+
 function formatHoursOrDash(value) {
   const hours = Number(value);
   if (!Number.isFinite(hours)) return "n.v.t.";
@@ -269,6 +285,7 @@ function formatNumberOrDash(value) {
 }
 
 const WEEKLY_INSIGHTS_GROUP_KEY = "__weekly_insights__";
+const DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY = "jsm_dashboard_layout_scope_v1";
 
 function resolveCssVarColor(name, fallback) {
   if (typeof window === "undefined" || typeof document === "undefined") return fallback;
@@ -397,8 +414,15 @@ export default function Home() {
   const autoResetTimerRef = useRef(null);
   const seenLiveAlertKeysRef = useRef(new Set());
   const dragStateRef = useRef(null);
+  const hiddenOverlayRef = useRef(null);
   const [layoutSavedSnapshot, setLayoutSavedSnapshot] = useState("");
   const [isLayoutEditing, setIsLayoutEditing] = useState(false);
+  const [layoutChoiceOpen, setLayoutChoiceOpen] = useState(false);
+  const [layoutStorageScope, setLayoutStorageScope] = useState("local");
+  const [layoutSaving, setLayoutSaving] = useState(false);
+  const [openCardSettings, setOpenCardSettings] = useState("");
+  const [openLiveKpiSettings, setOpenLiveKpiSettings] = useState(false);
+  const [hiddenOverlayHeight, setHiddenOverlayHeight] = useState(0);
   const [cardDropHint, setCardDropHint] = useState(null);
   const [kpiDropHint, setKpiDropHint] = useState(null);
   const [hiddenDropTarget, setHiddenDropTarget] = useState(null);
@@ -452,6 +476,38 @@ export default function Home() {
     () => layoutSavedSnapshot !== JSON.stringify(dashboardLayout),
     [layoutSavedSnapshot, dashboardLayout]
   );
+
+  const chartSettingsFor = useCallback(
+    (cardKey) => ({
+      ...(DEFAULT_CHART_CARD_SETTINGS[cardKey] || {}),
+      ...(dashboardLayout.chartSettings?.[cardKey] || {}),
+    }),
+    [dashboardLayout.chartSettings]
+  );
+
+  const updateChartSetting = useCallback((cardKey, settingKey, value) => {
+    setDashboardLayout((previous) => ({
+      ...previous,
+      chartSettings: {
+        ...(previous.chartSettings || {}),
+        [cardKey]: {
+          ...(previous.chartSettings?.[cardKey] || {}),
+          [settingKey]: Boolean(value),
+        },
+      },
+    }));
+  }, []);
+
+  const liveKpiSettings = useMemo(
+    () => ({ ...DEFAULT_LIVE_KPI_SETTINGS, ...(dashboardLayout.liveKpiSettings || {}) }),
+    [dashboardLayout.liveKpiSettings]
+  );
+  const updateLiveKpiSetting = useCallback((settingKey, value) => {
+    setDashboardLayout((previous) => ({
+      ...previous,
+      liveKpiSettings: { ...(previous.liveKpiSettings || {}), [settingKey]: Boolean(value) },
+    }));
+  }, []);
 
   const DRILL_LIMIT = 100;
   const ALERT_LOG_LIMIT = 300;
@@ -567,6 +623,8 @@ export default function Home() {
     releaseFollowupWorkload,
     currentWeekFlow,
     currentWeekFlowRefreshedAt,
+    inProgressCount,
+    newMeldingCount,
     refreshDashboard,
   } = useDashboardData({
     dateFrom,
@@ -1058,19 +1116,69 @@ export default function Home() {
     }
   }, [applyServicedeskConfig, flashToast, normalizedOnderwerpenSelection, refreshDashboard, refreshInsightLog, refreshLiveInsights, releaseDrafts, servicedeskConfig]);
 
-  const saveDashboardLayout = useCallback(() => {
-    if (typeof window === "undefined") return;
+  const saveDashboardLayout = useCallback(async () => {
     const serialized = JSON.stringify(dashboardLayout);
-    window.localStorage.setItem(DASHBOARD_CONFIG_STORAGE_KEY, serialized);
-    setLayoutSavedSnapshot(serialized);
-    setIsLayoutEditing(false);
-    flashToast("Dashboard layout opgeslagen");
-  }, [dashboardLayout, flashToast]);
+    setLayoutSaving(true);
+    try {
+      if (layoutStorageScope === "shared") {
+        const response = await fetch(`${API}/config/dashboard-layout`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ layout: dashboardLayout }),
+        });
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}));
+          throw new Error(error?.detail || "Opslaan voor iedereen is mislukt.");
+        }
+      } else if (typeof window !== "undefined") {
+        window.localStorage.setItem(DASHBOARD_CONFIG_STORAGE_KEY, serialized);
+        window.localStorage.setItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY, "local");
+      }
+      if (layoutStorageScope === "shared" && typeof window !== "undefined") {
+        window.localStorage.removeItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY);
+      }
+      setLayoutSavedSnapshot(serialized);
+      setIsLayoutEditing(false);
+      setOpenCardSettings("");
+      flashToast(layoutStorageScope === "shared" ? "Indeling opgeslagen voor iedereen" : "Indeling opgeslagen voor jou");
+    } catch (error) {
+      flashToast(error?.message || "Opslaan van de indeling is mislukt.", "error");
+    } finally {
+      setLayoutSaving(false);
+    }
+  }, [dashboardLayout, flashToast, layoutStorageScope]);
 
   const startLayoutEditing = useCallback(() => {
     setVacationEditMode(false);
-    setIsLayoutEditing(true);
+    setLayoutChoiceOpen(true);
   }, []);
+
+  const startLocalLayoutEditing = useCallback(() => {
+    setLayoutStorageScope("local");
+    setLayoutSavedSnapshot(JSON.stringify(dashboardLayout));
+    setLayoutChoiceOpen(false);
+    setIsLayoutEditing(true);
+  }, [dashboardLayout]);
+
+  const startSharedLayoutEditing = useCallback(async () => {
+    setLayoutSaving(true);
+    try {
+      const response = await fetch(`${API}/config/dashboard-layout`);
+      if (!response.ok) throw new Error("De gedeelde indeling kon niet worden geladen.");
+      const payload = await response.json();
+      const next = payload?.layout ? normalizeDashboardLayout(payload.layout) : dashboardLayout;
+      const serialized = JSON.stringify(next);
+      setDashboardLayout(next);
+      setLayoutSavedSnapshot(serialized);
+      setLayoutStorageScope("shared");
+      setLayoutChoiceOpen(false);
+      setIsLayoutEditing(true);
+    } catch (error) {
+      flashToast(error?.message || "De gedeelde indeling kon niet worden geladen.", "error");
+    } finally {
+      setLayoutSaving(false);
+    }
+  }, [dashboardLayout, flashToast, normalizeDashboardLayout]);
 
   const cancelLayoutEditing = useCallback(() => {
     try {
@@ -1080,25 +1188,52 @@ export default function Home() {
       setDashboardLayout(normalizeDashboardLayout(createDefaultDashboardLayout()));
     }
     setIsLayoutEditing(false);
+    setOpenCardSettings("");
     setCardDropHint(null);
     setKpiDropHint(null);
     dragStateRef.current = null;
   }, [layoutSavedSnapshot, normalizeDashboardLayout]);
 
-  const resetLayoutAndClose = useCallback(() => {
+  const resetLayoutAndClose = useCallback(async () => {
     const next = normalizeDashboardLayout(createDefaultDashboardLayout());
     const serialized = JSON.stringify(next);
     setDashboardLayout(next);
-    setLayoutSavedSnapshot(serialized);
-    if (typeof window !== "undefined") {
+    if (layoutStorageScope === "shared") {
+      setLayoutSaving(true);
+      try {
+        const response = await fetch(`${API}/config/dashboard-layout`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ layout: next }),
+        });
+        if (!response.ok) throw new Error("Herstellen voor iedereen is mislukt.");
+      } catch (error) {
+        try {
+          const previous = layoutSavedSnapshot ? JSON.parse(layoutSavedSnapshot) : createDefaultDashboardLayout();
+          setDashboardLayout(normalizeDashboardLayout(previous));
+        } catch {
+          setDashboardLayout(normalizeDashboardLayout(createDefaultDashboardLayout()));
+        }
+        flashToast(error?.message || "Herstellen van de indeling is mislukt.", "error");
+        return;
+      } finally {
+        setLayoutSaving(false);
+      }
+    } else if (typeof window !== "undefined") {
       window.localStorage.setItem(DASHBOARD_CONFIG_STORAGE_KEY, serialized);
+      window.localStorage.setItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY, "local");
     }
+    if (layoutStorageScope === "shared" && typeof window !== "undefined") {
+      window.localStorage.removeItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY);
+    }
+    setLayoutSavedSnapshot(serialized);
     setIsLayoutEditing(false);
+    setOpenCardSettings("");
     setCardDropHint(null);
     setKpiDropHint(null);
     dragStateRef.current = null;
-    flashToast("Layout hersteld naar beginwaarden");
-  }, [flashToast, normalizeDashboardLayout]);
+    flashToast(layoutStorageScope === "shared" ? "Indeling voor iedereen hersteld" : "Indeling voor jou hersteld");
+  }, [flashToast, layoutSavedSnapshot, layoutStorageScope, normalizeDashboardLayout]);
 
   const { liveAlerts, refreshLiveAlerts } = useLiveAlerts({
     onRefresh: async () => {
@@ -1144,13 +1279,7 @@ export default function Home() {
       seen.add(key);
       return true;
     });
-    const newTtrOverdue = liveAlerts.time_to_resolution_overdue.filter((item) => {
-      const key = `ttr-overdue:${item.issue_key}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-    const hasNewTtrAlert = newTtrWarning.length || newTtrCritical.length || newTtrOverdue.length;
+    const hasNewTtrAlert = newTtrWarning.length || newTtrCritical.length;
 
     if (hasNewTtrAlert) {
       setTtrAlertsCollapsed(false);
@@ -1167,12 +1296,6 @@ export default function Home() {
     } else if (newSlaCritical.length) {
       flashToast(
         `ALERT SLA <5m: ${newSlaCritical[0].issue_key}${newSlaCritical.length > 1 ? ` +${newSlaCritical.length - 1}` : ""}`,
-        "error",
-        9000
-      );
-    } else if (newTtrOverdue.length) {
-      flashToast(
-        `ALERT INCIDENT TTR VERLOPEN: ${newTtrOverdue[0].issue_key}${newTtrOverdue.length > 1 ? ` +${newTtrOverdue.length - 1}` : ""}`,
         "error",
         9000
       );
@@ -1449,7 +1572,7 @@ export default function Home() {
 
   useEffect(() => {
     if (typeof document !== "undefined") {
-      document.title = "Dashboard Servicedesk Planningsagenda";
+      document.title = "Dashboard Servicedesk Twentecs";
     }
   }, []);
 
@@ -1501,6 +1624,30 @@ export default function Home() {
       setDashboardLayout(normalizedDefault);
       setLayoutSavedSnapshot(JSON.stringify(normalizedDefault));
     }
+  }, [normalizeDashboardLayout]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    if (window.localStorage.getItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY) === "local") return undefined;
+    let cancelled = false;
+    fetch(`${API}/config/dashboard-layout`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error("De gedeelde indeling kon niet worden geladen.");
+        return response.json();
+      })
+      .then((payload) => {
+        if (cancelled || !payload?.layout) return;
+        const normalized = normalizeDashboardLayout(payload.layout);
+        setDashboardLayout(normalized);
+        setLayoutSavedSnapshot(JSON.stringify(normalized));
+        setLayoutStorageScope("shared");
+      })
+      .catch(() => {
+        // The local/default layout remains usable when the shared layout is unavailable.
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [normalizeDashboardLayout]);
 
   useEffect(() => {
@@ -2343,14 +2490,6 @@ export default function Home() {
         : null;
     const avgPerWeek = indices.length ? totalTickets / indices.length : null;
 
-    const typeCandidates = series.filter((s) => !isTotalLabel(s.label) && !String(s.label).startsWith("Voortschrijdend gemiddelde "));
-    const typeTotals = typeCandidates.map((s) => ({
-      label: s.label,
-      total: indices.reduce((sum, idx) => sum + (Number(s.data?.[idx]) || 0), 0),
-    }));
-    typeTotals.sort((a, b) => b.total - a.total);
-    const topType = typeTotals[0];
-
     const completeWeekSet = new Set(indices.map((idx) => weeks[idx]));
     const onderwerpMap = new Map();
     (Array.isArray(onderwerpVolume) ? onderwerpVolume : []).forEach((row) => {
@@ -2430,12 +2569,6 @@ export default function Home() {
     const previousReleaseRow = effectiveLatestIndex > 0 ? releaseRows[effectiveLatestIndex - 1] : null;
     const releaseTrend = trendInfo(latestReleaseRow?.tickets, previousReleaseRow?.tickets);
     const currentFlow = currentWeekFlow || {};
-    const currentWeekFlowRefreshedAtDate = currentWeekFlowRefreshedAt ? new Date(currentWeekFlowRefreshedAt) : null;
-    const currentWeekFlowRefreshedMinutes =
-      currentWeekFlowRefreshedAtDate && !Number.isNaN(currentWeekFlowRefreshedAtDate.getTime())
-        ? Math.max(0, Math.floor((Date.now() - currentWeekFlowRefreshedAtDate.getTime()) / 60000))
-        : null;
-
     return {
       totalTickets,
       latestTickets,
@@ -2443,8 +2576,6 @@ export default function Home() {
       avgPerWeek,
       lastCompletedWeekLabel:
         lastCompletedIdx >= 0 && weeks[lastCompletedIdx] ? fmtDate(weeks[lastCompletedIdx]) : "—",
-      topTypeLabel: topType?.label || "—",
-      topTypeTickets: topType?.total || 0,
       topSubjectLabel: topSubject?.label || "—",
       topSubjectTotal: topSubject?.total || 0,
       topPartnerLabel: topPartnerLast.label,
@@ -2479,7 +2610,6 @@ export default function Home() {
               timeZone: AMSTERDAM_TIME_ZONE,
             }).format(new Date(currentFlow.current_cutoff))
           : "—",
-      currentWeekLiveUpdatedMinutes: currentWeekFlowRefreshedMinutes,
       periodLabel: fullWeekInfo.periodLabel,
       completeWeeksCount: fullWeekInfo.count,
     };
@@ -2491,8 +2621,7 @@ export default function Home() {
     fullWeekInfo,
     ttfrOverdueWeekly,
     releaseFollowupWorkload,
-    currentWeekFlow,
-    currentWeekFlowRefreshedAt,
+      currentWeekFlow,
   ]);
 
   const topOnderwerpRows = useMemo(() => {
@@ -2921,7 +3050,7 @@ export default function Home() {
   const pagePaddingTop = pagePaddingX;
   const pagePaddingBottom = "clamp(20px, 3dvh, 40px)";
   const pageStyle = {
-    fontFamily: 'var(--font-sans), "Plus Jakarta Sans", system-ui, sans-serif',
+    fontFamily: "var(--font-body)",
     paddingTop: pagePaddingTop,
     paddingRight: pagePaddingX,
     paddingBottom: pagePaddingBottom,
@@ -2972,6 +3101,39 @@ export default function Home() {
     background: "var(--surface)",
     padding: "8px 10px",
     minWidth: 0,
+  };
+  const liveKpiCardStyle = {
+    borderColor: "color-mix(in srgb, var(--accent) 64%, var(--border))",
+    background: "linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, var(--surface)), var(--surface) 62%)",
+    boxShadow: "inset 3px 0 0 var(--accent), 0 8px 18px color-mix(in srgb, var(--accent) 12%, transparent)",
+  };
+  const liveKpiStatusStyle = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 7,
+    marginBottom: 7,
+    padding: "4px 9px",
+    borderRadius: 999,
+    border: "1px solid color-mix(in srgb, var(--accent) 38%, var(--border))",
+    background: "color-mix(in srgb, var(--accent) 10%, var(--surface))",
+    color: "var(--text-subtle)",
+    fontSize: 11,
+    fontWeight: 600,
+  };
+  const liveKpiBadgeStyle = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 5,
+    padding: "2px 8px",
+    borderRadius: 999,
+    borderColor: "color-mix(in srgb, var(--accent) 58%, var(--border))",
+    background: "color-mix(in srgb, var(--accent) 12%, var(--surface))",
+    color: "var(--accent)",
+    border: "1px solid color-mix(in srgb, var(--accent) 58%, var(--border))",
+    fontSize: 11,
+    fontWeight: 700,
+    lineHeight: 1.2,
+    whiteSpace: "nowrap",
   };
   const kpiLabelStyle = {
     fontSize: 12,
@@ -3240,7 +3402,7 @@ export default function Home() {
     fontWeight: 600,
   };
   const cardTitleButtonStyle = {
-    margin: "0 0 8px",
+    margin: 0,
     padding: 0,
     border: "none",
     background: "transparent",
@@ -3411,7 +3573,8 @@ export default function Home() {
     left: 12,
     right: 12,
     bottom: 12,
-    zIndex: 1002,
+    // Keep the controls above moving alerts while their position is recalculated.
+    zIndex: 1005,
     border: "1px solid var(--border)",
     borderRadius: 12,
     background: "color-mix(in srgb, var(--surface) 96%, transparent)",
@@ -4067,13 +4230,69 @@ export default function Home() {
       );
     }
 
+    if (cardKey === "ttrOverdue") {
+      const overdueTtrItems = Array.isArray(liveAlerts?.time_to_resolution_overdue)
+        ? liveAlerts.time_to_resolution_overdue
+        : [];
+      return (
+        <div style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%", gap: 10 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid color-mix(in srgb, #1e3a8a 48%, var(--border))",
+              background: "linear-gradient(135deg, #0f172a, #1e3a8a)",
+              color: "#dbeafe",
+            }}
+          >
+            <span style={{ fontSize: 11, border: "1px solid rgba(255,255,255,0.35)", borderRadius: 999, padding: "2px 8px" }}>TTR X</span>
+            <strong style={{ fontSize: 28, lineHeight: 1 }}>{overdueTtrItems.length}</strong>
+            <span style={{ fontSize: 13, fontWeight: 700 }}>
+              {overdueTtrItems.length === 1 ? "ticket buiten SLA" : "tickets buiten SLA"}
+            </span>
+          </div>
+          {overdueTtrItems.length ? (
+            <ul style={{ margin: 0, padding: "0 4px", listStyle: "none", display: "grid", gap: 7, overflow: "auto" }}>
+              {overdueTtrItems.slice(0, 8).map((item) => (
+                <li key={item.issue_key} style={{ display: "grid", gridTemplateColumns: "76px minmax(0, 1fr) auto", gap: 10, fontSize: 13, alignItems: "baseline" }}>
+                  <a href={`${JIRA_BASE}/browse/${item.issue_key}`} target="_blank" rel="noreferrer" style={{ color: "var(--accent)", fontWeight: 700 }}>
+                    {item.issue_key}
+                  </a>
+                  <span style={{ color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {item.status || "Status onbekend"}
+                  </span>
+                  <span style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                    {formatOverdueMinutes(item.minutes_overdue)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div style={{ ...hiddenChartPlaceholderStyle, minHeight: 0, flex: 1 }}>Geen tickets buiten de TTR-SLA.</div>
+          )}
+        </div>
+      );
+    }
+
     if (cardKey === "volume") {
+      const settings = chartSettingsFor("volume");
+      const chartData = {
+        ...lineData,
+        datasets: lineData.datasets.filter((dataset) => {
+          if (!settings.total && isTotalLabel(dataset.label)) return false;
+          if (!settings.movingAverage && String(dataset.label || "").startsWith("Voortschrijdend gemiddelde")) return false;
+          return true;
+        }),
+      };
       return (
         <div style={bodyStyle}>
           {hasDataPoints(lineData) ? (
             <Line
               key={chartRenderKey("volume")}
-              data={lineData}
+              data={chartData}
               options={{
                 responsive: true,
                 maintainAspectRatio: false,
@@ -4082,13 +4301,13 @@ export default function Home() {
                   const el = elements?.[0];
                   if (!el) return;
                   const weekStart = weeks[el.index];
-                  const typeLabel = lineData.datasets[el.datasetIndex]?.label;
+                  const typeLabel = chartData.datasets[el.datasetIndex]?.label;
                   if (String(typeLabel || "").startsWith("Voortschrijdend gemiddelde")) return;
                   const effectiveType = requestType ? requestType : isTotalLabel(typeLabel) ? "" : typeLabel;
                   fetchDrilldown(weekStart, effectiveType, "");
                 },
                 plugins: {
-                  legend: { display: false },
+                  legend: { display: settings.legend, position: "top", labels: chartLegendLabels },
                   tooltip: { mode: "nearest", intersect: false },
                   releaseCadence: releaseCadencePlugin,
                   renderWatch: { onReady: () => markChartRendered("volume") },
@@ -4110,6 +4329,7 @@ export default function Home() {
     }
 
     if (cardKey === "onderwerp") {
+      const settings = chartSettingsFor("onderwerp");
       const onderwerpContentStyle = expanded
         ? { display: "flex", flexDirection: "column", flex: 1, minHeight: 0, height: "100%" }
         : { display: "flex", flexDirection: "column", flex: 1, minHeight: 0 };
@@ -4130,6 +4350,8 @@ export default function Home() {
                 markChartReady={() => markChartRendered("onderwerp")}
                 renderOverlay={() => renderSlowChartOverlay("onderwerp")}
                 expanded={expanded}
+                showLegend={settings.legend}
+                showMovingAverage={settings.movingAverage}
               />
             ) : (
               <EmptyChartState filterLabel="Onderwerp" style={emptyStyle} />
@@ -4140,6 +4362,7 @@ export default function Home() {
     }
 
     if (cardKey === "priority") {
+      const settings = chartSettingsFor("priority");
       return (
         <div style={bodyStyle}>
           {!priority ? (
@@ -4155,7 +4378,9 @@ export default function Home() {
                     animation: slowChartAnimation("priority"),
                     plugins: {
                       legend: {
-                        display: false,
+                        display: settings.legend,
+                        position: "top",
+                        labels: chartLegendLabels,
                       },
                       tooltip: {
                         mode: "nearest",
@@ -4187,6 +4412,7 @@ export default function Home() {
     }
 
     if (cardKey === "assignee") {
+      const settings = chartSettingsFor("assignee");
       return (
         <div style={bodyStyle}>
           {!assignee ? (
@@ -4202,7 +4428,9 @@ export default function Home() {
                     animation: slowChartAnimation("assignee"),
                     plugins: {
                       legend: {
-                        display: false,
+                        display: settings.legend,
+                        position: "top",
+                        labels: chartLegendLabels,
                       },
                       tooltip: {
                         mode: "nearest",
@@ -4234,6 +4462,7 @@ export default function Home() {
     }
 
     if (cardKey === "p90") {
+      const settings = chartSettingsFor("p90");
       return (
         <>
           <div style={bodyStyle}>
@@ -4245,7 +4474,7 @@ export default function Home() {
                   responsive: true,
                   maintainAspectRatio: false,
                   plugins: {
-                    legend: { display: true, position: "top", labels: chartLegendLabels },
+                    legend: { display: settings.legend, position: "top", labels: chartLegendLabels },
                     simpleDataLabels: buildSimpleDataLabels({ mode: "bar", maxLabels: expanded ? 20 : 10, datasetIndexes: [2] }),
                   },
                   scales: {
@@ -4270,6 +4499,7 @@ export default function Home() {
     }
 
     if (cardKey === "inflowVsClosed") {
+      const settings = chartSettingsFor("inflowVsClosed");
       return (
         <div style={bodyStyle}>
             {hasDataPoints(inflowVsClosedLineData) ? (
@@ -4299,7 +4529,7 @@ export default function Home() {
                 },
                   plugins: {
                     legend: {
-                      display: true,
+                      display: settings.legend,
                       position: "top",
                       labels: chartLegendLabels,
                     },
@@ -4330,6 +4560,7 @@ export default function Home() {
     }
 
     if (cardKey === "releaseWorkload") {
+      const settings = chartSettingsFor("releaseWorkload");
       return (
         <div style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%", gap: 8 }}>
           <div style={{ display: "grid", gap: 4, color: "var(--text-muted)", fontSize: 12, lineHeight: 1.35, flexShrink: 0 }}>
@@ -4369,7 +4600,7 @@ export default function Home() {
                   responsive: true,
                   maintainAspectRatio: false,
                   plugins: {
-                    legend: { display: false },
+                    legend: { display: settings.legend, position: "top", labels: chartLegendLabels },
                     tooltip: {
                       callbacks: {
                         title: (items) => {
@@ -4403,6 +4634,7 @@ export default function Home() {
     }
 
     if (cardKey === "incidentResolution") {
+      const settings = chartSettingsFor("incidentResolution");
       return (
         <div style={bodyStyle}>
             {hasDataPoints(incidentResolutionLineData) ? (
@@ -4415,7 +4647,7 @@ export default function Home() {
                   animation: slowChartAnimation("incidentResolution"),
                   plugins: {
                     legend: {
-                      display: true,
+                      display: settings.legend,
                       position: "top",
                       labels: chartLegendLabels,
                     },
@@ -4446,6 +4678,7 @@ export default function Home() {
     }
 
     if (cardKey === "firstResponseAll") {
+      const settings = chartSettingsFor("firstResponseAll");
       return (
         <div style={bodyStyle}>
             {hasDataPoints(firstResponseLineData) ? (
@@ -4457,7 +4690,7 @@ export default function Home() {
                   maintainAspectRatio: false,
                   animation: slowChartAnimation("firstResponseAll"),
                   plugins: {
-                    legend: { display: true, position: "top", labels: chartLegendLabels },
+                    legend: { display: settings.legend, position: "top", labels: chartLegendLabels },
                     renderWatch: { onReady: () => markChartRendered("firstResponseAll") },
                     tooltip: { mode: "nearest", intersect: false },
                     releaseCadence: releaseCadencePlugin,
@@ -4479,6 +4712,7 @@ export default function Home() {
     }
 
     if (cardKey === "organizationWeekly") {
+      const settings = chartSettingsFor("organizationWeekly");
       return (
         <div style={bodyStyle}>
             {hasDataPoints(organizationBarData) ? (
@@ -4491,7 +4725,7 @@ export default function Home() {
                   animation: slowChartAnimation("organizationWeekly"),
                   plugins: {
                     legend: {
-                      display: true,
+                      display: settings.legend,
                       position: "top",
                       labels: chartLegendLabels,
                     },
@@ -4766,6 +5000,62 @@ export default function Home() {
     return null;
   }
 
+  const liveKpiUpdateLabel = useMemo(() => {
+    const refreshedAt = currentWeekFlowRefreshedAt ? new Date(currentWeekFlowRefreshedAt) : null;
+    if (!refreshedAt || Number.isNaN(refreshedAt.getTime())) return "Live gegevens worden geladen";
+    return `Live KPI’s · bijgewerkt om ${new Intl.DateTimeFormat("nl-NL", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: AMSTERDAM_TIME_ZONE,
+    }).format(refreshedAt)}`;
+  }, [currentWeekFlowRefreshedAt]);
+
+  const liveKpiItems = useMemo(
+    () => {
+      const receivedTrend = trendInfo(kpiStats.currentWeekReceived, kpiStats.previousWeekReceived);
+      const closedTrend = trendInfo(kpiStats.currentWeekClosed, kpiStats.previousWeekClosed);
+
+      return [
+      liveKpiSettings.currentWeekFlow
+        ? {
+            key: "currentWeekFlow",
+            label: "Lopende week",
+            content: (
+              <>
+                <span style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+                  <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", lineHeight: 1.2 }}>Ontvangen</span>
+                    <span><strong style={{ fontSize: 20 }}>{num(kpiStats.currentWeekReceived)}</strong> <span style={{ color: receivedTrend.color, fontSize: 20 }}>{receivedTrend.symbol}</span></span>
+                  </span>
+                  <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", lineHeight: 1.2 }}>Gesloten</span>
+                    <span><strong style={{ fontSize: 20 }}>{num(kpiStats.currentWeekClosed)}</strong> <span style={{ color: closedTrend.color, fontSize: 20 }}>{closedTrend.symbol}</span></span>
+                  </span>
+                </span>
+                <span style={{ color: "var(--text-muted)", fontSize: 11 }}>
+                  Vorige week: {num(kpiStats.previousWeekReceived)} ontvangen · {num(kpiStats.previousWeekClosed)} gesloten
+                </span>
+              </>
+            ),
+          }
+        : null,
+      liveKpiSettings.inProgress
+        ? { key: "inProgress", label: "In behandeling", value: num(inProgressCount) }
+        : null,
+      liveKpiSettings.newMelding
+        ? {
+            key: "newMelding",
+            label: "Nieuwe meldingen",
+            value: num(newMeldingCount),
+            valueColor: newMeldingCount < 5 ? "var(--ok)" : newMeldingCount < 10 ? "#d97706" : "var(--danger)",
+          }
+        : null,
+      ].filter(Boolean);
+    },
+    [inProgressCount, kpiStats.currentWeekClosed, kpiStats.currentWeekReceived, kpiStats.previousWeekClosed, kpiStats.previousWeekReceived, liveKpiSettings, newMeldingCount]
+  );
+
   const kpiTiles = useMemo(
     () => ({
       totalTickets: {
@@ -4790,48 +5080,22 @@ export default function Home() {
         sub: `Week van ${kpiStats.lastCompletedWeekLabel} · WoW: ${pct(kpiStats.wowChangePct)}`,
         badge: "Periode: laatste week",
       },
-      currentWeekFlow: {
-        label: "Lopende week",
+      liveStatus: {
+        label: "Live",
+        live: true,
+        gridSpan: Math.max(1, liveKpiItems.length),
         value: (
-          <span style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, width: "100%" }}>
-            <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-              <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", lineHeight: 1.2 }}>Ontvangen</span>
-              <span>
-                {num(kpiStats.currentWeekReceived)}{" "}
-                <span
-                  style={{
-                    fontSize: "0.7em",
-                    color: trendInfo(kpiStats.currentWeekReceived, kpiStats.previousWeekReceived).color,
-                    verticalAlign: "middle",
-                  }}
-                >
-                  {trendInfo(kpiStats.currentWeekReceived, kpiStats.previousWeekReceived).symbol}
-                </span>
+          <span style={{ display: "grid", gridTemplateColumns: `repeat(${Math.max(1, liveKpiItems.length)}, minmax(0, 1fr))`, gap: 14, width: "100%" }}>
+            {liveKpiItems.length ? liveKpiItems.map((item) => (
+              <span key={item.key} style={{ display: "grid", gap: 3, minWidth: 0 }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)" }}>{item.label}</span>
+                {item.content || <strong style={{ fontSize: 22, color: item.valueColor || "var(--text-main)" }}>{item.value}</strong>}
               </span>
-            </span>
-            <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-              <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", lineHeight: 1.2 }}>Gesloten</span>
-              <span>
-                {num(kpiStats.currentWeekClosed)}{" "}
-                <span
-                  style={{
-                    fontSize: "0.7em",
-                    color: trendInfo(kpiStats.currentWeekClosed, kpiStats.previousWeekClosed).color,
-                    verticalAlign: "middle",
-                  }}
-                >
-                  {trendInfo(kpiStats.currentWeekClosed, kpiStats.previousWeekClosed).symbol}
-                </span>
-              </span>
-            </span>
+            )) : <span style={{ color: "var(--text-muted)", fontSize: 12 }}>Kies minimaal één live statistiek in de instellingen.</span>}
           </span>
         ),
-        sub: `Vorige week: ${num(kpiStats.previousWeekReceived)} ontvangen · ${num(kpiStats.previousWeekClosed)} gesloten`,
-        subSecondary:
-          kpiStats.currentWeekLiveUpdatedMinutes == null
-            ? `Laatst bijgewerkt (${kpiStats.currentWeekCutoffTimeLabel})`
-            : `Laatst bijgewerkt ${kpiStats.currentWeekLiveUpdatedMinutes} min geleden (${kpiStats.currentWeekCutoffTimeLabel})`,
-        subSecondaryStyle: { whiteSpace: "nowrap" },
+        sub: liveKpiUpdateLabel,
+        subStyle: { textAlign: "right" },
         badge: "Live",
       },
       releaseWednesdayWorkload: {
@@ -4863,16 +5127,6 @@ export default function Home() {
         sub: `Laatste week: ${num(kpiStats.ttfrOverdueLatest)} · WoW: ${pct(kpiStats.ttfrOverdueWowPct)}`,
         badge: "SLA",
       },
-      topType: {
-        label: "Top request type (volledige weken)",
-        value: kpiStats.topTypeLabel,
-        sub: `${num(kpiStats.topTypeTickets)} tickets`,
-      },
-      topSubject: {
-        label: "Top onderwerp (volledige weken)",
-        value: kpiStats.topSubjectLabel,
-        sub: `${num(kpiStats.topSubjectTotal)} tickets`,
-      },
       topPartner: {
         label: "Partner met meeste tickets volledige week",
         value: (
@@ -4890,7 +5144,7 @@ export default function Home() {
         ),
       },
     }),
-    [kpiStats, openReleaseWorkloadDrilldown, releaseStatusBadge, releaseStatusNote]
+    [inProgressCount, kpiStats, liveKpiItems, liveKpiUpdateLabel, newMeldingCount, openReleaseWorkloadDrilldown, releaseStatusBadge, releaseStatusNote]
   );
 
   const visibleKpiKeys = dashboardLayout.kpiRow;
@@ -5017,6 +5271,7 @@ export default function Home() {
       setCardDropHint(null);
       setKpiDropHint(null);
       setHiddenDropTarget(null);
+      setOpenCardSettings("");
       dragStateRef.current = null;
     } else {
       closeDrilldown();
@@ -5024,10 +5279,28 @@ export default function Home() {
     }
   }, [isLayoutEditing, closeDrilldown]);
 
+  useEffect(() => {
+    if (!isLayoutEditing) {
+      setHiddenOverlayHeight(0);
+      return undefined;
+    }
+
+    const overlay = hiddenOverlayRef.current;
+    if (!overlay) return undefined;
+
+    const updateHeight = () => setHiddenOverlayHeight(Math.ceil(overlay.getBoundingClientRect().height));
+    updateHeight();
+
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(overlay);
+    return () => observer.disconnect();
+  }, [isLayoutEditing]);
+
   return (
     <div style={pageStyle}>
       <Head>
-        <title>Dashboard Servicedesk Planningsagenda</title>
+        <title>Dashboard Servicedesk Twentecs</title>
         <link rel="icon" href={faviconSignal.href} />
       </Head>
       <Toast message={syncMessage} kind={syncMessageKind} onClose={() => setSyncMessage("")} />
@@ -5035,6 +5308,8 @@ export default function Home() {
         alerts={liveAlerts}
         ttrCollapsed={ttrAlertsCollapsed}
         onToggleTtrCollapsed={() => setTtrAlertsCollapsed((value) => !value)}
+        layoutEditing={isLayoutEditing}
+        layoutPanelHeight={hiddenOverlayHeight}
       />
       <button
         ref={hotkeysButtonRef}
@@ -5048,7 +5323,7 @@ export default function Home() {
         ?
       </button>
       <div style={headerRowStyle}>
-        <h1 style={titleStyle}>Dashboard Servicedesk Planningsagenda</h1>
+        <h1 style={titleStyle}>Dashboard Servicedesk Twentecs</h1>
         {vacationBanner ? (
           <div style={vacationBannerStyle}>
             <VacationAvatar
@@ -5731,18 +6006,19 @@ export default function Home() {
       ) : (() => {
         const renderedKpis = renderKpiRowWithHint(visibleKpiKeys);
         const hintActive = renderedKpis.includes("__KPI_DROP_HINT__");
+        const kpiColumnCount = Math.max(2, renderedKpis.reduce((count, key) => count + Math.max(1, Number(kpiTiles[key]?.gridSpan) || 1), 0));
         return (
           <div
-            style={{
-              ...kpiGridStyle,
-              gridTemplateColumns: `repeat(${Math.max(2, renderedKpis.length || 2)}, minmax(0, 1fr))`,
-            }}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={() => {
-              const hint = kpiDropHint;
-              moveKpiToVisible(hint?.targetKey || null, hint?.position || "after");
-            }}
-          >
+              style={{
+                ...kpiGridStyle,
+                gridTemplateColumns: `repeat(${kpiColumnCount}, minmax(0, 1fr))`,
+              }}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={() => {
+                const hint = kpiDropHint;
+                moveKpiToVisible(hint?.targetKey || null, hint?.position || "after");
+              }}
+            >
         {renderedKpis.length ? renderedKpis.map((key) => {
           if (key === "__KPI_DROP_HINT__") {
             return <div key="kpi-drop-hint" style={dropSkeletonStyle} />;
@@ -5755,6 +6031,8 @@ export default function Home() {
               key={key}
               style={{
                 ...kpiCardStyle,
+                ...(tile.live ? liveKpiCardStyle : null),
+                gridColumn: `span ${Math.max(1, Number(tile.gridSpan) || 1)}`,
                 cursor: isLayoutEditing ? "grab" : isClickable ? "pointer" : "default",
                 transform: hintActive ? "scale(0.86)" : "scale(1)",
                 transformOrigin: "center center",
@@ -5777,23 +6055,40 @@ export default function Home() {
               }}
             >
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 2 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  {isLayoutEditing ? (
-                    <span style={dragHandleStyle} aria-hidden>
-                      <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-                        <circle cx="2" cy="2" r="1" />
-                        <circle cx="2" cy="5" r="1" />
-                        <circle cx="2" cy="8" r="1" />
-                        <circle cx="8" cy="2" r="1" />
-                        <circle cx="8" cy="5" r="1" />
-                        <circle cx="8" cy="8" r="1" />
-                      </svg>
-                    </span>
-                  ) : null}
-                  <div style={{ ...kpiLabelStyle, marginBottom: 0 }}>{tile.label}</div>
-                </div>
+                {key === "liveStatus" && !isLayoutEditing ? <span /> : (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    {isLayoutEditing ? (
+                      <span style={dragHandleStyle} aria-hidden>
+                        <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                          <circle cx="2" cy="2" r="1" />
+                          <circle cx="2" cy="5" r="1" />
+                          <circle cx="2" cy="8" r="1" />
+                          <circle cx="8" cy="2" r="1" />
+                          <circle cx="8" cy="5" r="1" />
+                          <circle cx="8" cy="8" r="1" />
+                        </svg>
+                      </span>
+                    ) : null}
+                    <div style={{ ...kpiLabelStyle, marginBottom: 0 }}>{tile.label}</div>
+                  </div>
+                )}
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  {tile.badge ? <span style={fixedMetricBadgeStyle}>{tile.badge}</span> : null}
+                  {tile.badge ? <span style={tile.live ? liveKpiBadgeStyle : fixedMetricBadgeStyle}>{tile.badge}</span> : null}
+                  {isLayoutEditing ? (
+                    key === "liveStatus" ? (
+                      <button
+                        type="button"
+                        onClick={(event) => { event.stopPropagation(); setOpenLiveKpiSettings((open) => !open); }}
+                        style={iconButtonStyle}
+                        title="Live KPI-instellingen"
+                        aria-label="Live KPI-instellingen"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                          <path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06-2.12 2.12-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V20h-3v-.08a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06-2.12-2.12.06-.06A1.65 1.65 0 0 0 7.17 15a1.65 1.65 0 0 0-1.51-1H5.6v-3h.08a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82L6.8 8.12 8.92 6l.06.06A1.65 1.65 0 0 0 10.8 6.4a1.65 1.65 0 0 0 1-1.51V4.8h3v.08a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06 2.12 2.12-.06.06A1.65 1.65 0 0 0 19.4 10c.2.61.76 1 1.4 1h.08v3h-.08c-.64 0-1.2.39-1.4 1Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </button>
+                    ) : null
+                  ) : null}
                   {isLayoutEditing ? (
                     <button
                       type="button"
@@ -5809,8 +6104,23 @@ export default function Home() {
                   ) : null}
                 </div>
               </div>
+              {isLayoutEditing && key === "liveStatus" && openLiveKpiSettings ? (
+                <div style={{ display: "grid", gap: 6, marginBottom: 8, padding: 8, borderRadius: 8, background: "color-mix(in srgb, var(--accent) 8%, var(--surface))" }}>
+                  <strong style={{ fontSize: 12 }}>Live KPI-instellingen</strong>
+                  {[
+                    ["currentWeekFlow", "Lopende week"],
+                    ["inProgress", "Tickets in behandeling"],
+                    ["newMelding", "Nieuwe meldingen"],
+                  ].map(([settingKey, label]) => (
+                    <label key={settingKey} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12 }}>
+                      <input type="checkbox" checked={liveKpiSettings[settingKey]} onChange={(event) => updateLiveKpiSetting(settingKey, event.target.checked)} />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              ) : null}
               <div style={{ ...kpiValueStyle, ...(tile.valueStyle || null), fontSize: key === "topType" || key === "topSubject" ? 20 : 20 }}>{tile.value}</div>
-              <div style={kpiSubStyle}>{tile.sub}</div>
+              <div style={{ ...kpiSubStyle, ...(tile.subStyle || null) }}>{tile.sub}</div>
               {tile.subSecondary ? (
                 <div style={{ ...kpiSubStyle, marginTop: 2, fontSize: 11, ...(tile.subSecondaryStyle || null) }}>
                   {tile.subSecondary}
@@ -5823,7 +6133,7 @@ export default function Home() {
             KPI-rij is leeg. Sleep KPI-kaarten terug vanuit Verborgen kaarten.
           </div>
         )}
-      </div>
+          </div>
         );
       })()}
 
@@ -5895,6 +6205,12 @@ export default function Home() {
                 const showPartialWeekBadge = !aiInsight && Boolean(weeklyScopeHint) && weeklyPartialCardKeys.has(cardKey);
                 const showLastWeekBadge = !aiInsight && cardKey === "topOnderwerpen";
                 const canExpandCard = expandableCardKeys.has(cardKey);
+                const configuredCapabilities = aiInsight ? null : CHART_CARD_SETTING_CAPABILITIES[cardKey];
+                const cardSettingCapabilities = configuredCapabilities && cardKey === "volume" && requestType
+                  ? { ...configuredCapabilities, total: false }
+                  : configuredCapabilities;
+                const cardSettings = cardSettingCapabilities ? chartSettingsFor(cardKey) : null;
+                const cardSettingsOpen = openCardSettings === cardKey;
                 return (
                   <div
                     key={cardKey}
@@ -5928,7 +6244,7 @@ export default function Home() {
                       moveCardToRow(rowIndex, hint?.targetKey || cardKey, hint?.position || "before");
                     }}
                   >
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 8 }}>
                       {isLayoutEditing ? (
                         <div style={{ ...cardTitleButtonStyle, cursor: "default", marginBottom: 0 }}>
                           <span style={{ display: "inline-flex", alignItems: "baseline", gap: 6 }}>
@@ -6018,6 +6334,32 @@ export default function Home() {
                               )}
                             </svg>
                           </button>
+                          {cardSettingCapabilities ? (
+                            <button
+                              type="button"
+                              onPointerDown={(event) => event.stopPropagation()}
+                              onClick={() => setOpenCardSettings((current) => (current === cardKey ? "" : cardKey))}
+                              style={{
+                                ...iconButtonStyle,
+                                borderColor: cardSettingsOpen ? "var(--accent)" : "var(--border)",
+                                color: cardSettingsOpen ? "var(--accent)" : "inherit",
+                              }}
+                              title="Kaartinstellingen"
+                              aria-label="Kaartinstellingen"
+                              aria-expanded={cardSettingsOpen}
+                            >
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                <path
+                                  d="M10.3 3.8h3.4l.6 2.3c.5.2 1 .5 1.5.8l2.2-.7 1.7 2.9-1.6 1.6c.1.5.1 1.1 0 1.6l1.6 1.6-1.7 2.9-2.2-.7c-.5.4-1 .6-1.5.8l-.6 2.3h-3.4l-.6-2.3c-.5-.2-1-.5-1.5-.8l-2.2.7-1.7-2.9 1.6-1.6a6.8 6.8 0 0 1 0-1.6L4.6 9.1l1.7-2.9 2.2.7c.5-.4 1-.6 1.5-.8l.3-2.3Z"
+                                  stroke="currentColor"
+                                  strokeWidth="1.8"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+                                <circle cx="12" cy="12" r="2.6" stroke="currentColor" strokeWidth="1.8" />
+                              </svg>
+                            </button>
+                          ) : null}
                           {row.length <= 4 ? (
                             <button
                               type="button"
@@ -6061,6 +6403,54 @@ export default function Home() {
                         </span>
                       )}
                     </div>
+                    {isLayoutEditing && cardSettingsOpen && cardSettingCapabilities ? (
+                      <div
+                        role="group"
+                        aria-label={`Instellingen voor ${displayTitle}`}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        style={{
+                          margin: "4px 0 10px",
+                          padding: 10,
+                          border: "1px solid color-mix(in srgb, var(--accent) 35%, var(--border))",
+                          borderRadius: 10,
+                          background: "color-mix(in srgb, var(--accent) 6%, var(--surface-muted))",
+                          display: "grid",
+                          gap: 8,
+                        }}
+                      >
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-main)" }}>{displayTitle}</div>
+                        {cardSettingCapabilities.legend ? (
+                          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                            <input
+                              type="checkbox"
+                              checked={cardSettings.legend}
+                              onChange={(event) => updateChartSetting(cardKey, "legend", event.target.checked)}
+                            />
+                            Legenda tonen
+                          </label>
+                        ) : null}
+                        {cardSettingCapabilities.total ? (
+                          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                            <input
+                              type="checkbox"
+                              checked={cardSettings.total}
+                              onChange={(event) => updateChartSetting(cardKey, "total", event.target.checked)}
+                            />
+                            Totaal tonen
+                          </label>
+                        ) : null}
+                        {cardSettingCapabilities.movingAverage ? (
+                          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                            <input
+                              type="checkbox"
+                              checked={cardSettings.movingAverage}
+                              onChange={(event) => updateChartSetting(cardKey, "movingAverage", event.target.checked)}
+                            />
+                            Voortschrijdend gemiddelde tonen
+                          </label>
+                        ) : null}
+                      </div>
+                    ) : null}
                     <div
                       style={{
                         display: "flex",
@@ -6155,8 +6545,65 @@ export default function Home() {
         </div>
       ) : null}
 
+      {layoutChoiceOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Kies voor wie je de indeling aanpast"
+          style={modalOverlayStyle}
+          onClick={() => !layoutSaving && setLayoutChoiceOpen(false)}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              width: "min(500px, 94vw)",
+              background: "var(--surface)",
+              borderRadius: 14,
+              border: "1px solid var(--border)",
+              boxShadow: "0 24px 70px var(--shadow-strong)",
+              padding: 20,
+            }}
+          >
+            <h2 style={{ margin: 0, fontSize: 20 }}>Indeling aanpassen</h2>
+            <p style={{ margin: "8px 0 18px", color: "var(--text-muted)", lineHeight: 1.5 }}>
+              Voor wie wil je deze dashboardindeling aanpassen?
+            </p>
+            <div style={{ display: "grid", gap: 10 }}>
+              <button
+                type="button"
+                onClick={startLocalLayoutEditing}
+                disabled={layoutSaving}
+                style={{ ...filterOpenButtonStyle, height: "auto", minHeight: 66, justifyContent: "flex-start", alignItems: "flex-start", flexDirection: "column", textAlign: "left", padding: "12px 14px" }}
+              >
+                <span style={{ fontWeight: 700 }}>Alleen voor mij</span>
+                <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 400 }}>
+                  Bewaar de indeling alleen op dit apparaat en in deze browser.
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={startSharedLayoutEditing}
+                disabled={layoutSaving}
+                style={{ ...layoutPrimaryButtonStyle, height: "auto", minHeight: 66, justifyContent: "flex-start", alignItems: "flex-start", flexDirection: "column", textAlign: "left", padding: "12px 14px" }}
+              >
+                <span style={{ fontWeight: 700 }}>{layoutSaving ? "Gedeelde indeling laden…" : "Voor iedereen"}</span>
+                <span style={{ fontSize: 12, opacity: 0.86, fontWeight: 400 }}>
+                  Bewaar de indeling centraal, zodat andere gebruikers deze ook kunnen gebruiken.
+                </span>
+              </button>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
+              <button type="button" onClick={() => setLayoutChoiceOpen(false)} disabled={layoutSaving} style={modalCloseStyle}>
+                Annuleren
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {isLayoutEditing ? (
         <div
+          ref={hiddenOverlayRef}
           style={{ ...hiddenOverlayStyle, ...(hiddenDropTarget === "overlay" ? hiddenOverlayDropStyle : null) }}
           onDragOver={(e) => {
             e.preventDefault();
@@ -6168,7 +6615,12 @@ export default function Home() {
           onDrop={hideDraggedToOverlay}
         >
           <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <h3 style={hiddenOverlayTitleStyle}>Verborgen kaarten</h3>
+            <div>
+              <h3 style={hiddenOverlayTitleStyle}>Verborgen kaarten</h3>
+              <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
+                {layoutStorageScope === "shared" ? "Je past de indeling voor iedereen aan" : "Je past alleen jouw eigen indeling aan"}
+              </div>
+            </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <button type="button" onClick={toggleTvMode} style={filterOpenButtonStyle}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -6182,13 +6634,13 @@ export default function Home() {
                 </svg>
                 {isTvMode ? "TV-modus uit" : "TV-modus aan"}
               </button>
-              <button type="button" onClick={resetLayoutAndClose} style={filterOpenButtonStyle}>
+              <button type="button" onClick={resetLayoutAndClose} style={filterOpenButtonStyle} disabled={layoutSaving}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                   <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
                 Opnieuw beginnen
               </button>
-              <button type="button" onClick={saveDashboardLayout} style={layoutPrimaryButtonStyle} disabled={!layoutDirty}>
+              <button type="button" onClick={saveDashboardLayout} style={layoutPrimaryButtonStyle} disabled={!layoutDirty || layoutSaving}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                   <path
                     d="M5 3h11l3 3v15H5zM8 3v6h8V3M8 21v-7h8v7"
@@ -6198,7 +6650,7 @@ export default function Home() {
                     strokeLinejoin="round"
                   />
                 </svg>
-                Opslaan layout
+                {layoutSaving ? "Opslaan…" : "Indeling opslaan"}
               </button>
             </div>
           </div>
@@ -6993,49 +7445,59 @@ export default function Home() {
       <style jsx global>{`
         :root {
           color-scheme: light dark;
-          --page-bg: #f1f5f9;
-          --surface: #ffffff;
-          --surface-muted: #f8fafc;
-          --text-main: #0f172a;
-          --text-subtle: #334155;
-          --text-muted: #64748b;
-          --text-faint: #94a3b8;
-          --border: #cbd5e1;
-          --border-strong: #e2e8f0;
-          --accent: #2563eb;
-          --danger: #dc2626;
-          --ok: #15803d;
-          --overlay-bg: rgba(15, 23, 42, 0.55);
-          --overlay-soft: rgba(0, 0, 0, 0.35);
-          --shadow-medium: rgba(0, 0, 0, 0.25);
-          --shadow-strong: rgba(2, 6, 23, 0.35);
-          --indicator-border: rgba(0, 0, 0, 0.15);
+          --brand-red: #ab1f23;
+          --brand-light-blue: #366475;
+          --brand-dark-blue: #192c2e;
+          --brand-beige: #fff8e9;
+          --brand-yellow: #ffdf80;
+          --brand-rose: #f4b19f;
+          --brand-soft-red: #f26d5d;
+          --page-bg: var(--brand-beige);
+          --surface: #fffefa;
+          --surface-muted: #fff4d8;
+          --text-main: var(--brand-dark-blue);
+          --text-subtle: #2a4d55;
+          --text-muted: #466871;
+          --text-faint: #718d90;
+          --border: #b8cdcc;
+          --border-strong: #d9e5d7;
+          --accent: var(--brand-red);
+          --danger: #a31e22;
+          --warning: #8a5c00;
+          --ok: #226044;
+          --overlay-bg: rgba(25, 44, 46, 0.58);
+          --overlay-soft: rgba(25, 44, 46, 0.36);
+          --shadow-medium: rgba(25, 44, 46, 0.14);
+          --shadow-strong: rgba(25, 44, 46, 0.28);
+          --indicator-border: rgba(25, 44, 46, 0.18);
         }
         @media (prefers-color-scheme: dark) {
           :root {
-            --page-bg: #020617;
-            --surface: #0f172a;
-            --surface-muted: #111c31;
-            --text-main: #e5e7eb;
-            --text-subtle: #cbd5e1;
-            --text-muted: #94a3b8;
-            --text-faint: #64748b;
-            --border: #334155;
-            --border-strong: #475569;
-            --accent: #60a5fa;
-            --danger: #f87171;
-            --ok: #4ade80;
-            --overlay-bg: rgba(2, 6, 23, 0.72);
-            --overlay-soft: rgba(2, 6, 23, 0.55);
-            --shadow-medium: rgba(0, 0, 0, 0.45);
-            --shadow-strong: rgba(0, 0, 0, 0.62);
-            --indicator-border: rgba(148, 163, 184, 0.35);
+            --page-bg: #102426;
+            --surface: var(--brand-dark-blue);
+            --surface-muted: #213c3f;
+            --text-main: var(--brand-beige);
+            --text-subtle: #d7e5df;
+            --text-muted: #adc4c0;
+            --text-faint: #76928e;
+            --border: #426568;
+            --border-strong: #54787a;
+            --accent: var(--brand-soft-red);
+            --danger: #ff9a8e;
+            --warning: var(--brand-yellow);
+            --ok: #83d0a5;
+            --overlay-bg: rgba(10, 25, 27, 0.76);
+            --overlay-soft: rgba(10, 25, 27, 0.58);
+            --shadow-medium: rgba(0, 0, 0, 0.3);
+            --shadow-strong: rgba(0, 0, 0, 0.55);
+            --indicator-border: rgba(215, 229, 223, 0.28);
           }
         }
         html,
         body {
           background: var(--page-bg);
           color: var(--text-main);
+          font-family: var(--font-body);
           margin: 0;
           height: 100%;
           overflow: hidden;

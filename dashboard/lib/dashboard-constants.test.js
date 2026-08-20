@@ -21,7 +21,7 @@ describe("dashboard-constants", () => {
     expect(MAX_KPI_TILES).toBe(8);
     expect(KPI_KEYS).toContain("ttfrOverdue");
     expect(KPI_KEYS).toContain("releaseWednesdayWorkload");
-    expect(KPI_KEYS).toContain("currentWeekFlow");
+    expect(KPI_KEYS).toContain("liveStatus");
     expect(CARD_TITLES.releaseWorkload).toContain("release");
     expect(KPI_KEYS).not.toContain("avgPerWeek");
   });
@@ -33,7 +33,7 @@ describe("dashboard-constants", () => {
     expect(layout.hiddenKpis).toEqual([]);
     expect(layout.hiddenCards).toEqual(["topOnderwerpen", "releaseWorkload", "p90", "firstResponseAll"]);
     expect(layout.cardRows.length).toBe(2);
-    expect(layout.cardRows[0]).toEqual(["volume", "onderwerp", "inflowVsClosed"]);
+    expect(layout.cardRows[0]).toEqual(["volume", "onderwerp", "inflowVsClosed", "ttrOverdue"]);
     expect(layout.cardRows[1]).toEqual(["assignee", "priority", "organizationWeekly", "incidentResolution", "vacationServicedesk"]);
     expect(layout.expandedByRow).toEqual(["onderwerp", null]);
     expect(layout.lockedCards).toEqual(["volume", "organizationWeekly", "onderwerp", "vacationServicedesk"]);

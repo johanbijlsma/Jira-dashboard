@@ -3,6 +3,8 @@ import {
   MAX_CARDS_PER_ROW,
   MAX_KPI_TILES,
   NON_KPI_CARD_KEYS,
+  CHART_CARD_SETTING_CAPABILITIES,
+  DEFAULT_LIVE_KPI_SETTINGS,
   createDefaultDashboardLayout,
 } from "./dashboard-constants";
 
@@ -18,8 +20,11 @@ export function normalizeDashboardLayout(input) {
   const allKpis = new Set(KPI_KEYS);
   const allCards = new Set(NON_KPI_CARD_KEYS);
 
+  const legacyLiveKeys = new Set(["currentWeekFlow", "topType", "topSubject"]);
+  const hadLegacyLiveKpi = [...(input.kpiRow || []), ...(input.hiddenKpis || [])].some((key) => legacyLiveKeys.has(key));
   let kpiRow = normalizeList(input.kpiRow, allKpis);
   let hiddenKpis = normalizeList(input.hiddenKpis, allKpis).filter((key) => !kpiRow.includes(key));
+  if (hadLegacyLiveKpi && !kpiRow.includes("liveStatus") && !hiddenKpis.includes("liveStatus")) kpiRow.unshift("liveStatus");
   KPI_KEYS.forEach((key) => {
     if (!kpiRow.includes(key) && !hiddenKpis.includes(key)) kpiRow.push(key);
   });
@@ -41,7 +46,8 @@ export function normalizeDashboardLayout(input) {
 
   NON_KPI_CARD_KEYS.forEach((key) => {
     if (!cardRows[0].includes(key) && !cardRows[1].includes(key) && !hiddenCards.includes(key)) {
-      cardRows[1].push(key);
+      if (key === "ttrOverdue" && cardRows[0].length < MAX_CARDS_PER_ROW) cardRows[0].push(key);
+      else cardRows[1].push(key);
     }
   });
 
@@ -91,8 +97,23 @@ export function normalizeDashboardLayout(input) {
 
   const visibleCards = new Set([...cardRows[0], ...cardRows[1]]);
   const lockedCards = normalizeList(input.lockedCards, visibleCards);
+  const chartSettings = Object.entries(CHART_CARD_SETTING_CAPABILITIES).reduce((result, [cardKey, capabilities]) => {
+    const source = input.chartSettings?.[cardKey];
+    if (!source || typeof source !== "object") return result;
+    const settings = Object.keys(capabilities).reduce((nextSettings, settingKey) => {
+      if (typeof source[settingKey] === "boolean") nextSettings[settingKey] = source[settingKey];
+      return nextSettings;
+    }, {});
+    if (Object.keys(settings).length) result[cardKey] = settings;
+    return result;
+  }, {});
 
-  return { showAiCards, kpiRow, hiddenKpis, cardRows, hiddenCards, expandedByRow, lockedCards };
+  const liveKpiSettings = Object.keys(DEFAULT_LIVE_KPI_SETTINGS).reduce((result, key) => {
+    result[key] = input.liveKpiSettings?.[key] !== false;
+    return result;
+  }, {});
+
+  return { showAiCards, kpiRow, hiddenKpis, cardRows, hiddenCards, expandedByRow, lockedCards, chartSettings, liveKpiSettings };
 }
 
 export function moveKpiToVisibleLayout(prev, key, targetKey = null, position = "before") {
