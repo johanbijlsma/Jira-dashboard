@@ -76,7 +76,13 @@ function AlertSection({
   );
 }
 
-export default function LiveAlertStack({ alerts, ttrCollapsed = false, onToggleTtrCollapsed }) {
+export default function LiveAlertStack({
+  alerts,
+  ttrCollapsed = false,
+  onToggleTtrCollapsed,
+  layoutEditing = false,
+  layoutPanelHeight = 0,
+}) {
   const p1Items = Array.isArray(alerts?.priority1) ? alerts.priority1 : [];
   const slaWarningItems = Array.isArray(alerts?.first_response_due_warning)
     ? alerts.first_response_due_warning
@@ -85,10 +91,9 @@ export default function LiveAlertStack({ alerts, ttrCollapsed = false, onToggleT
   const overdueItems = Array.isArray(alerts?.first_response_overdue) ? alerts.first_response_overdue : [];
   const ttrWarningItems = Array.isArray(alerts?.time_to_resolution_warning) ? alerts.time_to_resolution_warning : [];
   const ttrCriticalItems = Array.isArray(alerts?.time_to_resolution_critical) ? alerts.time_to_resolution_critical : [];
-  const ttrOverdueItems = Array.isArray(alerts?.time_to_resolution_overdue) ? alerts.time_to_resolution_overdue : [];
 
   const hasAcuteAlerts = p1Items.length || slaWarningItems.length || slaCriticalItems.length || overdueItems.length;
-  const ttrTotal = ttrWarningItems.length + ttrCriticalItems.length + ttrOverdueItems.length;
+  const ttrTotal = ttrWarningItems.length + ttrCriticalItems.length;
   if (!hasAcuteAlerts && !ttrTotal) return null;
 
   const shellStyle = {
@@ -107,8 +112,12 @@ export default function LiveAlertStack({ alerts, ttrCollapsed = false, onToggleT
 
   const ttrShellStyle = {
     ...shellStyle,
-    bottom: 84,
+    bottom: layoutEditing ? Math.max(84, layoutPanelHeight + 24) : 84,
+    transition: "bottom 320ms cubic-bezier(0.22, 1, 0.36, 1)",
   };
+
+  // Keep the layout controls reachable while preserving the alert count.
+  const ttrIsCollapsed = layoutEditing || ttrCollapsed;
 
   const ttrContainerStyle = {
     borderRadius: 12,
@@ -216,13 +225,18 @@ export default function LiveAlertStack({ alerts, ttrCollapsed = false, onToggleT
       {ttrTotal ? (
         <div style={ttrShellStyle} aria-live="polite" aria-atomic="false">
           <section style={ttrContainerStyle}>
-            <button type="button" onClick={onToggleTtrCollapsed} style={ttrHeaderButtonStyle} aria-expanded={!ttrCollapsed}>
+            <button
+              type="button"
+              onClick={layoutEditing ? undefined : onToggleTtrCollapsed}
+              style={{ ...ttrHeaderButtonStyle, cursor: layoutEditing ? "default" : "pointer" }}
+              aria-expanded={!ttrIsCollapsed}
+            >
               <span style={ttrBadgeStyle}>TTR</span>
               <span>Incident TTR alerts</span>
               <strong style={{ marginLeft: "auto", fontSize: 12 }}>{ttrTotal}</strong>
-              <span aria-hidden="true" style={{ fontSize: 16, lineHeight: 1 }}>{ttrCollapsed ? "▸" : "▾"}</span>
+              <span aria-hidden="true" style={{ fontSize: 16, lineHeight: 1 }}>{ttrIsCollapsed ? "▸" : "▾"}</span>
             </button>
-            {!ttrCollapsed ? (
+            {!ttrIsCollapsed ? (
               <div style={{ display: "grid", gap: 10, padding: "0 0 10px" }}>
                 {ttrWarningItems.length ? (
                   <div style={{ paddingInline: 10 }}>
@@ -255,24 +269,6 @@ export default function LiveAlertStack({ alerts, ttrCollapsed = false, onToggleT
                         borderColor: "rgba(8, 47, 73, 0.55)",
                         background: "linear-gradient(135deg, #0f766e, #0f172a)",
                         color: "#ccfbf1",
-                      }}
-                    />
-                  </div>
-                ) : null}
-
-                {ttrOverdueItems.length ? (
-                  <div style={{ paddingInline: 10 }}>
-                    <AlertSection
-                      badge="TTR X"
-                      title="Incident TTR verlopen"
-                      count={ttrOverdueItems.length}
-                      items={ttrOverdueItems}
-                      itemKeyPrefix="ttr-overdue"
-                      valueLabel={(item) => `${Math.max(0, Number(item.minutes_overdue) || 0)} min te laat`}
-                      palette={{
-                        borderColor: "rgba(30, 41, 59, 0.55)",
-                        background: "linear-gradient(135deg, #0f172a, #1e3a8a)",
-                        color: "#dbeafe",
                       }}
                     />
                   </div>

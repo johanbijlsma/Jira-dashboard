@@ -105,6 +105,21 @@ DEFAULT_NON_SERVICEDESK_ONDERWERPEN = {
     "Migratie",
 }
 DEFAULT_NON_SERVICEDESK_ONDERWERPEN_LOWER = {value.lower() for value in DEFAULT_NON_SERVICEDESK_ONDERWERPEN}
+IN_PROGRESS_EXCLUDED_ONDERWERPEN_LOWER = {
+    "koppelingen",
+    "migratie",
+    "sso-koppeling",
+    "rest-endpoints",
+    "datadump",
+}
+NEW_MELDING_EXCLUDED_ONDERWERPEN_LOWER = {
+    "koppelingen",
+    "migratie",
+    "sso-koppeling",
+    "uwv-koppeling",
+    "rest-endpoints",
+    "datadump",
+}
 DEFAULT_AI_INSIGHT_THRESHOLD_PCT = 75
 MAX_ACTIVE_AI_INSIGHTS = 3
 AI_INSIGHT_TTL_HOURS = 8
@@ -906,6 +921,7 @@ def ensure_schema():  # pragma: no cover
               alert_logs_cleared_at_servicedesk timestamptz,
               alert_logs_cleared_at_all timestamptz,
               servicedesk_onderwerpen_customized boolean not null default false,
+              shared_layout jsonb,
               updated_at timestamptz not null default now()
             );
             """
@@ -1058,6 +1074,7 @@ def ensure_schema():  # pragma: no cover
         cur.execute("alter table dashboard_config add column if not exists alert_logs_cleared_at_servicedesk timestamptz;")
         cur.execute("alter table dashboard_config add column if not exists alert_logs_cleared_at_all timestamptz;")
         cur.execute("alter table dashboard_config add column if not exists servicedesk_onderwerpen_customized boolean not null default false;")
+        cur.execute("alter table dashboard_config add column if not exists shared_layout jsonb;")
         cur.execute("alter table dashboard_config add column if not exists updated_at timestamptz not null default now();")
         cur.execute("alter table ai_insights_log add column if not exists insight_key text;")
         cur.execute("alter table ai_insights_log add column if not exists scope_key text not null default '';")
@@ -1216,6 +1233,10 @@ class SaasReleaseConfigPayload(BaseModel):
     slot: str
     release_date: Optional[str] = None
     cancelled: bool = False
+
+
+class DashboardLayoutPayload(BaseModel):
+    layout: Dict[str, Any]
 
 
 class InsightFeedbackPayload(BaseModel):
@@ -3556,6 +3577,38 @@ def update_servicedesk_config(payload: ServicedeskConfigPayload):
     return get_servicedesk_config()
 
 
+@app.get("/config/dashboard-layout")
+def get_shared_dashboard_layout():
+    """Return the layout shared with everyone, if one has been saved."""
+    ensure_schema()
+    with conn() as c, c.cursor() as cur:
+        cur.execute("insert into dashboard_config(id) values (1) on conflict (id) do nothing;")
+        cur.execute("select shared_layout from dashboard_config where id = 1;")
+        row = cur.fetchone() or (None,)
+    return {"layout": row[0] if row else None}
+
+
+@app.put("/config/dashboard-layout")
+def update_shared_dashboard_layout(payload: DashboardLayoutPayload):
+    """Save a dashboard layout that is available to every dashboard user."""
+    ensure_schema()
+    if not isinstance(payload.layout, dict):
+        raise HTTPException(status_code=400, detail="De dashboardindeling is ongeldig.")
+    with conn() as c, c.cursor() as cur:
+        cur.execute("insert into dashboard_config(id) values (1) on conflict (id) do nothing;")
+        cur.execute(
+            """
+            update dashboard_config
+            set shared_layout = %s,
+                updated_at = now()
+            where id = 1;
+            """,
+            (Json(payload.layout),),
+        )
+        c.commit()
+    return {"layout": payload.layout}
+
+
 @app.put("/config/saas-releases")
 def update_saas_release_config(payload: SaasReleaseConfigPayload):
     ensure_schema()
@@ -4220,6 +4273,48 @@ def current_week_flow(
         "previous_week_start": windows["previous_week_start"].isoformat(),
         "previous_cutoff": windows["previous_cutoff"].isoformat(),
     }
+
+
+@app.get("/metrics/in_progress_count")
+def in_progress_count():
+    """Current count matching the dashboard's Jira 'In behandeling' KPI."""
+    ensure_schema()
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            select count(*)
+            from issues
+            where issue_key like 'SD-%%'
+              and current_status = 'In behandeling'
+              and lower(coalesce(onderwerp_logging, '')) <> all(%s::text[])
+            """,
+            (list(IN_PROGRESS_EXCLUDED_ONDERWERPEN_LOWER),),
+        )
+        row = cur.fetchone() or (0,)
+    return {"count": int(row[0] or 0)}
+
+
+@app.get("/metrics/new_melding_count")
+def new_melding_count():
+    """Current count matching the dashboard's Jira 'Nieuwe melding' KPI."""
+    ensure_schema()
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            select count(*)
+            from issues
+            where issue_key like 'SD-%%'
+              and current_status = 'Nieuwe melding'
+              and (
+                onderwerp_logging is null
+                or btrim(onderwerp_logging) = ''
+                or lower(btrim(onderwerp_logging)) <> all(%s::text[])
+              )
+            """,
+            (list(NEW_MELDING_EXCLUDED_ONDERWERPEN_LOWER),),
+        )
+        row = cur.fetchone() or (0,)
+    return {"count": int(row[0] or 0)}
 
 
 @app.get("/metrics/volume_by_priority")

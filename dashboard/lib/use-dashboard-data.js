@@ -60,6 +60,8 @@ export function useDashboardData({
   const [releaseFollowupWorkload, setReleaseFollowupWorkload] = useState([]);
   const [currentWeekFlow, setCurrentWeekFlow] = useState(null);
   const [currentWeekFlowRefreshedAt, setCurrentWeekFlowRefreshedAt] = useState("");
+  const [inProgressCount, setInProgressCount] = useState(0);
+  const [newMeldingCount, setNewMeldingCount] = useState(0);
 
   const buildMetricParams = useCallback(() => {
     const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
@@ -148,6 +150,14 @@ export function useDashboardData({
 
     refreshCurrentWeekFlow();
 
+    fetchJson(`${API}/metrics/in_progress_count`)
+      .then((data) => setInProgressCount(Math.max(0, Number(data?.count) || 0)))
+      .catch(() => setInProgressCount(0));
+
+    fetchJson(`${API}/metrics/new_melding_count`)
+      .then((data) => setNewMeldingCount(Math.max(0, Number(data?.count) || 0)))
+      .catch(() => setNewMeldingCount(0));
+
     if (!p90Period.hasData) {
       setP90([]);
     } else {
@@ -203,6 +213,8 @@ export function useDashboardData({
     releaseFollowupWorkload,
     currentWeekFlow,
     currentWeekFlowRefreshedAt,
+    inProgressCount,
+    newMeldingCount,
     refreshDashboard,
   };
 }

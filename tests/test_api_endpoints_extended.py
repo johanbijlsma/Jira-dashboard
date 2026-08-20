@@ -138,6 +138,28 @@ def test_update_servicedesk_config_success(monkeypatch):
     assert response.json()["ai_insight_threshold_pct"] == 82
 
 
+def test_shared_dashboard_layout_endpoints_read_and_write_layout(monkeypatch):
+    layout = {"kpis": ["volume"], "rows": [["volume"]], "hiddenCards": [], "chartSettings": {}}
+    read_cursor = _CursorStub(fetchone_values=[(layout,)])
+    _patch_conn(monkeypatch, read_cursor)
+
+    response = client.get("/config/dashboard-layout")
+
+    assert response.status_code == 200
+    assert response.json() == {"layout": layout}
+    assert "select shared_layout" in _query_text(read_cursor.executed[-1][0]).lower()
+
+    write_cursor = _CursorStub()
+    _patch_conn(monkeypatch, write_cursor)
+    response = client.put("/config/dashboard-layout", json={"layout": layout})
+
+    assert response.status_code == 200
+    assert response.json() == {"layout": layout}
+    update_query, update_params = write_cursor.executed[-1]
+    assert "set shared_layout = %s" in _query_text(update_query).lower()
+    assert update_params[0].adapted == layout
+
+
 def test_update_saas_release_config_persists_override_and_refreshes(monkeypatch):
     cursor = _CursorStub()
     _patch_conn(monkeypatch, cursor)
@@ -686,6 +708,50 @@ def test_metrics_current_week_flow_maps_row(monkeypatch):
     assert response.status_code == 200
     assert response.json()["current_received"] == 8
     assert response.json()["previous_closed"] == 2
+
+
+def test_metrics_in_progress_count_excludes_configured_onderwerpen(monkeypatch):
+    cursor = _CursorStub(fetchone_values=[(7,)])
+    _patch_conn(monkeypatch, cursor)
+
+    response = client.get("/metrics/in_progress_count")
+
+    assert response.status_code == 200
+    assert response.json() == {"count": 7}
+    query, params = cursor.executed[0]
+    assert "issue_key like 'SD-%%'" in query
+    assert "current_status = 'In behandeling'" in query
+    assert "onderwerp_logging" in query
+    assert set(params[0]) == {
+        "koppelingen",
+        "migratie",
+        "sso-koppeling",
+        "rest-endpoints",
+        "datadump",
+    }
+
+
+def test_metrics_new_melding_count_allows_empty_and_excludes_configured_onderwerpen(monkeypatch):
+    cursor = _CursorStub(fetchone_values=[(6,)])
+    _patch_conn(monkeypatch, cursor)
+
+    response = client.get("/metrics/new_melding_count")
+
+    assert response.status_code == 200
+    assert response.json() == {"count": 6}
+    query, params = cursor.executed[0]
+    assert "issue_key like 'SD-%%'" in query
+    assert "current_status = 'Nieuwe melding'" in query
+    assert "onderwerp_logging is null" in query
+    assert "btrim(onderwerp_logging) = ''" in query
+    assert set(params[0]) == {
+        "koppelingen",
+        "migratie",
+        "sso-koppeling",
+        "uwv-koppeling",
+        "rest-endpoints",
+        "datadump",
+    }
 
 
 def test_metrics_volume_by_priority_maps_rows(monkeypatch):

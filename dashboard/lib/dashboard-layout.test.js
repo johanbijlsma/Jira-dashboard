@@ -20,12 +20,13 @@ describe("dashboard-layout", () => {
       kpiRow: ["totalTickets", "latestTickets", "currentWeekFlow", "releaseWednesdayWorkload", "ttfrOverdue", "topType", "topSubject", "topPartner"],
       hiddenKpis: [],
       cardRows: [
-        ["volume", "onderwerp", "inflowVsClosed"],
+        ["volume", "onderwerp", "inflowVsClosed", "ttrOverdue"],
         ["assignee", "priority", "organizationWeekly", "incidentResolution", "vacationServicedesk"],
       ],
       hiddenCards: ["topOnderwerpen", "releaseWorkload", "p90", "firstResponseAll"],
       expandedByRow: ["onderwerp", null],
       lockedCards: ["volume", "organizationWeekly", "onderwerp", "vacationServicedesk"],
+      chartSettings: {},
     });
   });
 
@@ -91,6 +92,21 @@ describe("dashboard-layout", () => {
   it("keeps explicit AI-card visibility setting", () => {
     const normalized = normalizeDashboardLayout({ showAiCards: false });
     expect(normalized.showAiCards).toBe(false);
+  });
+
+  it("keeps only supported chart settings", () => {
+    const normalized = normalizeDashboardLayout({
+      chartSettings: {
+        volume: { legend: true, total: false, movingAverage: false, unexpected: true },
+        priority: { legend: true, total: false },
+        missing: { legend: false },
+      },
+    });
+
+    expect(normalized.chartSettings).toEqual({
+      volume: { legend: true, total: false, movingAverage: false },
+      priority: { legend: true },
+    });
   });
 
   it("moves and hides kpis", () => {
