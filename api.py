@@ -2830,7 +2830,7 @@ def jira_search(jql: str, max_results: int = 100, next_page_token: Optional[str]
     r = _jira.post(f"{JIRA_API_BASE}/rest/api/3/search/jql", json=payload, timeout=60)
     if r.status_code in {401, 403, 501}:
         _jira_token_api_error = {"status_code": r.status_code, "message": "Jira weigert de token; synchronisatie en live gegevens kunnen niet worden bijgewerkt."}
-    elif r.ok:
+    elif 200 <= r.status_code < 400:
         _jira_token_api_error = None
 
     # Rate limit handling
