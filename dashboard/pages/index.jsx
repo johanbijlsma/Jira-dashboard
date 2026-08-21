@@ -5186,7 +5186,7 @@ export default function Home() {
         ),
       },
     }),
-    [inProgressCount, kpiStats, liveKpiItems, liveKpiUpdateLabel, newMeldingCount, openReleaseWorkloadDrilldown, releaseStatusBadge, releaseStatusNote]
+    [kpiStats, liveKpiItems, liveKpiUpdateLabel, openReleaseWorkloadDrilldown, releaseStatusBadge, releaseStatusNote]
   );
 
   const visibleKpiKeys = dashboardLayout.kpiRow;
