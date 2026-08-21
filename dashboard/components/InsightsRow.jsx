@@ -36,7 +36,7 @@ function toneStyles(tone = "default") {
 /**
  * @param {{ cards: InsightCard[]; isTvMode?: boolean }} props
  */
-export default function InsightsRow({ cards, isTvMode = false }) {
+export default function InsightsRow({ cards, isTvMode = false, isLayoutEditing = false, onHide }) {
   const rowStyle = {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
@@ -47,7 +47,7 @@ export default function InsightsRow({ cards, isTvMode = false }) {
 
   return (
     <div style={rowStyle} aria-label="Dashboard inzichten">
-      {cards.map((card) => {
+      {cards.length ? cards.map((card) => {
         const tone = toneStyles(card.tone);
         return (
           <section
@@ -68,7 +68,7 @@ export default function InsightsRow({ cards, isTvMode = false }) {
               <div id={`insight-${card.id}`} style={{ fontSize: 12, color: "var(--text-muted)" }}>
                 {card.title}
               </div>
-              <span
+              {isLayoutEditing ? <button type="button" onClick={() => onHide?.(card.id)} style={{ border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", color: "var(--text-muted)", cursor: "pointer" }} title="Verberg trendkaart">×</button> : <span
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
@@ -81,7 +81,7 @@ export default function InsightsRow({ cards, isTvMode = false }) {
                 }}
               >
                 Insight
-              </span>
+              </span>}
             </div>
             <div style={{ fontSize: 18, fontWeight: 700, lineHeight: 1.15, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {card.primary}
@@ -96,7 +96,7 @@ export default function InsightsRow({ cards, isTvMode = false }) {
             ) : null}
           </section>
         );
-      })}
+      }) : <div style={{ gridColumn: "1 / -1", padding: 12, color: "var(--text-muted)", border: "1px dashed var(--border)", borderRadius: 10 }}>Alle trendkaarten zijn verborgen. De trendrij blijft gereserveerd in de layout.</div>}
     </div>
   );
 }

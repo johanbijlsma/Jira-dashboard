@@ -6,8 +6,21 @@ import psycopg2
 import requests
 
 JIRA_BASE = os.environ.get("JIRA_BASE", "https://planningsagenda.atlassian.net").rstrip("/")
-JIRA_EMAIL = os.environ["JIRA_EMAIL"]
+JIRA_EMAIL = os.environ.get("JIRA_EMAIL")
 JIRA_TOKEN = os.environ["JIRA_TOKEN"]
+JIRA_AUTH_MODE = os.environ.get("JIRA_AUTH_MODE", "basic").strip().lower()
+JIRA_CLOUD_ID = os.environ.get("JIRA_CLOUD_ID", "").strip()
+if JIRA_AUTH_MODE not in {"basic", "service_account"}:
+    raise RuntimeError("JIRA_AUTH_MODE must be 'basic' or 'service_account'")
+if JIRA_AUTH_MODE == "service_account" and not JIRA_CLOUD_ID:
+    raise RuntimeError("JIRA_CLOUD_ID is required for JIRA_AUTH_MODE=service_account")
+if JIRA_AUTH_MODE == "basic" and not JIRA_EMAIL:
+    raise RuntimeError("JIRA_EMAIL is required for JIRA_AUTH_MODE=basic")
+JIRA_API_BASE = (
+    f"https://api.atlassian.com/ex/jira/{JIRA_CLOUD_ID}"
+    if JIRA_AUTH_MODE == "service_account"
+    else JIRA_BASE
+)
 
 PROJECT_KEY = os.environ.get("JIRA_PROJECT", "SD")
 JQL = os.environ.get("JQL", f'project = {PROJECT_KEY} AND "cf[10010]" is not EMPTY ORDER BY created ASC')
@@ -32,7 +45,10 @@ def conn():
     )
 
 s = requests.Session()
-s.auth = (JIRA_EMAIL, JIRA_TOKEN)
+if JIRA_AUTH_MODE == "service_account":
+    s.headers.update({"Authorization": f"Bearer {JIRA_TOKEN}"})
+else:
+    s.auth = (JIRA_EMAIL, JIRA_TOKEN)
 s.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
 
 def api_search(next_page_token=None):
@@ -59,7 +75,7 @@ def api_search(next_page_token=None):
     if next_page_token:
         payload["nextPageToken"] = next_page_token
 
-    r = s.post(f"{JIRA_BASE}/rest/api/3/search/jql", data=json.dumps(payload), timeout=60)
+    r = s.post(f"{JIRA_API_BASE}/rest/api/3/search/jql", data=json.dumps(payload), timeout=60)
     if r.status_code == 429:
         retry = int(r.headers.get("Retry-After", "5"))
         time.sleep(retry)

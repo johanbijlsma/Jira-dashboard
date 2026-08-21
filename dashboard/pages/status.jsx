@@ -19,6 +19,11 @@ function fmtDateTime(value) {
   }).format(dt);
 }
 
+function fmtDate(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? `${match[3]}-${match[2]}-${match[1]}` : "—";
+}
+
 function num(value) {
   if (value == null || Number.isNaN(Number(value))) return "—";
   return new Intl.NumberFormat("nl-NL").format(Number(value));
@@ -47,6 +52,7 @@ export default function StatusPage() {
   const [actionMessage, setActionMessage] = useState("");
   const [actionPulse, setActionPulse] = useState(0);
   const [testAlertKeys, setTestAlertKeys] = useState([]);
+  const [tokenWarning, setTokenWarning] = useState(null);
   const [selectedRunIndex, setSelectedRunIndex] = useState(0);
 
   const fetchStatus = useCallback(async () => {
@@ -71,6 +77,15 @@ export default function StatusPage() {
       setTestAlertKeys(Array.isArray(data?.keys) ? data.keys : []);
     } catch {
       // Ignore in non-dev environments.
+    }
+  }, []);
+
+  const fetchTokenWarning = useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/config/jira-token-warning`);
+      if (r.ok) setTokenWarning(await r.json());
+    } catch {
+      // Tokenstatus is aanvullend op de backendstatus.
     }
   }, []);
 
@@ -127,27 +142,54 @@ export default function StatusPage() {
     }
   }, [fetchStatus, fetchTestAlertState]);
 
+  const triggerTokenWarning = useCallback(async (scenario = "renewal") => {
+    try {
+      setActionBusy("token-warning");
+      const r = await fetch(`${API}/dev/jira-token-warning/trigger?scenario=${encodeURIComponent(scenario)}`, { method: "POST" });
+      if (!r.ok) throw new Error(`Test tokenwaarschuwing mislukt (${r.status})`);
+      setActionMessage("Testwaarschuwing voor de Jira-token is gezet.");
+      await fetchTokenWarning();
+    } catch (err) {
+      setActionMessage(err?.message || "Test tokenwaarschuwing mislukt.");
+    } finally {
+      setActionBusy("");
+    }
+  }, [fetchTokenWarning]);
+
+  const clearTokenTest = useCallback(async () => {
+    try {
+      setActionBusy("token-warning-clear");
+      await fetch(`${API}/dev/jira-token-warning/clear`, { method: "POST" });
+      await fetchTokenWarning();
+    } finally {
+      setActionBusy("");
+    }
+  }, [fetchTokenWarning]);
+
   useEffect(() => {
     fetchStatus();
     fetchTestAlertState();
-  }, [fetchStatus, fetchTestAlertState]);
+    fetchTokenWarning();
+  }, [fetchStatus, fetchTestAlertState, fetchTokenWarning]);
 
   useEffect(() => {
     if (!wasPageVisibleRef.current && isPageVisible) {
       fetchStatus();
       fetchTestAlertState();
+      fetchTokenWarning();
     }
     wasPageVisibleRef.current = isPageVisible;
-  }, [fetchStatus, fetchTestAlertState, isPageVisible]);
+  }, [fetchStatus, fetchTestAlertState, fetchTokenWarning, isPageVisible]);
 
   useEffect(() => {
     const intervalMs = isPageVisible ? (status?.running ? 3000 : 15000) : 60000;
     const timer = window.setInterval(() => {
       fetchStatus();
       fetchTestAlertState();
+      fetchTokenWarning();
     }, intervalMs);
     return () => window.clearInterval(timer);
-  }, [fetchStatus, fetchTestAlertState, isPageVisible, status?.running]);
+  }, [fetchStatus, fetchTestAlertState, fetchTokenWarning, isPageVisible, status?.running]);
 
   const recentRuns = useMemo(
     () =>
@@ -310,24 +352,6 @@ export default function StatusPage() {
             <button type="button" onClick={fetchStatus} style={buttonStyle} disabled={loading}>
               {loading ? "Vernersen…" : "Ververs"}
             </button>
-            <button
-              type="button"
-              onClick={triggerDevAlert}
-              style={buttonStyle}
-              disabled={loading || actionBusy === "dev-alert"}
-            >
-              {actionBusy === "dev-alert" ? "Bezig…" : "Test alert"}
-            </button>
-            {testAlertKeys.length ? (
-              <button
-                type="button"
-                onClick={() => clearDevAlert(testAlertKeys[0])}
-                style={buttonStyle}
-                disabled={loading || actionBusy === "dev-alert-clear"}
-              >
-                {actionBusy === "dev-alert-clear" ? "Bezig…" : "Verwijder test"}
-              </button>
-            ) : null}
           </div>
         </div>
 
@@ -365,6 +389,14 @@ export default function StatusPage() {
             <span>Er loopt al een synchronisatie. Status wordt live bijgewerkt.</span>
           </div>
         ) : null}
+
+        <div style={cardGridStyle}>
+          <section style={cardStyle}>
+            <p style={cardTitleStyle}>Jira API-token</p>
+            <p style={cardValueStyle}>{fmtDate(tokenWarning?.expires_at)}</p>
+            <p style={cardMetaStyle}>{tokenWarning?.renewal_pending ? "Vernieuwd in Jira · wacht op Development" : "Tokenconfiguratie bevestigd"}</p>
+          </section>
+        </div>
 
         {error ? (
           <div style={{ ...cardStyle, borderColor: "var(--danger)", color: "var(--danger)" }}>
@@ -455,6 +487,16 @@ export default function StatusPage() {
             </table>
           </div>
         </section>
+      <details style={{ ...cardStyle, borderColor: "color-mix(in srgb, var(--warning) 45%, var(--border))" }}>
+        <summary style={{ cursor: "pointer", fontWeight: 700, color: "var(--text-main)" }}>Testpaneel</summary>
+        <div style={{ display: "grid", gap: 12, marginTop: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}><button type="button" onClick={() => testAlertKeys.length ? clearDevAlert(testAlertKeys[0]) : triggerDevAlert()} style={{ ...buttonStyle, ...(testAlertKeys.length ? { background: "var(--ok)", borderColor: "var(--ok)" } : null) }} disabled={actionBusy === "dev-alert" || actionBusy === "dev-alert-clear"}>{testAlertKeys.length ? "Stop test alert" : "Test alert"}</button><p style={{ ...cardMetaStyle, margin: 0 }}>Simuleer een binnenkomend priority-1-ticket, inclusief een TTFR-SLA-alert van 30 minuten.</p></div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}><button type="button" onClick={() => tokenWarning?.test_scenario === "renewal" ? clearTokenTest() : triggerTokenWarning("renewal")} style={{ ...buttonStyle, ...(tokenWarning?.test_scenario === "renewal" ? { background: "var(--ok)", borderColor: "var(--ok)" } : null) }}>{tokenWarning?.test_scenario === "renewal" ? "Stop test tokenwaarschuwing" : "Test tokenwaarschuwing"}</button><p style={{ ...cardMetaStyle, margin: 0 }}>Simuleer de eerste waarschuwing: de token verloopt binnenkort.</p></div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}><button type="button" onClick={() => tokenWarning?.test_scenario === "expired" ? clearTokenTest() : triggerTokenWarning("expired")} style={{ ...buttonStyle, ...(tokenWarning?.test_scenario === "expired" ? { background: "var(--ok)", borderColor: "var(--ok)" } : null) }}>{tokenWarning?.test_scenario === "expired" ? "Stop test verlopen token" : "Test verlopen token"}</button><p style={{ ...cardMetaStyle, margin: 0 }}>Simuleer dat de token is verlopen en Jira geen nieuwe gegevens meer kan leveren.</p></div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}><button type="button" onClick={() => tokenWarning?.test_scenario === "handoff_expired" ? clearTokenTest() : triggerTokenWarning("handoff_expired")} style={{ ...buttonStyle, ...(tokenWarning?.test_scenario === "handoff_expired" ? { background: "var(--ok)", borderColor: "var(--ok)" } : null) }}>{tokenWarning?.test_scenario === "handoff_expired" ? "Stop test verlopen tijdens overdracht" : "Test verlopen tijdens overdracht"}</button><p style={{ ...cardMetaStyle, margin: 0 }}>Simuleer dat Jira is vernieuwd, maar Development de nieuwe token niet vóór afloop heeft verwerkt.</p></div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}><button type="button" onClick={() => fetch(`${API}/dev/jira-token-warning/reset-pending`, { method: "POST" })} style={buttonStyle}>Herstel token teststatus</button><p style={{ ...cardMetaStyle, margin: 0 }}>Verwijder een achtergebleven teststatus zonder de echte vervaldatum te wijzigen.</p></div>
+        </div>
+      </details>
       </div>
 
       <style>{`

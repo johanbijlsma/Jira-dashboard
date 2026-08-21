@@ -40,25 +40,12 @@ describe("Status page", () => {
   });
 
   it("starts incremental sync from button and shows feedback", async () => {
-    global.fetch
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          running: false,
-          successful_runs: [],
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ queued: true }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          running: true,
-          successful_runs: [],
-        }),
-      });
+    global.fetch.mockImplementation((url) => {
+      if (url === "/api/sync") return Promise.resolve({ ok: true, json: async () => ({ queued: true }) });
+      if (url === "/api/dev/alerts/test-state") return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
+      if (url === "/api/config/jira-token-warning") return Promise.resolve({ ok: true, json: async () => ({}) });
+      return Promise.resolve({ ok: true, json: async () => ({ running: false, successful_runs: [] }) });
+    });
 
     render(<StatusPage />);
     const startButtons = await waitFor(() => screen.getAllByRole("button", { name: "Start sync" }));
@@ -132,25 +119,12 @@ describe("Status page", () => {
   });
 
   it("starts full sync from button and shows full-sync feedback", async () => {
-    global.fetch
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          running: false,
-          successful_runs: [],
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ queued: true, mode: "full" }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          running: true,
-          successful_runs: [],
-        }),
-      });
+    global.fetch.mockImplementation((url) => {
+      if (url === "/api/sync/full") return Promise.resolve({ ok: true, json: async () => ({ queued: true, mode: "full" }) });
+      if (url === "/api/dev/alerts/test-state") return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
+      if (url === "/api/config/jira-token-warning") return Promise.resolve({ ok: true, json: async () => ({}) });
+      return Promise.resolve({ ok: true, json: async () => ({ running: false, successful_runs: [] }) });
+    });
 
     render(<StatusPage />);
     const button = await waitFor(() => screen.getByRole("button", { name: "Start full sync" }));
@@ -244,37 +218,16 @@ describe("Status page", () => {
   });
 
   it("clears the first available dev alert and refreshes the state", async () => {
-    global.fetch
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          running: false,
-          successful_runs: [],
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ keys: ["SD-11079"] }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ cleared: true }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          running: false,
-          successful_runs: [],
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ keys: [] }),
-      });
+    global.fetch.mockImplementation((url) => {
+      if (url === "/api/dev/alerts/test-state") return Promise.resolve({ ok: true, json: async () => ({ keys: ["SD-11079"] }) });
+      if (url === "/api/dev/alerts/clear?issue_key=SD-11079") return Promise.resolve({ ok: true, json: async () => ({ cleared: true }) });
+      if (url === "/api/config/jira-token-warning") return Promise.resolve({ ok: true, json: async () => ({}) });
+      return Promise.resolve({ ok: true, json: async () => ({ running: false, successful_runs: [] }) });
+    });
 
     render(<StatusPage />);
 
-    const clearButton = await waitFor(() => screen.getByRole("button", { name: "Verwijder test" }));
+    const clearButton = await waitFor(() => screen.getByRole("button", { name: "Stop test alert" }));
     fireEvent.click(clearButton);
 
     await waitFor(() =>

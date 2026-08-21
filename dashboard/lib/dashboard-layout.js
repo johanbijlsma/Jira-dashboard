@@ -112,8 +112,9 @@ export function normalizeDashboardLayout(input) {
     result[key] = input.liveKpiSettings?.[key] !== false;
     return result;
   }, {});
+  const hiddenInsights = Array.isArray(input.hiddenInsights) ? input.hiddenInsights.filter((key) => typeof key === "string") : [];
 
-  return { showAiCards, kpiRow, hiddenKpis, cardRows, hiddenCards, expandedByRow, lockedCards, chartSettings, liveKpiSettings };
+  return { showAiCards, kpiRow, hiddenKpis, cardRows, hiddenCards, expandedByRow, lockedCards, chartSettings, liveKpiSettings, hiddenInsights };
 }
 
 export function moveKpiToVisibleLayout(prev, key, targetKey = null, position = "before") {

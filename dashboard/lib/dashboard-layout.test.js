@@ -24,6 +24,7 @@ describe("dashboard-layout", () => {
         ["assignee", "priority", "organizationWeekly", "incidentResolution", "vacationServicedesk"],
       ],
       hiddenCards: ["topOnderwerpen", "releaseWorkload", "p90", "firstResponseAll"],
+      hiddenInsights: [],
       expandedByRow: ["onderwerp", null],
       lockedCards: ["volume", "organizationWeekly", "onderwerp", "vacationServicedesk"],
       chartSettings: {},
