@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import time
 import threading
@@ -20,10 +21,26 @@ from pydantic import BaseModel
 load_dotenv()
 
 # --- Jira config ---
+# JIRA_BASE stays the human-facing Jira site URL, for issue links in the dashboard.
 JIRA_BASE = os.environ.get("JIRA_BASE", "https://planningsagenda.atlassian.net").rstrip("/")
 JIRA_EMAIL = os.environ.get("JIRA_EMAIL")
 JIRA_TOKEN = os.environ.get("JIRA_TOKEN")
 JIRA_PROJECT = os.environ.get("JIRA_PROJECT", "SD")
+JIRA_AUTH_MODE = os.environ.get("JIRA_AUTH_MODE", "basic").strip().lower()
+JIRA_CLOUD_ID = os.environ.get("JIRA_CLOUD_ID", "").strip()
+if JIRA_AUTH_MODE not in {"basic", "service_account"}:
+    raise RuntimeError("JIRA_AUTH_MODE moet 'basic' of 'service_account' zijn")
+if JIRA_AUTH_MODE == "service_account" and not JIRA_CLOUD_ID:
+    raise RuntimeError("JIRA_CLOUD_ID ontbreekt voor JIRA_AUTH_MODE=service_account")
+JIRA_API_BASE = (
+    f"https://api.atlassian.com/ex/jira/{JIRA_CLOUD_ID}"
+    if JIRA_AUTH_MODE == "service_account"
+    else JIRA_BASE
+)
+
+
+def jira_credentials_configured() -> bool:
+    return bool(JIRA_TOKEN and (JIRA_AUTH_MODE == "service_account" or JIRA_EMAIL))
 
 REQUEST_TYPE_FIELD = os.environ.get("REQUEST_TYPE_FIELD", "customfield_10010")
 ONDERWERP_FIELD = os.environ.get("ONDERWERP_FIELD", "customfield_10143")
@@ -77,7 +94,9 @@ BACKEND_CORS_ORIGIN_REGEX = os.environ.get(
 )
 
 _jira = requests.Session()
-if JIRA_EMAIL and JIRA_TOKEN:
+if JIRA_AUTH_MODE == "service_account" and JIRA_TOKEN:
+    _jira.headers.update({"Authorization": f"Bearer {JIRA_TOKEN}"})
+elif JIRA_EMAIL and JIRA_TOKEN:
     _jira.auth = (JIRA_EMAIL, JIRA_TOKEN)
 _jira.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
 
@@ -92,6 +111,10 @@ _issue_existence_cache_ttl_seconds = 60
 _last_alert_log_cleanup_at = 0.0
 _auto_sync_scheduler_started = False
 _auto_sync_scheduler_lock = threading.Lock()
+_dev_jira_token_warning = False
+_dev_jira_token_warning_pending_until = 0.0
+_dev_jira_token_warning_variant = ""
+_jira_token_api_error = None
 _sync_status_cache_payload = None
 _sync_status_cache_checked_at = 0.0
 DEV_ALERT_ISSUE_KEY = "DEV-ALERT-TEST"
@@ -922,6 +945,10 @@ def ensure_schema():  # pragma: no cover
               alert_logs_cleared_at_all timestamptz,
               servicedesk_onderwerpen_customized boolean not null default false,
               shared_layout jsonb,
+              jira_token_expires_at date,
+              jira_token_fingerprint text,
+              jira_token_renewal_pending boolean not null default false,
+              jira_token_previous_expires_at date,
               updated_at timestamptz not null default now()
             );
             """
@@ -1024,6 +1051,10 @@ def ensure_schema():  # pragma: no cover
         cur.execute("alter table issues add column if not exists assignee text;")
         cur.execute("alter table issues add column if not exists assignee_avatar_url text;")
         cur.execute("alter table issues add column if not exists current_status text;")
+        cur.execute("alter table dashboard_config add column if not exists jira_token_expires_at date;")
+        cur.execute("alter table dashboard_config add column if not exists jira_token_fingerprint text;")
+        cur.execute("alter table dashboard_config add column if not exists jira_token_renewal_pending boolean not null default false;")
+        cur.execute("alter table dashboard_config add column if not exists jira_token_previous_expires_at date;")
         cur.execute("alter table issues add column if not exists first_response_due_at timestamptz;")
         cur.execute("alter table issues add column if not exists time_to_resolution_due_at timestamptz;")
         cur.execute("create index if not exists issues_created_at_idx on issues(created_at desc);")
@@ -1140,6 +1171,9 @@ def ensure_schema():  # pragma: no cover
 
 def _seed_servicedesk_config_defaults(cur):
     cur.execute("insert into dashboard_config(id) values (1) on conflict (id) do nothing;")
+    cur.execute("update dashboard_config set jira_token_expires_at = current_date + interval '365 days' where id = 1 and jira_token_expires_at is null;")
+    if JIRA_TOKEN:
+        cur.execute("update dashboard_config set jira_token_fingerprint = %s where id = 1 and jira_token_fingerprint is null;", (hashlib.sha256(JIRA_TOKEN.encode()).hexdigest(),))
     cur.execute(
         """
         update dashboard_config
@@ -1242,6 +1276,10 @@ class DashboardLayoutPayload(BaseModel):
 class InsightFeedbackPayload(BaseModel):
     vote: str
     reason: Optional[str] = None
+
+
+class JiraTokenRenewalPayload(BaseModel):
+    confirmed: bool = False
 
 
 def _normalize_text_list(values):
@@ -2764,6 +2802,7 @@ def get_sync_status_payload():
 
 
 def jira_search(jql: str, max_results: int = 100, next_page_token: Optional[str] = None):
+    global _jira_token_api_error
     fields = [
         "key",
         "summary",
@@ -2788,7 +2827,11 @@ def jira_search(jql: str, max_results: int = 100, next_page_token: Optional[str]
     if next_page_token:
         payload["nextPageToken"] = next_page_token
 
-    r = _jira.post(f"{JIRA_BASE}/rest/api/3/search/jql", json=payload, timeout=60)
+    r = _jira.post(f"{JIRA_API_BASE}/rest/api/3/search/jql", json=payload, timeout=60)
+    if r.status_code in {401, 403, 501}:
+        _jira_token_api_error = {"status_code": r.status_code, "message": "Jira weigert de token; synchronisatie en live gegevens kunnen niet worden bijgewerkt."}
+    elif r.ok:
+        _jira_token_api_error = None
 
     # Rate limit handling
     if r.status_code == 429:
@@ -2801,7 +2844,7 @@ def jira_search(jql: str, max_results: int = 100, next_page_token: Optional[str]
 
 
 def jira_agile_get(path: str, params: Optional[Dict[str, Any]] = None):
-    r = _jira.get(f"{JIRA_BASE}{path}", params=params or {}, timeout=60)
+    r = _jira.get(f"{JIRA_API_BASE}{path}", params=params or {}, timeout=60)
     if r.status_code == 429:
         retry = int(r.headers.get("Retry-After", "5"))
         time.sleep(retry)
@@ -3238,7 +3281,7 @@ def _jira_existing_issue_keys(keys):
     unique_keys = [k for k in dict.fromkeys(keys) if k]
     if not unique_keys:
         return set()
-    if not (JIRA_EMAIL and JIRA_TOKEN):
+    if not jira_credentials_configured():
         return set(unique_keys)
 
     now_ts = time.time()
@@ -3370,8 +3413,8 @@ def run_sync_once(full: bool = False, trigger_type: str = "manual"):
     global _sync_running, _sync_last_error, _sync_last_run, _sync_last_result
     global _sync_status_cache_payload, _sync_status_cache_checked_at
 
-    if not (JIRA_EMAIL and JIRA_TOKEN):
-        raise RuntimeError("JIRA_EMAIL/JIRA_TOKEN ontbreken in .env")
+    if not jira_credentials_configured():
+        raise RuntimeError("Jira-credentials ontbreken in .env")
     ensure_schema()
 
     with _sync_lock:
@@ -3566,6 +3609,93 @@ def meta():
 @app.get("/config/servicedesk")
 def servicedesk_config():
     return get_servicedesk_config()
+
+
+def _jira_token_warning_payload():
+    global _dev_jira_token_warning_pending_until
+    ensure_schema()
+    with conn() as c, c.cursor() as cur:
+        _seed_servicedesk_config_defaults(cur)
+        cur.execute("select jira_token_expires_at, jira_token_fingerprint, jira_token_renewal_pending, jira_token_previous_expires_at from dashboard_config where id = 1;")
+        row = cur.fetchone() or (None, None, False, None)
+    test_pending = _dev_jira_token_warning_pending_until > time.time()
+    if _dev_jira_token_warning_pending_until and not test_pending:
+        _dev_jira_token_warning_pending_until = 0.0
+    expires_at = row[0]
+    renewal_pending = bool(row[2])
+    if renewal_pending and JIRA_TOKEN and hashlib.sha256(JIRA_TOKEN.encode()).hexdigest() != row[1]:
+        try:
+            jira_search(f"project = {JIRA_PROJECT} ORDER BY updated DESC", max_results=1)
+            with conn() as c, c.cursor() as cur:
+                cur.execute("update dashboard_config set jira_token_fingerprint = %s, jira_token_renewal_pending = false, updated_at = now() where id = 1;", (hashlib.sha256(JIRA_TOKEN.encode()).hexdigest(),))
+                c.commit()
+            renewal_pending = False
+        except requests.RequestException:
+            pass
+    days_remaining = (expires_at - date.today()).days if expires_at else None
+    previous_expired = bool(renewal_pending and row[3] and row[3] < date.today())
+    if _dev_jira_token_warning_variant == "expired":
+        expires_at, days_remaining = date.today() - timedelta(days=1), -1
+    elif _dev_jira_token_warning_variant == "handoff_expired":
+        renewal_pending, previous_expired = True, True
+    api_error = _jira_token_api_error
+    if _dev_jira_token_warning_variant in {"expired", "handoff_expired"}:
+        api_error = {"status_code": 501, "message": "Testscenario: Jira accepteert de verlopen token niet; er komt geen nieuwe data binnen."}
+    return {"expires_at": expires_at.isoformat() if expires_at else None, "days_remaining": days_remaining, "visible": bool(_dev_jira_token_warning or test_pending or renewal_pending or (days_remaining is not None and days_remaining <= 30)), "is_test": bool(_dev_jira_token_warning or test_pending or _dev_jira_token_warning_variant), "test_scenario": _dev_jira_token_warning_variant or None, "renewal_pending": bool(renewal_pending or test_pending), "previous_token_expired": previous_expired, "api_error": api_error}
+
+
+@app.get("/config/jira-token-warning")
+def jira_token_warning():
+    return _jira_token_warning_payload()
+
+
+@app.post("/config/jira-token-warning/renew")
+def renew_jira_token_warning(payload: JiraTokenRenewalPayload):
+    global _dev_jira_token_warning
+    if not payload.confirmed:
+        raise HTTPException(status_code=400, detail="Bevestig eerst dat de token is vernieuwd en doorgegeven.")
+    ensure_schema()
+    with conn() as c, c.cursor() as cur:
+        cur.execute("update dashboard_config set jira_token_previous_expires_at = jira_token_expires_at, jira_token_expires_at = current_date + interval '365 days', jira_token_renewal_pending = true, updated_at = now() where id = 1;")
+        c.commit()
+    _dev_jira_token_warning = False
+    return _jira_token_warning_payload()
+
+
+@app.post("/dev/jira-token-warning/trigger")
+def trigger_dev_jira_token_warning(scenario: str = "renewal"):
+    global _dev_jira_token_warning, _dev_jira_token_warning_pending_until, _dev_jira_token_warning_variant
+    _dev_jira_token_warning = True
+    _dev_jira_token_warning_pending_until = 0.0
+    _dev_jira_token_warning_variant = scenario if scenario in {"renewal", "expired", "handoff_expired"} else "renewal"
+    return _jira_token_warning_payload()
+
+
+@app.post("/dev/jira-token-warning/advance")
+def advance_dev_jira_token_warning():
+    global _dev_jira_token_warning, _dev_jira_token_warning_pending_until
+    _dev_jira_token_warning = False
+    _dev_jira_token_warning_pending_until = time.time() + 12
+    return _jira_token_warning_payload()
+
+
+@app.post("/dev/jira-token-warning/clear")
+def clear_dev_jira_token_warning():
+    global _dev_jira_token_warning, _dev_jira_token_warning_pending_until, _dev_jira_token_warning_variant
+    _dev_jira_token_warning = False
+    _dev_jira_token_warning_pending_until = 0.0
+    _dev_jira_token_warning_variant = ""
+    return _jira_token_warning_payload()
+
+
+@app.post("/dev/jira-token-warning/reset-pending")
+def reset_dev_jira_token_warning_pending():
+    """Development-only recovery for a token-warning test that was persisted before validation."""
+    ensure_schema()
+    with conn() as c, c.cursor() as cur:
+        cur.execute("update dashboard_config set jira_token_renewal_pending = false, jira_token_previous_expires_at = null, updated_at = now() where id = 1;")
+        c.commit()
+    return _jira_token_warning_payload()
 
 
 @app.put("/config/servicedesk")

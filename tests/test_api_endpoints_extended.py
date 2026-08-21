@@ -565,7 +565,7 @@ def test_seed_servicedesk_config_defaults_updates_dashboard_config(monkeypatch):
 
     executed_queries = [query.lower() for query, _ in cursor.executed]
     assert any("insert into dashboard_config" in query for query in executed_queries)
-    assert sum("update dashboard_config" in query for query in executed_queries) == 2
+    assert sum("update dashboard_config" in query for query in executed_queries) == 4
 
 
 def test_metrics_inflow_vs_closed_maps_rows(monkeypatch):

@@ -65,6 +65,7 @@ import { legendNoopHandler, setupChartDefaults } from "../lib/chart-setup";
 import EmptyChartState from "../components/EmptyChartState";
 import Head from "next/head";
 import InsightsRow from "../components/InsightsRow";
+import JiraTokenExpiryWarning from "../components/JiraTokenExpiryWarning";
 import Link from "next/link";
 import LiveAlertStack from "../components/LiveAlertStack";
 import TopicTrendsCard from "../components/TopicTrendsCard";
@@ -286,6 +287,8 @@ function formatNumberOrDash(value) {
 
 const WEEKLY_INSIGHTS_GROUP_KEY = "__weekly_insights__";
 const DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY = "jsm_dashboard_layout_scope_v1";
+const DASHBOARD_THEME_STORAGE_KEY = "jsm_dashboard_theme_preference_v1";
+const THEME_PREFERENCES = new Set(["system", "light", "dark"]);
 
 function resolveCssVarColor(name, fallback) {
   if (typeof window === "undefined" || typeof document === "undefined") return fallback;
@@ -295,6 +298,16 @@ function resolveCssVarColor(name, fallback) {
 
 export default function Home() {
   const [chartThemeKey, setChartThemeKey] = useState("init");
+  const [themePreference, setThemePreference] = useState(() => {
+    if (typeof window === "undefined") return "system";
+    try {
+      const storedPreference = window.localStorage.getItem(DASHBOARD_THEME_STORAGE_KEY);
+      return THEME_PREFERENCES.has(storedPreference) ? storedPreference : "system";
+    } catch {
+      return "system";
+    }
+  });
+  const [themePreferenceDraft, setThemePreferenceDraft] = useState("system");
   const today = useMemo(() => new Date(), []);
   const defaultFrom = useMemo(() => {
     const d = new Date();
@@ -410,6 +423,7 @@ export default function Home() {
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
   const [topOnderwerpSort, setTopOnderwerpSort] = useState("wow");
   const [isTvMode, setIsTvMode] = useState(false);
+  const [tvModeDraft, setTvModeDraft] = useState(false);
   const autoSyncAttemptRef = useRef(0);
   const autoResetTimerRef = useRef(null);
   const seenLiveAlertKeysRef = useRef(new Set());
@@ -473,8 +487,8 @@ export default function Home() {
   const normalizeDashboardLayout = useCallback((input) => normalizeDashboardLayoutState(input), []);
 
   const layoutDirty = useMemo(
-    () => layoutSavedSnapshot !== JSON.stringify(dashboardLayout),
-    [layoutSavedSnapshot, dashboardLayout]
+    () => layoutSavedSnapshot !== JSON.stringify(dashboardLayout) || themePreferenceDraft !== themePreference || tvModeDraft !== isTvMode,
+    [isTvMode, layoutSavedSnapshot, dashboardLayout, themePreference, themePreferenceDraft, tvModeDraft]
   );
 
   const chartSettingsFor = useCallback(
@@ -830,22 +844,32 @@ export default function Home() {
     if (showToast) flashToast("Filters en datumrange gereset (laatste maand)");
   }, [flashToast, getStandardDateRange]);
 
+  const applyTvModePreference = useCallback((next) => {
+    setIsTvMode(next);
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(TV_MODE_STORAGE_KEY, next ? "1" : "0");
+      const url = new URL(window.location.href);
+      if (next) url.searchParams.set("tv", "1");
+      else url.searchParams.delete("tv");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    } catch {
+      // no-op
+    }
+  }, []);
+
   const toggleTvMode = useCallback(() => {
-    setIsTvMode((prev) => {
-      const next = !prev;
-      if (typeof window !== "undefined") {
-        try {
-          window.localStorage.setItem(TV_MODE_STORAGE_KEY, next ? "1" : "0");
-          const url = new URL(window.location.href);
-          if (next) url.searchParams.set("tv", "1");
-          else url.searchParams.delete("tv");
-          window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
-        } catch {
-          // no-op
-        }
-      }
-      return next;
-    });
+    setTvModeDraft((previous) => !previous);
+  }, []);
+
+  const applyThemePreference = useCallback((next) => {
+    setThemePreference(next);
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(DASHBOARD_THEME_STORAGE_KEY, next);
+    } catch {
+      // De gekozen weergave blijft voor deze sessie actief als localStorage niet beschikbaar is.
+    }
   }, []);
 
   const toggleTeamMemberDraft = useCallback((name) => {
@@ -1137,6 +1161,8 @@ export default function Home() {
       if (layoutStorageScope === "shared" && typeof window !== "undefined") {
         window.localStorage.removeItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY);
       }
+      applyThemePreference(themePreferenceDraft);
+      applyTvModePreference(tvModeDraft);
       setLayoutSavedSnapshot(serialized);
       setIsLayoutEditing(false);
       setOpenCardSettings("");
@@ -1146,7 +1172,7 @@ export default function Home() {
     } finally {
       setLayoutSaving(false);
     }
-  }, [dashboardLayout, flashToast, layoutStorageScope]);
+  }, [applyThemePreference, applyTvModePreference, dashboardLayout, flashToast, layoutStorageScope, themePreferenceDraft, tvModeDraft]);
 
   const startLayoutEditing = useCallback(() => {
     setVacationEditMode(false);
@@ -1156,9 +1182,11 @@ export default function Home() {
   const startLocalLayoutEditing = useCallback(() => {
     setLayoutStorageScope("local");
     setLayoutSavedSnapshot(JSON.stringify(dashboardLayout));
+    setThemePreferenceDraft(themePreference);
+    setTvModeDraft(isTvMode);
     setLayoutChoiceOpen(false);
     setIsLayoutEditing(true);
-  }, [dashboardLayout]);
+  }, [dashboardLayout, isTvMode, themePreference]);
 
   const startSharedLayoutEditing = useCallback(async () => {
     setLayoutSaving(true);
@@ -1170,6 +1198,8 @@ export default function Home() {
       const serialized = JSON.stringify(next);
       setDashboardLayout(next);
       setLayoutSavedSnapshot(serialized);
+      setThemePreferenceDraft(themePreference);
+      setTvModeDraft(isTvMode);
       setLayoutStorageScope("shared");
       setLayoutChoiceOpen(false);
       setIsLayoutEditing(true);
@@ -1178,7 +1208,7 @@ export default function Home() {
     } finally {
       setLayoutSaving(false);
     }
-  }, [dashboardLayout, flashToast, normalizeDashboardLayout]);
+  }, [dashboardLayout, flashToast, isTvMode, normalizeDashboardLayout, themePreference]);
 
   const cancelLayoutEditing = useCallback(() => {
     try {
@@ -1187,12 +1217,14 @@ export default function Home() {
     } catch {
       setDashboardLayout(normalizeDashboardLayout(createDefaultDashboardLayout()));
     }
+    setThemePreferenceDraft(themePreference);
+    setTvModeDraft(isTvMode);
     setIsLayoutEditing(false);
     setOpenCardSettings("");
     setCardDropHint(null);
     setKpiDropHint(null);
     dragStateRef.current = null;
-  }, [layoutSavedSnapshot, normalizeDashboardLayout]);
+  }, [isTvMode, layoutSavedSnapshot, normalizeDashboardLayout, themePreference]);
 
   const resetLayoutAndClose = useCallback(async () => {
     const next = normalizeDashboardLayout(createDefaultDashboardLayout());
@@ -1227,13 +1259,15 @@ export default function Home() {
       window.localStorage.removeItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY);
     }
     setLayoutSavedSnapshot(serialized);
+    setThemePreferenceDraft(themePreference);
+    setTvModeDraft(isTvMode);
     setIsLayoutEditing(false);
     setOpenCardSettings("");
     setCardDropHint(null);
     setKpiDropHint(null);
     dragStateRef.current = null;
     flashToast(layoutStorageScope === "shared" ? "Indeling voor iedereen hersteld" : "Indeling voor jou hersteld");
-  }, [flashToast, layoutSavedSnapshot, layoutStorageScope, normalizeDashboardLayout]);
+  }, [flashToast, isTvMode, layoutSavedSnapshot, layoutStorageScope, normalizeDashboardLayout, themePreference]);
 
   const { liveAlerts, refreshLiveAlerts } = useLiveAlerts({
     onRefresh: async () => {
@@ -1535,6 +1569,11 @@ export default function Home() {
   }, [refreshInsightLog, refreshLiveInsights, refreshSyncStatus, refreshDashboard]);
 
   useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.documentElement.dataset.dashboardTheme = themePreference;
+  }, [themePreference]);
+
+  useEffect(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") return undefined;
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     let frame = 0;
@@ -1564,7 +1603,7 @@ export default function Home() {
       window.cancelAnimationFrame(frame);
       media.removeListener(apply);
     };
-  }, []);
+  }, [themePreference]);
 
   useEffect(() => {
     setupChartDefaults(ChartJS);
@@ -1596,6 +1635,7 @@ export default function Home() {
       next = false;
     }
     setIsTvMode(next);
+    setTvModeDraft(next);
   }, []);
 
   useEffect(() => {
@@ -2137,6 +2177,8 @@ export default function Home() {
       })),
     });
   }, [allTopicTrendSeries, inflowVsClosedWeekly, weeks, weeklyLabels]);
+  const visibleDashboardInsights = useMemo(() => dashboardInsights.filter((card) => !(dashboardLayout.hiddenInsights || []).includes(card.id)), [dashboardInsights, dashboardLayout.hiddenInsights]);
+  const hideDashboardInsight = useCallback((insightId) => setDashboardLayout((previous) => ({ ...previous, hiddenInsights: [...new Set([...(previous.hiddenInsights || []), insightId])] })), []);
 
   const typeColor = useCallback((label) => {
     const key = String(label || "").toLowerCase();
@@ -5303,6 +5345,7 @@ export default function Home() {
         <title>Dashboard Servicedesk Twentecs</title>
         <link rel="icon" href={faviconSignal.href} />
       </Head>
+      <JiraTokenExpiryWarning />
       <Toast message={syncMessage} kind={syncMessageKind} onClose={() => setSyncMessage("")} />
       <LiveAlertStack
         alerts={liveAlerts}
@@ -5440,18 +5483,53 @@ export default function Home() {
               ) : null}
             </button>
             {isLayoutEditing ? (
-              <button type="button" onClick={cancelLayoutEditing} style={filterOpenButtonStyle}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path
-                    d="M18 6L6 18M6 6l12 12"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-                Annuleren
-              </button>
+              <>
+                <label
+                  style={{
+                    ...filterOpenButtonStyle,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 7,
+                  }}
+                >
+                  <span aria-hidden="true" style={{ fontSize: 13, lineHeight: 1 }}>
+                    {themePreferenceDraft === "dark" ? "◐" : themePreferenceDraft === "light" ? "☀" : "▣"}
+                  </span>
+                  <span style={{ fontSize: 11 }}>Weergave</span>
+                  <select
+                    value={themePreferenceDraft}
+                    onChange={(event) => setThemePreferenceDraft(event.target.value)}
+                    aria-label="Kies de weergave van het dashboard"
+                    style={{
+                      appearance: "auto",
+                      border: 0,
+                      background: "transparent",
+                      color: "var(--accent)",
+                      fontSize: 11,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      padding: 0,
+                      outline: 0,
+                    }}
+                  >
+                    <option value="system">Systeem</option>
+                    <option value="light">Licht</option>
+                    <option value="dark">Donker</option>
+                  </select>
+                </label>
+                <button type="button" onClick={cancelLayoutEditing} style={filterOpenButtonStyle}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path
+                      d="M18 6L6 18M6 6l12 12"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  Annuleren
+                </button>
+              </>
             ) : (
               <button type="button" onClick={startLayoutEditing} style={filterOpenButtonStyle}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -6156,7 +6234,7 @@ export default function Home() {
           ))}
         </div>
       ) : (
-        <InsightsRow cards={dashboardInsights} isTvMode={isTvMode} />
+        <InsightsRow cards={visibleDashboardInsights} isTvMode={isTvMode} isLayoutEditing={isLayoutEditing} onHide={hideDashboardInsight} />
       )}
 
       {showStartupSkeleton ? (
@@ -6632,7 +6710,7 @@ export default function Home() {
                     strokeLinejoin="round"
                   />
                 </svg>
-                {isTvMode ? "TV-modus uit" : "TV-modus aan"}
+                {tvModeDraft ? "TV-modus uit" : "TV-modus aan"}
               </button>
               <button type="button" onClick={resetLayoutAndClose} style={filterOpenButtonStyle} disabled={layoutSaving}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -7492,6 +7570,48 @@ export default function Home() {
             --shadow-strong: rgba(0, 0, 0, 0.55);
             --indicator-border: rgba(215, 229, 223, 0.28);
           }
+        }
+        :root[data-dashboard-theme="light"] {
+          color-scheme: light;
+          --page-bg: var(--brand-beige);
+          --surface: #fffefa;
+          --surface-muted: #fff4d8;
+          --text-main: var(--brand-dark-blue);
+          --text-subtle: #2a4d55;
+          --text-muted: #466871;
+          --text-faint: #718d90;
+          --border: #b8cdcc;
+          --border-strong: #d9e5d7;
+          --accent: var(--brand-red);
+          --danger: #a31e22;
+          --warning: #8a5c00;
+          --ok: #226044;
+          --overlay-bg: rgba(25, 44, 46, 0.58);
+          --overlay-soft: rgba(25, 44, 46, 0.36);
+          --shadow-medium: rgba(25, 44, 46, 0.14);
+          --shadow-strong: rgba(25, 44, 46, 0.28);
+          --indicator-border: rgba(25, 44, 46, 0.18);
+        }
+        :root[data-dashboard-theme="dark"] {
+          color-scheme: dark;
+          --page-bg: #102426;
+          --surface: var(--brand-dark-blue);
+          --surface-muted: #213c3f;
+          --text-main: var(--brand-beige);
+          --text-subtle: #d7e5df;
+          --text-muted: #adc4c0;
+          --text-faint: #76928e;
+          --border: #426568;
+          --border-strong: #54787a;
+          --accent: var(--brand-soft-red);
+          --danger: #ff9a8e;
+          --warning: var(--brand-yellow);
+          --ok: #83d0a5;
+          --overlay-bg: rgba(10, 25, 27, 0.76);
+          --overlay-soft: rgba(10, 25, 27, 0.58);
+          --shadow-medium: rgba(0, 0, 0, 0.3);
+          --shadow-strong: rgba(0, 0, 0, 0.55);
+          --indicator-border: rgba(215, 229, 223, 0.28);
         }
         html,
         body {

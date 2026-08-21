@@ -55,6 +55,16 @@ def test_normalizers_and_datetime_helpers(monkeypatch):
   )
 
 
+def test_service_account_uses_platform_api_and_bearer_token(monkeypatch):
+  monkeypatch.setenv("JIRA_AUTH_MODE", "service_account")
+  monkeypatch.setenv("JIRA_CLOUD_ID", "cloud-123")
+  mod = load_import_issues(monkeypatch)
+
+  assert mod.JIRA_API_BASE == "https://api.atlassian.com/ex/jira/cloud-123"
+  assert mod.s.auth is None
+  assert mod.s.headers["Authorization"] == "Bearer token"
+
+
 def test_api_search_retries_on_rate_limit(monkeypatch):
   mod = load_import_issues(monkeypatch)
 

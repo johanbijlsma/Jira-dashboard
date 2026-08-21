@@ -106,5 +106,6 @@ export function createDefaultDashboardLayout() {
     lockedCards: ["volume", "organizationWeekly", "onderwerp", "vacationServicedesk"],
     chartSettings: {},
     liveKpiSettings: { ...DEFAULT_LIVE_KPI_SETTINGS },
+    hiddenInsights: [],
   };
 }
