@@ -50,7 +50,7 @@ export function useVacationsData() {
   useEffect(() => {
     const timer = setInterval(() => {
       refreshVacations().catch(() => {});
-    }, isPageVisible ? 60000 : 300000);
+    }, isPageVisible ? 300000 : 900000);
     return () => clearInterval(timer);
   }, [isPageVisible, refreshVacations]);
 

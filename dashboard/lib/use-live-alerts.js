@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { API } from "./dashboard-constants";
+import { usePageVisibility } from "./use-page-visibility";
 
 const DEFAULT_LIVE_ALERTS = {
   priority1: [],
@@ -29,6 +30,8 @@ function normalizeLiveAlerts(data) {
 
 export function useLiveAlerts({ onRefresh } = {}) {
   const [liveAlerts, setLiveAlerts] = useState(DEFAULT_LIVE_ALERTS);
+  const isPageVisible = usePageVisibility();
+  const wasPageVisibleRef = useRef(isPageVisible);
 
   const refreshLiveAlerts = useCallback(async () => {
     const params = new URLSearchParams();
@@ -48,11 +51,24 @@ export function useLiveAlerts({ onRefresh } = {}) {
   }, [refreshLiveAlerts]);
 
   useEffect(() => {
+    let timer = null;
+    if (!wasPageVisibleRef.current && isPageVisible) {
+      timer = window.setTimeout(() => {
+        refreshLiveAlerts().catch(() => {});
+      }, 0);
+    }
+    wasPageVisibleRef.current = isPageVisible;
+    return () => {
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [isPageVisible, refreshLiveAlerts]);
+
+  useEffect(() => {
     const timer = setInterval(() => {
       refreshLiveAlerts().catch(() => {});
-    }, 20000);
+    }, isPageVisible ? 60000 : 300000);
     return () => clearInterval(timer);
-  }, [refreshLiveAlerts]);
+  }, [isPageVisible, refreshLiveAlerts]);
 
   return { liveAlerts, refreshLiveAlerts };
 }
