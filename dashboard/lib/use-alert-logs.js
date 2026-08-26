@@ -68,7 +68,7 @@ export function useAlertLogs({ limit, sidePanelMode, resetKey }) {
   useEffect(() => {
     const timer = setInterval(() => {
       refreshAlertLogs().catch(() => {});
-    }, isPageVisible ? 30000 : 120000);
+    }, isPageVisible ? 120000 : 600000);
     return () => clearInterval(timer);
   }, [isPageVisible, refreshAlertLogs]);
 

@@ -32,6 +32,10 @@ function createFetchMock(routes) {
 describe("dashboard hooks", () => {
   beforeEach(() => {
     global.fetch = vi.fn();
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
   });
 
   afterEach(() => {
@@ -68,9 +72,9 @@ describe("dashboard hooks", () => {
     await waitFor(() => expect(logHook.result.current.alertLogEntries).toHaveLength(1));
     await waitFor(() => expect(vacationHook.result.current.upcomingVacationTotal).toBe(2));
 
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 60000);
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 120000);
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 300000);
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 600000);
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 900000);
 
     Object.defineProperty(document, "visibilityState", {
       configurable: true,
@@ -179,7 +183,7 @@ describe("dashboard hooks", () => {
     const releaseCall = global.fetch.mock.calls.find(([url]) => String(url).includes("/metrics/release_followup_workload?"))[0];
     expect(releaseCall).toContain("anchor_iso=");
     expect(releaseCall).toContain("date_from=2026-01-01");
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 30000);
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 60000);
     await waitFor(() =>
       expect(result.current.releaseFollowupWorkload).toEqual([
         { release_date: "2026-01-13", followup_date: "2026-01-14", tickets: 4, issue_keys: ["SD-1"] },
@@ -246,7 +250,7 @@ describe("dashboard hooks", () => {
       current_closed: 1,
       previous_closed: 0,
     }));
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 120000);
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 300000);
 
     Object.defineProperty(document, "visibilityState", {
       configurable: true,
@@ -257,7 +261,7 @@ describe("dashboard hooks", () => {
     });
 
     await waitFor(() => {
-      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 30000);
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 60000);
     });
   });
 
@@ -344,7 +348,7 @@ describe("dashboard hooks", () => {
     const { result } = renderHook(() => useSyncStatus());
 
     await waitFor(() => expect(result.current.syncStatus?.running).toBe(false));
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 15000);
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 60000);
 
     await act(async () => {
       const status = await result.current.refreshSyncStatus();
@@ -379,7 +383,7 @@ describe("dashboard hooks", () => {
     await waitFor(() => expect(result.current.liveAlerts.priority1).toHaveLength(1));
     expect(result.current.liveAlerts.first_response_due_warning[0].issue_key).toBe("SD-2");
     expect(result.current.liveAlerts.time_to_resolution_warning[0].issue_key).toBe("SD-20");
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 20000);
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 60000);
     expect(onRefresh).toHaveBeenCalledWith(expect.objectContaining({ priority1: [{ issue_key: "SD-1" }] }));
 
     await act(async () => {
@@ -420,7 +424,7 @@ describe("dashboard hooks", () => {
 
     await waitFor(() => expect(result.current.alertLogEntries).toHaveLength(1));
     expect(result.current.hasNewAlertLogEntry).toBe(false);
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 30000);
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 120000);
 
     await act(async () => {
       await result.current.refreshAlertLogs();
@@ -709,7 +713,7 @@ describe("dashboard hooks", () => {
 
     await waitFor(() => expect(result.current.upcomingVacationTotal).toBe(2));
     expect(result.current.upcomingVacations[0].member_name).toBe("Bob");
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 60000);
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 300000);
 
     await act(async () => {
       await result.current.refreshVacations();

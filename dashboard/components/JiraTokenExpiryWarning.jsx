@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { API } from "../lib/dashboard-constants";
+import { usePageVisibility } from "../lib/use-page-visibility";
 
 const DOCUMENTATION_URL = "https://planningsagenda.atlassian.net/wiki/spaces/Servicedes/pages/1101168641/Jira-koppeling+met+een+service+account+Doel+vereisten+en+stappenplan";
 const formatDate = (value) => {
@@ -12,9 +13,27 @@ export default function JiraTokenExpiryWarning() {
   const [confirmed, setConfirmed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [modalDismissed, setModalDismissed] = useState(false);
+  const isPageVisible = usePageVisibility();
+  const refreshInFlightRef = useRef(false);
 
-  const refresh = useCallback(() => fetch(`${API}/config/jira-token-warning`).then((r) => r.ok ? r.json() : null).then(setWarning).catch(() => {}), []);
-  useEffect(() => { refresh(); const timer = window.setInterval(refresh, 5000); return () => window.clearInterval(timer); }, [refresh]);
+  const refresh = useCallback(async () => {
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+    try {
+      const response = await fetch(`${API}/config/jira-token-warning`);
+      setWarning(response.ok ? await response.json() : null);
+    } catch {
+      // Keep the last successful warning visible while a transient request fails.
+    } finally {
+      refreshInFlightRef.current = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const timer = window.setInterval(refresh, isPageVisible ? 60000 : 300000);
+    return () => window.clearInterval(timer);
+  }, [isPageVisible, refresh]);
   useEffect(() => { if (!warning?.api_error) setModalDismissed(false); }, [warning?.api_error]);
   if (!warning?.visible) return null;
   const criticalModal = warning.api_error && !modalDismissed ? <><div style={{ position: "fixed", inset: 0, zIndex: 40, background: "rgba(25, 44, 46, 0.5)" }} /><section role="alertdialog" aria-modal="true" style={{ position: "fixed", left: "50%", top: "50%", transform: "translate(-50%, -50%)", zIndex: 41, width: "min(480px, calc(100vw - 32px))", padding: 20, borderRadius: 12, border: "2px solid var(--danger)", background: "var(--surface)", boxShadow: "0 18px 50px var(--shadow-strong)" }}><strong style={{ color: "var(--danger)", fontSize: 18 }}>Jira-koppeling kan geen gegevens ophalen</strong><p style={{ color: "var(--text-main)", lineHeight: 1.5 }}>De token is verlopen of wordt door Jira geweigerd (HTTP {warning.api_error.status_code}). Daardoor worden synchronisatie en live gegevens niet bijgewerkt.</p><p style={{ color: "var(--text-subtle)", lineHeight: 1.5 }}>Vernieuw de token in Jira en laat Development de nieuwe token in de .env-file zetten. De tokenwaarschuwing linksonder blijft zichtbaar totdat de nieuwe token is gevalideerd.</p><button type="button" onClick={() => setModalDismissed(true)} style={{ border: 0, borderRadius: 7, padding: "7px 10px", background: "var(--danger)", color: "#fff", fontWeight: 700 }}>Begrepen</button></section></> : null;

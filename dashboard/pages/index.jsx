@@ -4297,16 +4297,36 @@ export default function Home() {
             </span>
           </div>
           {overdueTtrItems.length ? (
-            <ul style={{ margin: 0, padding: "0 4px", listStyle: "none", display: "grid", gap: 7, overflow: "auto" }}>
+            <ul style={{ margin: 0, padding: "0 4px", listStyle: "none", display: "grid", overflow: "auto" }}>
               {overdueTtrItems.slice(0, 8).map((item) => (
-                <li key={item.issue_key} style={{ display: "grid", gridTemplateColumns: "76px minmax(0, 1fr) auto", gap: 10, fontSize: 13, alignItems: "baseline" }}>
-                  <a href={`${JIRA_BASE}/browse/${item.issue_key}`} target="_blank" rel="noreferrer" style={{ color: "var(--accent)", fontWeight: 700 }}>
+                <li
+                  key={item.issue_key}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "76px minmax(0, 1fr) auto",
+                    columnGap: 10,
+                    rowGap: 3,
+                    padding: "8px 0",
+                    borderBottom: "1px solid color-mix(in srgb, var(--border) 72%, transparent)",
+                    fontSize: 13,
+                    alignItems: "baseline",
+                  }}
+                >
+                  <a
+                    href={`${JIRA_BASE}/browse/${item.issue_key}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ color: "var(--accent)", fontWeight: 700 }}
+                  >
                     {item.issue_key}
                   </a>
-                  <span style={{ color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600 }} title={item.issue_summary || "Titel onbekend"}>
+                    {item.issue_summary || "Titel onbekend"}
+                  </span>
+                  <span style={{ gridColumn: 2, color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {item.status || "Status onbekend"}
                   </span>
-                  <span style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                  <span style={{ gridColumn: 3, gridRow: 1, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
                     {formatOverdueMinutes(item.minutes_overdue)}
                   </span>
                 </li>

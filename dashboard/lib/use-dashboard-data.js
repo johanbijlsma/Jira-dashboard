@@ -3,12 +3,12 @@ import { API } from "./dashboard-constants";
 import { usePageVisibility } from "./use-page-visibility";
 
 const CURRENT_WEEK_FLOW_VISIBLE_POLL_MS = Math.max(
-  15000,
-  (Number(process.env.NEXT_PUBLIC_CURRENT_WEEK_FLOW_POLL_SECONDS) || 30) * 1000
+  60000,
+  (Number(process.env.NEXT_PUBLIC_CURRENT_WEEK_FLOW_POLL_SECONDS) || 60) * 1000
 );
 const CURRENT_WEEK_FLOW_HIDDEN_POLL_MS = Math.max(
   CURRENT_WEEK_FLOW_VISIBLE_POLL_MS,
-  (Number(process.env.NEXT_PUBLIC_CURRENT_WEEK_FLOW_HIDDEN_POLL_SECONDS) || 120) * 1000
+  (Number(process.env.NEXT_PUBLIC_CURRENT_WEEK_FLOW_HIDDEN_POLL_SECONDS) || 300) * 1000
 );
 
 const DEFAULT_META = {

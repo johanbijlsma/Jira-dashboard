@@ -31,9 +31,9 @@ export function useSyncStatus() {
   useEffect(() => {
     const timer = setInterval(() => {
       fetchSyncStatus().then(setSyncStatus).catch(() => {});
-    }, isPageVisible ? 15000 : 60000);
+    }, isPageVisible ? (syncStatus?.running ? 15000 : 60000) : 300000);
     return () => clearInterval(timer);
-  }, [isPageVisible]);
+  }, [isPageVisible, syncStatus?.running]);
 
   return { syncStatus, refreshSyncStatus };
 }
