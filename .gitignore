@@ -2,6 +2,8 @@
 .env.*
 local-native.env
 .venv/
+vendor/
+storage/
 node_modules/
 .next/
 __pycache__/
