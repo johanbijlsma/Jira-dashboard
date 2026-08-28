@@ -34,22 +34,31 @@ describe("Status page", () => {
     render(<StatusPage />);
 
     await waitFor(() =>
-      expect(screen.getByText("Er loopt al een synchronisatie. Status wordt live bijgewerkt.")).toBeInTheDocument()
+      expect(
+        screen.getByText("Er loopt al een synchronisatie. Status wordt live bijgewerkt.")
+      ).toBeInTheDocument()
     );
     expect(global.fetch).toHaveBeenCalledWith("/api/status");
   });
 
   it("starts incremental sync from button and shows feedback", async () => {
     global.fetch.mockImplementation((url) => {
-      if (url === "/api/sync") return Promise.resolve({ ok: true, json: async () => ({ queued: true }) });
-      if (url === "/api/dev/alerts/test-state") return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
-      if (url === "/api/config/jira-token-warning") return Promise.resolve({ ok: true, json: async () => ({}) });
-      return Promise.resolve({ ok: true, json: async () => ({ running: false, successful_runs: [] }) });
+      if (url === "/api/sync")
+        return Promise.resolve({ ok: true, json: async () => ({ queued: true }) });
+      if (url === "/api/dev/alerts/test-state")
+        return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
+      if (url === "/api/config/jira-token-warning")
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ running: false, successful_runs: [] }),
+      });
     });
 
     render(<StatusPage />);
     const startButtons = await waitFor(() => screen.getAllByRole("button", { name: "Start sync" }));
-    const clickableStartButton = startButtons.find((btn) => !btn.hasAttribute("disabled")) || startButtons[0];
+    const clickableStartButton =
+      startButtons.find((btn) => !btn.hasAttribute("disabled")) || startButtons[0];
     fireEvent.click(clickableStartButton);
 
     await waitFor(() => expect(global.fetch).toHaveBeenCalledWith("/api/sync", { method: "POST" }));
@@ -120,10 +129,16 @@ describe("Status page", () => {
 
   it("starts full sync from button and shows full-sync feedback", async () => {
     global.fetch.mockImplementation((url) => {
-      if (url === "/api/sync/full") return Promise.resolve({ ok: true, json: async () => ({ queued: true, mode: "full" }) });
-      if (url === "/api/dev/alerts/test-state") return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
-      if (url === "/api/config/jira-token-warning") return Promise.resolve({ ok: true, json: async () => ({}) });
-      return Promise.resolve({ ok: true, json: async () => ({ running: false, successful_runs: [] }) });
+      if (url === "/api/sync/full")
+        return Promise.resolve({ ok: true, json: async () => ({ queued: true, mode: "full" }) });
+      if (url === "/api/dev/alerts/test-state")
+        return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
+      if (url === "/api/config/jira-token-warning")
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ running: false, successful_runs: [] }),
+      });
     });
 
     render(<StatusPage />);
@@ -219,22 +234,29 @@ describe("Status page", () => {
 
   it("clears the first available dev alert and refreshes the state", async () => {
     global.fetch.mockImplementation((url) => {
-      if (url === "/api/dev/alerts/test-state") return Promise.resolve({ ok: true, json: async () => ({ keys: ["SD-11079"] }) });
-      if (url === "/api/dev/alerts/clear?issue_key=SD-11079") return Promise.resolve({ ok: true, json: async () => ({ cleared: true }) });
-      if (url === "/api/config/jira-token-warning") return Promise.resolve({ ok: true, json: async () => ({}) });
-      return Promise.resolve({ ok: true, json: async () => ({ running: false, successful_runs: [] }) });
+      if (url === "/api/dev/alerts/test-state")
+        return Promise.resolve({ ok: true, json: async () => ({ keys: ["SD-11079"] }) });
+      if (url === "/api/dev/alerts/clear?issue_key=SD-11079")
+        return Promise.resolve({ ok: true, json: async () => ({ cleared: true }) });
+      if (url === "/api/config/jira-token-warning")
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ running: false, successful_runs: [] }),
+      });
     });
 
     render(<StatusPage />);
 
-    const clearButton = await waitFor(() => screen.getByRole("button", { name: "Stop test alert" }));
+    const clearButton = await waitFor(() =>
+      screen.getByRole("button", { name: "Stop test alert" })
+    );
     fireEvent.click(clearButton);
 
     await waitFor(() =>
-      expect(global.fetch).toHaveBeenCalledWith(
-        "/api/dev/alerts/clear?issue_key=SD-11079",
-        { method: "POST" }
-      )
+      expect(global.fetch).toHaveBeenCalledWith("/api/dev/alerts/clear?issue_key=SD-11079", {
+        method: "POST",
+      })
     );
     await waitFor(() => expect(screen.getByText("Test alert is verwijderd.")).toBeInTheDocument());
   });
@@ -284,5 +306,107 @@ describe("Status page", () => {
       expect(global.fetch).toHaveBeenCalledWith("/api/alerts/live?servicedesk_only=true")
     );
     await waitFor(() => expect(screen.getByText("Test alert is gezet.")).toBeInTheDocument());
+  });
+
+  it("sends the latest Weekly Insights PDF to the test mailbox", async () => {
+    global.fetch.mockImplementation((url) => {
+      if (url === "/api/dev/weekly-insights/send-test-email") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            sent: true,
+            filename: "weekly-insights-2026-03-09-2026-03-15.pdf",
+            recipient: "johan+test@planningsagenda.nl",
+          }),
+        });
+      }
+      if (url === "/api/dev/alerts/test-state") {
+        return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
+      }
+      if (url === "/api/config/jira-token-warning") {
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ running: false, successful_runs: [] }),
+      });
+    });
+
+    render(<StatusPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Stuur testmail" }));
+
+    await waitFor(() =>
+      expect(global.fetch).toHaveBeenCalledWith("/api/dev/weekly-insights/send-test-email", {
+        method: "POST",
+      })
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByText("Testmail is verstuurd naar johan+test@planningsagenda.nl.")
+      ).toBeInTheDocument()
+    );
+  });
+
+  it("shows the API error when sending the Weekly Insights test email fails", async () => {
+    global.fetch.mockImplementation((url) => {
+      if (url === "/api/dev/weekly-insights/send-test-email") {
+        return Promise.resolve({ ok: false, status: 503, json: async () => ({ detail: "email_not_configured" }) });
+      }
+      if (url === "/api/dev/alerts/test-state") return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
+      if (url === "/api/config/jira-token-warning") return Promise.resolve({ ok: true, json: async () => ({}) });
+      return Promise.resolve({ ok: true, json: async () => ({ running: false, successful_runs: [] }) });
+    });
+
+    render(<StatusPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Stuur testmail" }));
+
+    await waitFor(() => expect(screen.getByText("email_not_configured")).toBeInTheDocument());
+  });
+
+  it("clears an active token test and can reset its test state", async () => {
+    global.fetch.mockImplementation((url) => {
+      if (url === "/api/dev/jira-token-warning/clear") {
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      }
+      if (url === "/api/dev/jira-token-warning/reset-pending") {
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      }
+      if (url === "/api/config/jira-token-warning") {
+        return Promise.resolve({ ok: true, json: async () => ({ test_scenario: "renewal" }) });
+      }
+      if (url === "/api/dev/alerts/test-state") return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
+      return Promise.resolve({ ok: true, json: async () => ({ running: false, successful_runs: [] }) });
+    });
+
+    render(<StatusPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Stop test tokenwaarschuwing" }));
+    await waitFor(() =>
+      expect(global.fetch).toHaveBeenCalledWith("/api/dev/jira-token-warning/clear", { method: "POST" })
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Herstel token teststatus" }));
+    await waitFor(() =>
+      expect(global.fetch).toHaveBeenCalledWith("/api/dev/jira-token-warning/reset-pending", { method: "POST" })
+    );
+  });
+
+  it("renders and clears the expired-token variant", async () => {
+    global.fetch.mockImplementation((url) => {
+      if (url === "/api/dev/jira-token-warning/clear") {
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      }
+      if (url === "/api/config/jira-token-warning") {
+        return Promise.resolve({ ok: true, json: async () => ({ test_scenario: "expired" }) });
+      }
+      if (url === "/api/dev/alerts/test-state") return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
+      return Promise.resolve({ ok: true, json: async () => ({ running: false, successful_runs: [] }) });
+    });
+
+    render(<StatusPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Stop test verlopen token" }));
+
+    await waitFor(() =>
+      expect(global.fetch).toHaveBeenCalledWith("/api/dev/jira-token-warning/clear", { method: "POST" })
+    );
   });
 });

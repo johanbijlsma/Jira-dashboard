@@ -56,12 +56,36 @@ describe("dashboard hooks", () => {
         { running: false, auto_sync: { enabled: true } },
       ],
       "/alerts/logs?": [
-        [{ id: 1, issue_key: "SD-1", kind: "P1", detected_at: "2026-01-01T10:00:00Z", status: "OPEN", meta: "" }],
-        [{ id: 2, issue_key: "SD-2", kind: "P1", detected_at: "2026-01-01T11:00:00Z", status: "OPEN", meta: "" }],
+        [
+          {
+            id: 1,
+            issue_key: "SD-1",
+            kind: "P1",
+            detected_at: "2026-01-01T10:00:00Z",
+            status: "OPEN",
+            meta: "",
+          },
+        ],
+        [
+          {
+            id: 2,
+            issue_key: "SD-2",
+            kind: "P1",
+            detected_at: "2026-01-01T11:00:00Z",
+            status: "OPEN",
+            meta: "",
+          },
+        ],
       ],
-      "/vacations/upcoming?limit=3": [[{ id: 2, member_name: "Bob" }], [{ id: 3, member_name: "Carol" }]],
+      "/vacations/upcoming?limit=3": [
+        [{ id: 2, member_name: "Bob" }],
+        [{ id: 3, member_name: "Carol" }],
+      ],
       "/vacations/today": [[{ id: 4, member_name: "Dana" }], [{ id: 5, member_name: "Erin" }]],
-      "/vacations": [[{ id: 1 }, { id: 2 }], [{ id: 1 }, { id: 2 }, { id: 3 }]],
+      "/vacations": [
+        [{ id: 1 }, { id: 2 }],
+        [{ id: 1 }, { id: 2 }, { id: 3 }],
+      ],
     });
 
     const syncHook = renderHook(() => useSyncStatus());
@@ -136,6 +160,20 @@ describe("dashboard hooks", () => {
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 900000);
   });
 
+  it("shows a useful error when weekly insights cannot be loaded", async () => {
+    global.fetch = vi.fn(() =>
+      Promise.resolve({ ok: false, status: 503, json: async () => ({ detail: "offline" }) })
+    );
+
+    const { result } = renderHook(() => useWeeklyInsights({ servicedeskOnly: false }));
+
+    await waitFor(() =>
+      expect(result.current.weeklyInsightsError).toBe("Weekly insights ophalen mislukt (503)")
+    );
+    expect(result.current.weeklyInsights).toBeNull();
+    expect(global.fetch).toHaveBeenCalledWith("/api/alerts/weekly-insights?servicedesk_only=false");
+  });
+
   it("loads dashboard data, normalizes arrays, and refreshes meta", async () => {
     const setIntervalSpy = vi.spyOn(window, "setInterval");
     global.fetch = createFetchMock({
@@ -145,17 +183,45 @@ describe("dashboard hooks", () => {
       "/metrics/volume_by_assignee?": [{ assignee: "A", tickets: 2 }],
       "/metrics/volume_weekly_by_organization?": [{ organization: "Org", tickets: 1 }],
       "/metrics/inflow_vs_closed_weekly?": [{ week: "2026-01-05", inflow: 5, closed: 4 }],
-      "/metrics/time_to_resolution_weekly_by_type?": [{ request_type: "Incident", week: "2026-01-05", avg_hours: 7 }],
+      "/metrics/time_to_resolution_weekly_by_type?": [
+        { request_type: "Incident", week: "2026-01-05", avg_hours: 7 },
+      ],
       "/metrics/time_to_first_response_weekly?": [{ week: "2026-01-05", avg_hours: 1 }],
       "/metrics/ttfr_overdue_weekly?": [{ week: "2026-01-05", overdue: 2 }],
-      "/metrics/release_followup_workload?": [[{ release_date: "2026-01-13", followup_date: "2026-01-14", tickets: 4, issue_keys: ["SD-1"] }]],
-      "/metrics/current_week_flow?": { current_received: 8, previous_received: 5, current_closed: 3, previous_closed: 2 },
+      "/metrics/release_followup_workload?": [
+        [
+          {
+            release_date: "2026-01-13",
+            followup_date: "2026-01-14",
+            tickets: 4,
+            issue_keys: ["SD-1"],
+          },
+        ],
+      ],
+      "/metrics/current_week_flow?servicedesk_only=true": {
+        current_received: 8,
+        previous_received: 5,
+        current_closed: 3,
+        previous_closed: 2,
+      },
       "/metrics/in_progress_count": { count: 4 },
       "/metrics/new_melding_count": { count: 2 },
       "/metrics/leadtime_p90_by_type?": [{ request_type: "Incident", p90_hours: 12 }],
       "/meta": [
-        { request_types: ["Incident"], onderwerpen: ["Email"], priorities: ["High"], assignees: ["A"], organizations: ["Org"] },
-        { request_types: ["Incident", "Service"], onderwerpen: ["Email"], priorities: ["High"], assignees: ["A"], organizations: ["Org"] },
+        {
+          request_types: ["Incident"],
+          onderwerpen: ["Email"],
+          priorities: ["High"],
+          assignees: ["A"],
+          organizations: ["Org"],
+        },
+        {
+          request_types: ["Incident", "Service"],
+          onderwerpen: ["Email"],
+          priorities: ["High"],
+          assignees: ["A"],
+          organizations: ["Org"],
+        },
       ],
     });
 
@@ -177,19 +243,37 @@ describe("dashboard hooks", () => {
     expect(result.current.priorityVolume).toEqual([]);
     expect(result.current.p90).toEqual({ request_type: "Incident", p90_hours: 12 });
 
-    const metricCall = global.fetch.mock.calls.find(([url]) => String(url).includes("/metrics/volume_weekly?"))[0];
+    const metricCall = global.fetch.mock.calls.find(([url]) =>
+      String(url).includes("/metrics/volume_weekly?")
+    )[0];
     expect(metricCall).toContain("request_type=Incident");
     expect(metricCall).toContain("servicedesk_only=true");
-    const releaseCall = global.fetch.mock.calls.find(([url]) => String(url).includes("/metrics/release_followup_workload?"))[0];
+    const liveFlowCall = global.fetch.mock.calls.find(([url]) =>
+      String(url).includes("/metrics/current_week_flow")
+    )[0];
+    expect(liveFlowCall).toMatch(/\/metrics\/current_week_flow\?servicedesk_only=true$/);
+    const releaseCall = global.fetch.mock.calls.find(([url]) =>
+      String(url).includes("/metrics/release_followup_workload?")
+    )[0];
     expect(releaseCall).toContain("anchor_iso=");
     expect(releaseCall).toContain("date_from=2026-01-01");
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 60000);
     await waitFor(() =>
       expect(result.current.releaseFollowupWorkload).toEqual([
-        { release_date: "2026-01-13", followup_date: "2026-01-14", tickets: 4, issue_keys: ["SD-1"] },
+        {
+          release_date: "2026-01-13",
+          followup_date: "2026-01-14",
+          tickets: 4,
+          issue_keys: ["SD-1"],
+        },
       ])
     );
-    expect(result.current.currentWeekFlow).toEqual({ current_received: 8, previous_received: 5, current_closed: 3, previous_closed: 2 });
+    expect(result.current.currentWeekFlow).toEqual({
+      current_received: 8,
+      previous_received: 5,
+      current_closed: 3,
+      previous_closed: 2,
+    });
 
     const ttrCall = global.fetch.mock.calls.find(([url]) =>
       String(url).includes("/metrics/time_to_resolution_weekly_by_type?")
@@ -221,13 +305,15 @@ describe("dashboard hooks", () => {
       "/metrics/time_to_first_response_weekly?": [],
       "/metrics/ttfr_overdue_weekly?": [],
       "/metrics/release_followup_workload?": [],
-      "/metrics/current_week_flow?": [
+      "/metrics/current_week_flow?servicedesk_only=true": [
         { current_received: 2, previous_received: 1, current_closed: 1, previous_closed: 0 },
         { current_received: 3, previous_received: 2, current_closed: 1, previous_closed: 1 },
       ],
       "/metrics/in_progress_count": { count: 4 },
       "/metrics/new_melding_count": { count: 2 },
-      "/meta": [{ request_types: [], onderwerpen: [], priorities: [], assignees: [], organizations: [] }],
+      "/meta": [
+        { request_types: [], onderwerpen: [], priorities: [], assignees: [], organizations: [] },
+      ],
     });
 
     const { result } = renderHook(() =>
@@ -244,12 +330,14 @@ describe("dashboard hooks", () => {
       })
     );
 
-    await waitFor(() => expect(result.current.currentWeekFlow).toEqual({
-      current_received: 2,
-      previous_received: 1,
-      current_closed: 1,
-      previous_closed: 0,
-    }));
+    await waitFor(() =>
+      expect(result.current.currentWeekFlow).toEqual({
+        current_received: 2,
+        previous_received: 1,
+        current_closed: 1,
+        previous_closed: 0,
+      })
+    );
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 300000);
 
     Object.defineProperty(document, "visibilityState", {
@@ -277,10 +365,17 @@ describe("dashboard hooks", () => {
       "/metrics/time_to_first_response_weekly?": [],
       "/metrics/ttfr_overdue_weekly?": [],
       "/metrics/release_followup_workload?": [],
-      "/metrics/current_week_flow?": { current_received: 0, previous_received: 0, current_closed: 0, previous_closed: 0 },
+      "/metrics/current_week_flow?servicedesk_only=true": {
+        current_received: 0,
+        previous_received: 0,
+        current_closed: 0,
+        previous_closed: 0,
+      },
       "/metrics/in_progress_count": { count: 0 },
       "/metrics/new_melding_count": { count: 0 },
-      "/meta": [{ request_types: [], onderwerpen: [], priorities: [], assignees: [], organizations: [] }],
+      "/meta": [
+        { request_types: [], onderwerpen: [], priorities: [], assignees: [], organizations: [] },
+      ],
     });
 
     const { result } = renderHook(() =>
@@ -298,13 +393,21 @@ describe("dashboard hooks", () => {
     );
 
     await waitFor(() => expect(result.current.p90).toEqual([]));
-    expect(global.fetch.mock.calls.some(([url]) => String(url).includes("leadtime_p90_by_type"))).toBe(false);
+    expect(
+      global.fetch.mock.calls.some(([url]) => String(url).includes("leadtime_p90_by_type"))
+    ).toBe(false);
   });
 
   it("falls back to empty dashboard data when metric requests fail", async () => {
     global.fetch = vi.fn((url) => {
       if (String(url).includes("/meta")) {
-        return jsonResponse({ request_types: ["Incident"], onderwerpen: ["Email"], priorities: [], assignees: [], organizations: [] });
+        return jsonResponse({
+          request_types: ["Incident"],
+          onderwerpen: ["Email"],
+          priorities: [],
+          assignees: [],
+          organizations: [],
+        });
       }
       return Promise.reject(new TypeError("Failed to fetch"));
     });
@@ -384,7 +487,9 @@ describe("dashboard hooks", () => {
     expect(result.current.liveAlerts.first_response_due_warning[0].issue_key).toBe("SD-2");
     expect(result.current.liveAlerts.time_to_resolution_warning[0].issue_key).toBe("SD-20");
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 60000);
-    expect(onRefresh).toHaveBeenCalledWith(expect.objectContaining({ priority1: [{ issue_key: "SD-1" }] }));
+    expect(onRefresh).toHaveBeenCalledWith(
+      expect.objectContaining({ priority1: [{ issue_key: "SD-1" }] })
+    );
 
     await act(async () => {
       const refreshed = await result.current.refreshLiveAlerts();
@@ -398,7 +503,9 @@ describe("dashboard hooks", () => {
 
   it("normalizes empty live alert payloads to empty arrays", async () => {
     global.fetch = createFetchMock({
-      "/alerts/live?": [{ priority1: null, first_response_due_warning: null, time_to_resolution_overdue: null }],
+      "/alerts/live?": [
+        { priority1: null, first_response_due_warning: null, time_to_resolution_overdue: null },
+      ],
     });
 
     const { result } = renderHook(() => useLiveAlerts());
@@ -413,8 +520,26 @@ describe("dashboard hooks", () => {
     const setIntervalSpy = vi.spyOn(window, "setInterval");
     global.fetch = createFetchMock({
       "/alerts/logs?": [
-        [{ id: 1, issue_key: "SD-1", kind: "P1", detected_at: "2026-01-01T10:00:00Z", status: "OPEN", meta: "" }],
-        [{ id: 2, issue_key: "SD-2", kind: "P1", detected_at: "2026-01-01T11:00:00Z", status: "OPEN", meta: "" }],
+        [
+          {
+            id: 1,
+            issue_key: "SD-1",
+            kind: "P1",
+            detected_at: "2026-01-01T10:00:00Z",
+            status: "OPEN",
+            meta: "",
+          },
+        ],
+        [
+          {
+            id: 2,
+            issue_key: "SD-2",
+            kind: "P1",
+            detected_at: "2026-01-01T11:00:00Z",
+            status: "OPEN",
+            meta: "",
+          },
+        ],
       ],
     });
 
@@ -444,12 +569,32 @@ describe("dashboard hooks", () => {
   it("does not raise a new alert badge while the alerts panel is already open", async () => {
     global.fetch = createFetchMock({
       "/alerts/logs?": [
-        [{ id: 1, issue_key: "SD-1", kind: "P1", detected_at: "2026-01-01T10:00:00Z", status: "OPEN", meta: "" }],
-        [{ id: 2, issue_key: "SD-2", kind: "P1", detected_at: "2026-01-01T11:00:00Z", status: "OPEN", meta: "" }],
+        [
+          {
+            id: 1,
+            issue_key: "SD-1",
+            kind: "P1",
+            detected_at: "2026-01-01T10:00:00Z",
+            status: "OPEN",
+            meta: "",
+          },
+        ],
+        [
+          {
+            id: 2,
+            issue_key: "SD-2",
+            kind: "P1",
+            detected_at: "2026-01-01T11:00:00Z",
+            status: "OPEN",
+            meta: "",
+          },
+        ],
       ],
     });
 
-    const { result } = renderHook(() => useAlertLogs({ limit: 5, sidePanelMode: "alerts", resetKey: "x" }));
+    const { result } = renderHook(() =>
+      useAlertLogs({ limit: 5, sidePanelMode: "alerts", resetKey: "x" })
+    );
 
     await waitFor(() => expect(result.current.alertLogEntries).toHaveLength(1));
 
@@ -583,8 +728,12 @@ describe("dashboard hooks", () => {
 
     await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2));
 
-    const liveCall = global.fetch.mock.calls.find(([url]) => String(url).includes("/insights/live?"))[0];
-    const logCall = global.fetch.mock.calls.find(([url]) => String(url).includes("/insights/logs?"))[0];
+    const liveCall = global.fetch.mock.calls.find(([url]) =>
+      String(url).includes("/insights/live?")
+    )[0];
+    const logCall = global.fetch.mock.calls.find(([url]) =>
+      String(url).includes("/insights/logs?")
+    )[0];
 
     expect(liveCall).toContain("date_from=");
     expect(liveCall).toContain("date_to=");
@@ -699,10 +848,7 @@ describe("dashboard hooks", () => {
         [{ id: 2, member_name: "Bob" }],
         [{ id: 3, member_name: "Carol" }],
       ],
-      "/vacations/today": [
-        [{ id: 4, member_name: "Dana" }],
-        [{ id: 5, member_name: "Erin" }],
-      ],
+      "/vacations/today": [[{ id: 4, member_name: "Dana" }], [{ id: 5, member_name: "Erin" }]],
       "/vacations": [
         [{ id: 1 }, { id: 2 }],
         [{ id: 1 }, { id: 2 }, { id: 3 }],
@@ -750,8 +896,18 @@ describe("dashboard hooks", () => {
           updated_at: "2026-01-01T10:00:00Z",
           team_member_avatars: { Alice: "avatar.png" },
           saas_releases: {
-            last: { base_release_date: "2026-01-13", release_date: "2026-01-13", followup_date: "2026-01-14", cancelled: false },
-            next: { base_release_date: "2026-01-27", release_date: "2026-01-30", followup_date: "2026-01-31", cancelled: true },
+            last: {
+              base_release_date: "2026-01-13",
+              release_date: "2026-01-13",
+              followup_date: "2026-01-14",
+              cancelled: false,
+            },
+            next: {
+              base_release_date: "2026-01-27",
+              release_date: "2026-01-30",
+              followup_date: "2026-01-31",
+              cancelled: true,
+            },
           },
         },
         {

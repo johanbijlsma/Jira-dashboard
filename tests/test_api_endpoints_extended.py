@@ -138,6 +138,45 @@ def test_update_servicedesk_config_success(monkeypatch):
     assert response.json()["ai_insight_threshold_pct"] == 82
 
 
+def test_update_weekly_insights_email_recipients_validates_and_saves(monkeypatch):
+    cursor = _CursorStub()
+    _patch_conn(monkeypatch, cursor)
+    monkeypatch.setattr(
+        api,
+        "get_servicedesk_config",
+        lambda: {"weekly_insights_email_recipients": ["johan+test@planningsagenda.nl"]},
+    )
+
+    response = client.put(
+        "/config/weekly-insights-email-recipients",
+        json={"recipients": ["Johan+Test@planningsagenda.nl"]},
+    )
+
+    assert response.status_code == 200
+    update_params = next(params for query, params in cursor.executed if "weekly_insights_email_recipients" in _query_text(query))
+    assert update_params == (["johan+test@planningsagenda.nl"],)
+
+    invalid = client.put(
+        "/config/weekly-insights-email-recipients",
+        json={"recipients": ["geen-emailadres"]},
+    )
+    assert invalid.status_code == 400
+
+
+def test_update_weekly_insights_email_settings_saves_enabled_state(monkeypatch):
+    cursor = _CursorStub()
+    _patch_conn(monkeypatch, cursor)
+    monkeypatch.setattr(api, "get_servicedesk_config", lambda: {"weekly_insights_email_enabled": True})
+
+    response = client.put("/config/weekly-insights-email-settings", json={"enabled": True})
+
+    assert response.status_code == 200
+    update_params = next(
+        params for query, params in cursor.executed if "weekly_insights_email_enabled" in _query_text(query)
+    )
+    assert update_params == (True,)
+
+
 def test_shared_dashboard_layout_endpoints_read_and_write_layout(monkeypatch):
     layout = {"kpis": ["volume"], "rows": [["volume"]], "hiddenCards": [], "chartSettings": {}}
     read_cursor = _CursorStub(fetchone_values=[(layout,)])

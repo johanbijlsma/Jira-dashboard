@@ -3,3 +3,4 @@ uvicorn[standard]==0.42.0
 python-dotenv==1.2.2
 requests==2.33.1
 psycopg2-binary==2.9.11
+resend==2.42.0

@@ -34,9 +34,15 @@ function toneStyles(tone = "default") {
 }
 
 /**
- * @param {{ cards: InsightCard[]; isTvMode?: boolean }} props
+ * @param {{ cards: InsightCard[]; isTvMode?: boolean; isFilterActive?: boolean }} props
  */
-export default function InsightsRow({ cards, isTvMode = false, isLayoutEditing = false, onHide }) {
+export default function InsightsRow({
+  cards,
+  isTvMode = false,
+  isLayoutEditing = false,
+  onHide,
+  isFilterActive = false,
+}) {
   const rowStyle = {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
@@ -47,56 +53,112 @@ export default function InsightsRow({ cards, isTvMode = false, isLayoutEditing =
 
   return (
     <div style={rowStyle} aria-label="Dashboard inzichten">
-      {cards.length ? cards.map((card) => {
-        const tone = toneStyles(card.tone);
-        return (
-          <section
-            key={card.id}
-            style={{
-              border: `1px solid ${tone.borderColor}`,
-              borderRadius: 10,
-              background: "var(--surface)",
-              padding: "10px 12px",
-              minWidth: 0,
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
-            }}
-            aria-labelledby={`insight-${card.id}`}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <div id={`insight-${card.id}`} style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                {card.title}
-              </div>
-              {isLayoutEditing ? <button type="button" onClick={() => onHide?.(card.id)} style={{ border: "1px solid var(--border)", borderRadius: 6, background: "var(--surface)", color: "var(--text-muted)", cursor: "pointer" }} title="Verberg trendkaart">×</button> : <span
+      {cards.length ? (
+        cards.map((card) => {
+          const tone = toneStyles(card.tone);
+          return (
+            <section
+              key={card.id}
+              style={{
+                border: `1px solid ${tone.borderColor}`,
+                borderRadius: 10,
+                background: isFilterActive
+                  ? "linear-gradient(135deg, color-mix(in srgb, #22c55e 10%, var(--surface)), var(--surface) 64%)"
+                  : "var(--surface)",
+                padding: "10px 12px",
+                minWidth: 0,
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+              }}
+              aria-labelledby={`insight-${card.id}`}
+            >
+              <div
                 style={{
-                  display: "inline-flex",
+                  display: "flex",
+                  justifyContent: "space-between",
                   alignItems: "center",
-                  borderRadius: 999,
-                  padding: "2px 8px",
-                  fontSize: 11,
-                  fontWeight: 700,
-                  background: tone.badgeBackground,
-                  color: tone.badgeColor,
+                  gap: 8,
                 }}
               >
-                Insight
-              </span>}
-            </div>
-            <div style={{ fontSize: 18, fontWeight: 700, lineHeight: 1.15, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {card.primary}
-            </div>
-            <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.35 }}>
-              {card.secondary}
-            </div>
-            {card.hint ? (
-              <div style={{ fontSize: 11, color: "var(--text-faint, var(--text-muted))", lineHeight: 1.35 }}>
-                {card.hint}
+                <div id={`insight-${card.id}`} style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                  {card.title}
+                </div>
+                {isLayoutEditing ? (
+                  <button
+                    type="button"
+                    onClick={() => onHide?.(card.id)}
+                    style={{
+                      border: "1px solid var(--border)",
+                      borderRadius: 6,
+                      background: "var(--surface)",
+                      color: "var(--text-muted)",
+                      cursor: "pointer",
+                    }}
+                    title="Verberg trendkaart"
+                  >
+                    ×
+                  </button>
+                ) : (
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      borderRadius: 999,
+                      padding: "2px 8px",
+                      fontSize: 11,
+                      fontWeight: 700,
+                      background: tone.badgeBackground,
+                      color: tone.badgeColor,
+                    }}
+                  >
+                    Insight
+                  </span>
+                )}
               </div>
-            ) : null}
-          </section>
-        );
-      }) : <div style={{ gridColumn: "1 / -1", padding: 12, color: "var(--text-muted)", border: "1px dashed var(--border)", borderRadius: 10 }}>Alle trendkaarten zijn verborgen. De trendrij blijft gereserveerd in de layout.</div>}
+              <div
+                style={{
+                  fontSize: 18,
+                  fontWeight: 700,
+                  lineHeight: 1.15,
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {card.primary}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.35 }}>
+                {card.secondary}
+              </div>
+              {card.hint ? (
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: "var(--text-faint, var(--text-muted))",
+                    lineHeight: 1.35,
+                  }}
+                >
+                  {card.hint}
+                </div>
+              ) : null}
+            </section>
+          );
+        })
+      ) : (
+        <div
+          style={{
+            gridColumn: "1 / -1",
+            padding: 12,
+            color: "var(--text-muted)",
+            border: "1px dashed var(--border)",
+            borderRadius: 10,
+          }}
+        >
+          Alle trendkaarten zijn verborgen. De trendrij blijft gereserveerd in de layout.
+        </div>
+      )}
     </div>
   );
 }

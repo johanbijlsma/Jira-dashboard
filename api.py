@@ -4,11 +4,17 @@ import os
 import time
 import threading
 import re
+import smtplib
+import textwrap
+import base64
+from email.message import EmailMessage
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 import requests
+import resend
 import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import Json, execute_values
@@ -68,6 +74,30 @@ ALERT_TEAMS_NOTIFICATIONS_ENABLED = str(
     os.environ.get("ALERT_TEAMS_NOTIFICATIONS_ENABLED", "true")
 ).strip().lower() in {"1", "true", "yes", "on"}
 ALERT_TEAMS_TIMEOUT_SECONDS = float(os.environ.get("ALERT_TEAMS_TIMEOUT_SECONDS", "3"))
+WEEKLY_INSIGHTS_ENABLED = str(os.environ.get("WEEKLY_INSIGHTS_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
+WEEKLY_INSIGHTS_WEEKDAY = max(0, min(6, int(os.environ.get("WEEKLY_INSIGHTS_WEEKDAY", "0"))))
+WEEKLY_INSIGHTS_HOUR = max(0, min(23, int(os.environ.get("WEEKLY_INSIGHTS_HOUR", "8"))))
+WEEKLY_INSIGHTS_MINUTE = max(0, min(59, int(os.environ.get("WEEKLY_INSIGHTS_MINUTE", "0"))))
+WEEKLY_INSIGHTS_RETENTION_DAYS = max(1, int(os.environ.get("WEEKLY_INSIGHTS_RETENTION_DAYS", "28")))
+WEEKLY_INSIGHTS_REPORT_DIR = Path(os.environ.get("WEEKLY_INSIGHTS_REPORT_DIR", "/tmp/jsm-weekly-insights")).expanduser()
+WEEKLY_INSIGHTS_PUBLIC_BASE_URL = (os.environ.get("WEEKLY_INSIGHTS_PUBLIC_BASE_URL") or "").strip().rstrip("/")
+WEEKLY_INSIGHTS_TEAMS_WEBHOOK_URL = (os.environ.get("WEEKLY_INSIGHTS_TEAMS_WEBHOOK_URL") or "").strip()
+WEEKLY_INSIGHTS_EMAIL_TO = [value.strip() for value in (os.environ.get("WEEKLY_INSIGHTS_EMAIL_TO") or "").split(",") if value.strip()]
+WEEKLY_INSIGHTS_TEST_EMAIL_TO = [
+    value.strip()
+    for value in (
+        os.environ.get("WEEKLY_INSIGHTS_TEST_EMAIL_TO", "johan+test@planningsagenda.nl")
+    ).split(",")
+    if value.strip()
+]
+RESEND_API_KEY = (os.environ.get("RESEND_API_KEY") or "").strip()
+RESEND_FROM = (os.environ.get("RESEND_FROM") or "").strip()
+SMTP_HOST = (os.environ.get("SMTP_HOST") or "").strip()
+SMTP_PORT = max(1, int(os.environ.get("SMTP_PORT", "587")))
+SMTP_USERNAME = (os.environ.get("SMTP_USERNAME") or "").strip()
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD") or ""
+SMTP_FROM = (os.environ.get("SMTP_FROM") or "").strip()
+SMTP_USE_TLS = str(os.environ.get("SMTP_USE_TLS", "true")).strip().lower() in {"1", "true", "yes", "on"}
 AUTO_SYNC_ENABLED = str(os.environ.get("AUTO_SYNC_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
 SYNC_INCREMENTAL_INTERVAL_SECONDS = max(15, int(os.environ.get("SYNC_INCREMENTAL_INTERVAL_SECONDS", "45")))
 SYNC_FULL_INTERVAL_HOURS = max(1, int(os.environ.get("SYNC_FULL_INTERVAL_HOURS", "24")))
@@ -111,6 +141,8 @@ _issue_existence_cache_ttl_seconds = 60
 _last_alert_log_cleanup_at = 0.0
 _auto_sync_scheduler_started = False
 _auto_sync_scheduler_lock = threading.Lock()
+_weekly_insights_scheduler_started = False
+_weekly_insights_scheduler_lock = threading.Lock()
 _dev_jira_token_warning = False
 _dev_jira_token_warning_pending_until = 0.0
 _dev_jira_token_warning_variant = ""
@@ -119,6 +151,7 @@ _sync_status_cache_payload = None
 _sync_status_cache_checked_at = 0.0
 DEV_ALERT_ISSUE_KEY = "DEV-ALERT-TEST"
 DEFAULT_SERVICEDESK_TEAM_MEMBERS = ["Johan", "Ashley", "Jarno"]
+DEFAULT_WEEKLY_INSIGHTS_EMAIL_RECIPIENTS = ["johan+test@planningsagenda.nl"]
 DEFAULT_NON_SERVICEDESK_ONDERWERPEN = {
     "Koppelingen",
     "Rest-endpoints",
@@ -350,6 +383,13 @@ def _build_weekly_insights_pdf(payload: Dict[str, Any]) -> bytes:
         },
     ]
 
+    # Keep long Jira labels inside their column instead of letting them overlap.
+    for section in sections:
+        wrapped_items = []
+        for item in section.get("items") or []:
+            wrapped_items.extend(textwrap.wrap(str(item), width=46, break_long_words=False) or [str(item)])
+        section["items"] = wrapped_items
+
     page_width = 595
     page_height = 842
     margin_x = 42
@@ -365,6 +405,13 @@ def _build_weekly_insights_pdf(payload: Dict[str, Any]) -> bytes:
     usable_width = page_width - (margin_x * 2)
     column_gap = 16
     column_width = (usable_width - column_gap) / 2
+    page_background = (1.0, 0.973, 0.914)  # --brand-beige
+    surface = (1.0, 0.996, 0.980)  # --surface
+    surface_muted = (1.0, 0.957, 0.847)  # --surface-muted
+    text_main = (0.098, 0.173, 0.180)  # --brand-dark-blue
+    text_muted = (0.275, 0.408, 0.443)  # --text-muted
+    border = (0.722, 0.804, 0.800)  # --border
+    accent = (0.671, 0.122, 0.137)  # --brand-red
 
     pages: List[List[str]] = []
     current_page: List[str] = []
@@ -376,7 +423,7 @@ def _build_weekly_insights_pdf(payload: Dict[str, Any]) -> bytes:
         if current_page:
             pages.append(current_page)
         current_page = []
-        y = page_height - margin_top
+        y = _draw_page_chrome()
         column_index = 0
 
     def _ensure_space(required_height: float):
@@ -384,7 +431,7 @@ def _build_weekly_insights_pdf(payload: Dict[str, Any]) -> bytes:
         if y - required_height < margin_bottom:
             if column_index == 0:
                 column_index = 1
-                y = page_height - margin_top - 170
+                y = content_start_y
                 return
             _start_new_page()
 
@@ -422,41 +469,6 @@ def _build_weekly_insights_pdf(payload: Dict[str, Any]) -> bytes:
         _append_stream(f"{width:.2f} w")
         _append_stream(f"{x1:.2f} {y1:.2f} m {x2:.2f} {y2:.2f} l S")
 
-    header_height = 108
-    header_y = y - 62
-    _draw_fill_rect(margin_x, header_y, usable_width, header_height, rgb=(0.11, 0.27, 0.43))
-    _write_text(
-        "Weekly insights rapport",
-        margin_x,
-        header_y + 74,
-        font="F2",
-        size=title_font_size,
-        rgb=(1.0, 1.0, 1.0),
-    )
-    _write_text(
-        f"Periode: {_format_report_date_range(payload)}",
-        margin_x,
-        header_y + 42,
-        size=meta_font_size,
-        rgb=(0.93, 0.97, 1.0),
-    )
-    _write_text(
-        f"Scope: {payload.get('scope', '-')}",
-        margin_x,
-        header_y + 28,
-        size=meta_font_size,
-        rgb=(0.93, 0.97, 1.0),
-    )
-    _write_text(
-        f"Gegenereerd op: {_format_report_timestamp(payload.get('generated_at'))}",
-        margin_x,
-        header_y + 14,
-        size=meta_font_size,
-        rgb=(0.93, 0.97, 1.0),
-    )
-    y = header_y - 18
-
-    kpi_top = y
     kpi_gap = 12
     kpi_width = (usable_width - (kpi_gap * 3)) / 4
     kpi_height = 50
@@ -466,40 +478,67 @@ def _build_weekly_insights_pdf(payload: Dict[str, Any]) -> bytes:
         ("Sluitratio", f"{summary.get('close_rate_pct') if summary.get('close_rate_pct') is not None else 'n.v.t.'}%"),
         ("Alert events", f"{int(alerts.get('total_events') or 0)}"),
     ]
-    for idx, (label, value) in enumerate(kpi_items):
-        x = margin_x + idx * (kpi_width + kpi_gap)
-        box_y = kpi_top - kpi_height + 8
-        _draw_fill_rect(x, box_y, kpi_width, kpi_height, rgb=(0.96, 0.98, 1.0))
-        _draw_stroke_rect(x, box_y, kpi_width, kpi_height, rgb=(0.78, 0.84, 0.91), line_width=0.8)
-        _write_text(label, x + 10, box_y + 31, font="F2", size=kpi_label_size, rgb=(0.27, 0.38, 0.49))
-        _write_text(value, x + 10, box_y + 13, font="F2", size=kpi_value_size, rgb=(0.11, 0.27, 0.43))
 
-    y = kpi_top - kpi_height - 10
-    _draw_line(margin_x, y, margin_x + usable_width, y, rgb=(0.80, 0.85, 0.91), width=1.2)
-    y -= 24
-    content_start_y = y
+    def _draw_page_chrome() -> float:
+        top_y = page_height - margin_top
+        _draw_fill_rect(0, 0, page_width, page_height, rgb=page_background)
+        header_height = 108
+        header_y = top_y - 62
+        _draw_fill_rect(margin_x, header_y, usable_width, header_height, rgb=text_main)
+        _draw_fill_rect(margin_x, header_y, 8, header_height, rgb=accent)
+        _write_text(
+            "Weekly insights rapport",
+            margin_x + 24,
+            header_y + 74,
+            font="F2",
+            size=title_font_size,
+            rgb=(1.0, 1.0, 1.0),
+        )
+        for offset, text in (
+            (42, f"Periode: {_format_report_date_range(payload)}"),
+            (28, f"Scope: {payload.get('scope', '-')}"),
+            (14, f"Gegenereerd op: {_format_report_timestamp(payload.get('generated_at'))}"),
+        ):
+            _write_text(text, margin_x + 24, header_y + offset, size=meta_font_size, rgb=page_background)
+
+        kpi_top = header_y - 18
+        for idx, (label, value) in enumerate(kpi_items):
+            x = margin_x + idx * (kpi_width + kpi_gap)
+            box_y = kpi_top - kpi_height + 8
+            _draw_fill_rect(x, box_y, kpi_width, kpi_height, rgb=surface)
+            _draw_stroke_rect(x, box_y, kpi_width, kpi_height, rgb=border, line_width=0.8)
+            _write_text(label, x + 10, box_y + 31, font="F2", size=kpi_label_size, rgb=text_muted)
+            _write_text(value, x + 10, box_y + 13, font="F2", size=kpi_value_size, rgb=text_main)
+
+        divider_y = kpi_top - kpi_height - 10
+        _draw_line(margin_x, divider_y, margin_x + usable_width, divider_y, rgb=border, width=1.0)
+        return divider_y - 24
+
+    content_start_y = _draw_page_chrome()
+    y = content_start_y
 
     for section in sections:
         items = section.get("items") or []
-        section_height = 26 + max(1, len(items)) * line_height + 18
+        section_height = 36 + max(1, len(items)) * line_height + line_height
         _ensure_space(section_height)
         column_x = margin_x if column_index == 0 else margin_x + column_width + column_gap
 
-        _draw_fill_rect(column_x, y - 6, column_width, 22, rgb=(0.89, 0.94, 0.98))
+        _draw_fill_rect(column_x, y - 8, column_width, 28, rgb=surface_muted)
         _write_text(
             str(section.get("title") or ""),
             column_x + 10,
-            y + 9,
+            y + 2,
             font="F2",
             size=section_font_size,
-            rgb=(0.11, 0.27, 0.43),
+            rgb=text_main,
         )
-        y -= 30
+        y -= 36
 
         for item in items:
-            _write_text(f"- {item}", column_x + 10, y, size=body_font_size, rgb=(0.08, 0.12, 0.18))
+            _write_text(f"- {item}", column_x + 10, y, size=body_font_size, rgb=text_main)
             y -= line_height
-        y -= 10
+        # Reserve one full blank line between this list and the next section heading.
+        y -= line_height
 
     if current_page:
         pages.append(current_page)
@@ -849,6 +888,182 @@ def _weekly_insights_filename(payload: Dict[str, Any]) -> str:
     return f"weekly-insights-{start_date}-{end_date}.pdf"
 
 
+def _weekly_insights_report_path(filename: str) -> Path:
+    """Return a safe path below the configured report directory."""
+    safe_name = Path(filename).name
+    if safe_name != filename or not safe_name.endswith(".pdf"):
+        raise ValueError("Ongeldige weekly-insights bestandsnaam")
+    return WEEKLY_INSIGHTS_REPORT_DIR / safe_name
+
+
+def _cleanup_weekly_insights_reports(now: Optional[datetime] = None) -> int:
+    """Remove generated reports older than the configured retention period."""
+    if not WEEKLY_INSIGHTS_REPORT_DIR.exists():
+        return 0
+    cutoff = (now or datetime.now(timezone.utc)).timestamp() - (WEEKLY_INSIGHTS_RETENTION_DAYS * 86400)
+    removed = 0
+    for report in WEEKLY_INSIGHTS_REPORT_DIR.glob("weekly-insights-*.pdf"):
+        try:
+            if report.is_file() and report.stat().st_mtime < cutoff:
+                report.unlink()
+                removed += 1
+        except OSError:
+            # A report being read or removed concurrently must not stop the weekly job.
+            continue
+    return removed
+
+
+def _store_weekly_insights_report(payload: Dict[str, Any], pdf: bytes) -> Path:
+    WEEKLY_INSIGHTS_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    report_path = _weekly_insights_report_path(_weekly_insights_filename(payload))
+    temporary_path = report_path.with_suffix(".pdf.tmp")
+    temporary_path.write_bytes(pdf)
+    temporary_path.replace(report_path)
+    _cleanup_weekly_insights_reports()
+    return report_path
+
+
+def _weekly_insights_report_url(filename: str) -> Optional[str]:
+    if not WEEKLY_INSIGHTS_PUBLIC_BASE_URL:
+        return None
+    return f"{WEEKLY_INSIGHTS_PUBLIC_BASE_URL}/alerts/weekly-insights/reports/{Path(filename).name}"
+
+
+def _latest_weekly_insights_report_path() -> Optional[Path]:
+    """Return the newest retained Weekly Insights PDF, if one is available."""
+    _cleanup_weekly_insights_reports()
+    if not WEEKLY_INSIGHTS_REPORT_DIR.exists():
+        return None
+    reports = [report for report in WEEKLY_INSIGHTS_REPORT_DIR.glob("weekly-insights-*.pdf") if report.is_file()]
+    return max(reports, key=lambda report: report.stat().st_mtime, default=None)
+
+
+def _weekly_insights_payload_from_filename(filename: str) -> Dict[str, Any]:
+    match = re.fullmatch(r"weekly-insights-(\d{4}-\d{2}-\d{2})-(\d{4}-\d{2}-\d{2})\.pdf", filename)
+    if not match:
+        raise ValueError("Ongeldige weekly-insights bestandsnaam")
+    start_date, end_date = match.groups()
+    return {"week": {"start_date": start_date, "end_date": end_date}}
+
+
+def _weekly_insights_subject(payload: Dict[str, Any]) -> str:
+    week_start = str((payload.get("week") or {}).get("start_date") or "")
+    try:
+        week_number = date.fromisoformat(week_start).isocalendar().week
+    except ValueError:
+        week_number = "-"
+    return f"Weekly insights Servicedesk Twentecs week {week_number}"
+
+
+def _send_weekly_insights_email(
+    payload: Dict[str, Any],
+    pdf: bytes,
+    filename: str,
+    report_url: Optional[str],
+    recipients_override: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    if recipients_override is None:
+        servicedesk_config = get_servicedesk_config()
+        if not servicedesk_config.get("weekly_insights_email_enabled", False):
+            return {"sent": False, "reason": "email_disabled"}
+        configured_recipients = servicedesk_config.get("weekly_insights_email_recipients") or []
+        team_member_emails = list((servicedesk_config.get("team_member_emails") or {}).values())
+        recipients = _normalize_email_recipients(
+            [*configured_recipients, *team_member_emails, *WEEKLY_INSIGHTS_EMAIL_TO]
+        )
+    else:
+        recipients = _normalize_email_recipients(recipients_override)
+    if not recipients:
+        return {"sent": False, "reason": "email_not_configured"}
+
+    body = f"De weekly insights voor {_format_report_date_range(payload)} zijn als PDF bijgevoegd."
+    if report_url:
+        body += f"\n\nInterne link: {report_url}"
+
+    if RESEND_API_KEY and RESEND_FROM:
+        try:
+            resend.api_key = RESEND_API_KEY
+            result = resend.Emails.send(
+                {
+                    "from": RESEND_FROM,
+                    "to": recipients,
+                    "subject": _weekly_insights_subject(payload),
+                    "html": "<p>" + body.replace("\n", "<br>") + "</p>",
+                    "attachments": [
+                        {
+                            "filename": filename,
+                            "content": base64.b64encode(pdf).decode("ascii"),
+                        }
+                    ],
+                }
+            )
+            return {
+                "sent": True,
+                "recipients": len(recipients),
+                "provider": "resend",
+                "email_id": result.get("id") if isinstance(result, dict) else None,
+            }
+        except Exception as exc:
+            return {"sent": False, "reason": str(exc), "provider": "resend"}
+
+    if not (SMTP_HOST and SMTP_FROM):
+        return {"sent": False, "reason": "email_not_configured"}
+    message = EmailMessage()
+    message["Subject"] = _weekly_insights_subject(payload)
+    message["From"] = SMTP_FROM
+    message["To"] = ", ".join(recipients)
+    message.set_content(body)
+    message.add_attachment(pdf, maintype="application", subtype="pdf", filename=filename)
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as smtp:
+            if SMTP_USE_TLS:
+                smtp.starttls()
+            if SMTP_USERNAME:
+                smtp.login(SMTP_USERNAME, SMTP_PASSWORD)
+            smtp.send_message(message)
+        return {"sent": True, "recipients": len(recipients)}
+    except (OSError, smtplib.SMTPException) as exc:
+        return {"sent": False, "reason": str(exc)}
+
+
+def _send_weekly_insights_teams_notification(payload: Dict[str, Any], report_url: Optional[str]) -> Dict[str, Any]:
+    if not WEEKLY_INSIGHTS_TEAMS_WEBHOOK_URL:
+        return {"sent": False, "reason": "teams_not_configured"}
+    if not report_url:
+        return {"sent": False, "reason": "internal_url_not_configured"}
+    body = {
+        "@type": "MessageCard",
+        "@context": "https://schema.org/extensions",
+        "summary": "Weekly insights beschikbaar",
+        "themeColor": "1B456E",
+        "title": "Weekly insights beschikbaar",
+        "text": f"De weekly insights voor **{_format_report_date_range(payload)}** zijn gegenereerd.",
+        "potentialAction": [{"@type": "OpenUri", "name": "Open PDF (intern netwerk)", "targets": [{"os": "default", "uri": report_url}]}],
+    }
+    try:
+        response = requests.post(WEEKLY_INSIGHTS_TEAMS_WEBHOOK_URL, json=body, timeout=ALERT_TEAMS_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        return {"sent": True}
+    except requests.RequestException as exc:
+        return {"sent": False, "reason": str(exc)}
+
+
+def generate_and_distribute_weekly_insights() -> Dict[str, Any]:
+    """Create one archived PDF and distribute it through configured channels."""
+    payload = _weekly_insights_payload(servicedesk_only=True)
+    pdf = _build_weekly_insights_pdf(payload)
+    filename = _weekly_insights_filename(payload)
+    report_path = _store_weekly_insights_report(payload, pdf)
+    report_url = _weekly_insights_report_url(filename)
+    return {
+        "filename": filename,
+        "path": str(report_path),
+        "url": report_url,
+        "email": _send_weekly_insights_email(payload, pdf, filename, report_url),
+        "teams": _send_weekly_insights_teams_notification(payload, report_url),
+    }
+
+
 def _format_report_timestamp(value: Any) -> str:
     if not value:
         return "-"
@@ -889,6 +1104,9 @@ def ensure_schema():  # pragma: no cover
     if _schema_checked:
         return
     with conn() as c, c.cursor() as cur:
+        # Multiple Uvicorn workers can start at the same time. Serialize DDL so
+        # concurrent ``ALTER TABLE`` statements cannot deadlock each other.
+        cur.execute("select pg_advisory_xact_lock(734291);")
         # Fresh Docker/Postgres installs may start with an empty database.
         # Bootstrap required tables first, then heal missing columns.
         cur.execute(
@@ -905,6 +1123,8 @@ def ensure_schema():  # pragma: no cover
               priority text,
               assignee text,
               assignee_avatar_url text,
+              assignee_email text,
+              assignee_account_id text,
               current_status text,
               first_response_due_at timestamptz,
               time_to_resolution_due_at timestamptz
@@ -949,6 +1169,8 @@ def ensure_schema():  # pragma: no cover
               jira_token_fingerprint text,
               jira_token_renewal_pending boolean not null default false,
               jira_token_previous_expires_at date,
+              weekly_insights_email_recipients text[] not null default '{johan+test@planningsagenda.nl}',
+              weekly_insights_email_enabled boolean not null default false,
               updated_at timestamptz not null default now()
             );
             """
@@ -1050,11 +1272,21 @@ def ensure_schema():  # pragma: no cover
         cur.execute("alter table issues add column if not exists priority text;")
         cur.execute("alter table issues add column if not exists assignee text;")
         cur.execute("alter table issues add column if not exists assignee_avatar_url text;")
+        cur.execute("alter table issues add column if not exists assignee_email text;")
+        cur.execute("alter table issues add column if not exists assignee_account_id text;")
         cur.execute("alter table issues add column if not exists current_status text;")
         cur.execute("alter table dashboard_config add column if not exists jira_token_expires_at date;")
         cur.execute("alter table dashboard_config add column if not exists jira_token_fingerprint text;")
         cur.execute("alter table dashboard_config add column if not exists jira_token_renewal_pending boolean not null default false;")
         cur.execute("alter table dashboard_config add column if not exists jira_token_previous_expires_at date;")
+        cur.execute(
+            "alter table dashboard_config add column if not exists "
+            "weekly_insights_email_recipients text[] not null default '{johan+test@planningsagenda.nl}';"
+        )
+        cur.execute(
+            "alter table dashboard_config add column if not exists "
+            "weekly_insights_email_enabled boolean not null default false;"
+        )
         cur.execute("alter table issues add column if not exists first_response_due_at timestamptz;")
         cur.execute("alter table issues add column if not exists time_to_resolution_due_at timestamptz;")
         cur.execute("create index if not exists issues_created_at_idx on issues(created_at desc);")
@@ -1263,6 +1495,14 @@ class ServicedeskConfigPayload(BaseModel):
     ai_insight_threshold_pct: Optional[int] = None
 
 
+class WeeklyInsightsEmailRecipientsPayload(BaseModel):
+    recipients: list[str]
+
+
+class WeeklyInsightsEmailSettingsPayload(BaseModel):
+    enabled: bool
+
+
 class SaasReleaseConfigPayload(BaseModel):
     slot: str
     release_date: Optional[str] = None
@@ -1291,6 +1531,16 @@ def _normalize_text_list(values):
         if text:
             out.append(text)
     return list(dict.fromkeys(out))
+
+
+def _normalize_email_recipients(values) -> list[str]:
+    recipients = []
+    for value in _normalize_text_list(values):
+        email_address = value.lower()
+        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email_address):
+            raise ValueError(f"Ongeldig e-mailadres: {value}")
+        recipients.append(email_address)
+    return list(dict.fromkeys(recipients))
 
 
 def _allowed_servicedesk_onderwerpen(cur):
@@ -1338,7 +1588,9 @@ def get_servicedesk_config():
         saas_releases = _resolve_release_config_slots(cur)
         cur.execute(
             """
-            select servicedesk_team_members, servicedesk_onderwerpen, servicedesk_onderwerpen_customized, updated_at, ai_insight_threshold_pct
+            select servicedesk_team_members, servicedesk_onderwerpen, servicedesk_onderwerpen_customized, updated_at, ai_insight_threshold_pct,
+                   coalesce(weekly_insights_email_recipients, array[]::text[]),
+                   coalesce(weekly_insights_email_enabled, false)
             from dashboard_config
             where id = 1;
             """
@@ -1347,11 +1599,12 @@ def get_servicedesk_config():
         allowed_onderwerpen = _allowed_servicedesk_onderwerpen(cur)
         cur.execute(
             """
-            select assignee, assignee_avatar_url
+            select assignee, assignee_avatar_url, assignee_email
             from (
               select
                 assignee,
                 assignee_avatar_url,
+                assignee_email,
                 row_number() over (
                   partition by assignee
                   order by updated_at desc nulls last, created_at desc nulls last
@@ -1373,6 +1626,8 @@ def get_servicedesk_config():
             "onderwerpen_baseline": allowed_onderwerpen,
             "onderwerpen_customized": False,
             "ai_insight_threshold_pct": DEFAULT_AI_INSIGHT_THRESHOLD_PCT,
+            "weekly_insights_email_recipients": [],
+            "weekly_insights_email_enabled": False,
             "updated_at": None,
             "team_member_avatars": {},
             "saas_releases": {"last": _serialize_release_slot(saas_releases.get("last")), "next": _serialize_release_slot(saas_releases.get("next"))},
@@ -1380,15 +1635,27 @@ def get_servicedesk_config():
     team_members = list(row[0] or [])
     stored_onderwerpen = list(row[1] or [])
     onderwerpen_customized = bool(row[2])
-    avatar_map = {str(name): str(url) for name, url in avatar_rows if name and url}
+    avatar_map = {
+        str(row[0]): str(row[1])
+        for row in avatar_rows
+        if len(row) >= 2 and row[0] and row[1]
+    }
+    email_map = {
+        str(row[0]): str(row[2]).strip().lower()
+        for row in avatar_rows
+        if len(row) >= 3 and row[0] and row[2] and re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", str(row[2]).strip())
+    }
     return {
         "team_members": team_members,
         "onderwerpen": stored_onderwerpen if onderwerpen_customized else allowed_onderwerpen,
         "onderwerpen_baseline": allowed_onderwerpen,
         "onderwerpen_customized": onderwerpen_customized,
         "ai_insight_threshold_pct": int(row[4] or DEFAULT_AI_INSIGHT_THRESHOLD_PCT) if len(row) > 4 else DEFAULT_AI_INSIGHT_THRESHOLD_PCT,
+        "weekly_insights_email_recipients": _normalize_text_list(row[5]) if len(row) > 5 else [],
+        "weekly_insights_email_enabled": bool(row[6]) if len(row) > 6 else False,
         "updated_at": row[3].isoformat() if row[3] else None,
         "team_member_avatars": {name: avatar_map.get(name) for name in team_members if avatar_map.get(name)},
+        "team_member_emails": {name: email_map.get(name) for name in team_members if email_map.get(name)},
         "saas_releases": {"last": _serialize_release_slot(saas_releases.get("last")), "next": _serialize_release_slot(saas_releases.get("next"))},
     }
 
@@ -2907,6 +3174,20 @@ def norm_assignee_avatar_url(v):
     )
 
 
+def norm_assignee_email(v):
+    if not isinstance(v, dict):
+        return None
+    email_address = str(v.get("emailAddress") or "").strip().lower()
+    return email_address if re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email_address) else None
+
+
+def norm_assignee_account_id(v):
+    if not isinstance(v, dict):
+        return None
+    account_id = str(v.get("accountId") or "").strip()
+    return account_id or None
+
+
 def norm_organizations(v):
     # JSM Organizations field usually comes as a list of objects with a name.
     if v is None:
@@ -3343,6 +3624,8 @@ def upsert_issues(issues):
             priority = (f.get("priority") or {}).get("name")
             assignee = norm_assignee(f.get("assignee"))
             assignee_avatar_url = norm_assignee_avatar_url(f.get("assignee"))
+            assignee_email = norm_assignee_email(f.get("assignee"))
+            assignee_account_id = norm_assignee_account_id(f.get("assignee"))
             organizations = norm_organizations(f.get(ORGANIZATION_FIELD))
             first_response_due_at = norm_first_response_due_at(f.get(FIRST_RESPONSE_SLA_FIELD))
             time_to_resolution_due_at = norm_time_to_resolution_due_at(
@@ -3351,8 +3634,8 @@ def upsert_issues(issues):
 
             cur.execute(
                 """
-                insert into issues(issue_key, issue_summary, request_type, onderwerp_logging, organizations, created_at, resolved_at, updated_at, priority, assignee, assignee_avatar_url, current_status, first_response_due_at, time_to_resolution_due_at)
-                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                insert into issues(issue_key, issue_summary, request_type, onderwerp_logging, organizations, created_at, resolved_at, updated_at, priority, assignee, assignee_avatar_url, assignee_email, assignee_account_id, current_status, first_response_due_at, time_to_resolution_due_at)
+                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 on conflict (issue_key) do update set
                   issue_summary=excluded.issue_summary,
                   request_type=excluded.request_type,
@@ -3364,6 +3647,8 @@ def upsert_issues(issues):
                   priority=excluded.priority,
                   assignee=excluded.assignee,
                   assignee_avatar_url=excluded.assignee_avatar_url,
+                  assignee_email=coalesce(excluded.assignee_email, issues.assignee_email),
+                  assignee_account_id=coalesce(excluded.assignee_account_id, issues.assignee_account_id),
                   current_status=excluded.current_status,
                   first_response_due_at=excluded.first_response_due_at,
                   time_to_resolution_due_at=excluded.time_to_resolution_due_at
@@ -3380,6 +3665,8 @@ def upsert_issues(issues):
                     priority,
                     assignee,
                     assignee_avatar_url,
+                    assignee_email,
+                    assignee_account_id,
                     status,
                     first_response_due_at,
                     time_to_resolution_due_at,
@@ -3551,6 +3838,38 @@ def _run_auto_sync_scheduler():
         time.sleep(5)
 
 
+def _next_weekly_insights_run(now_utc: Optional[datetime] = None) -> datetime:
+    """Return the next configured weekly run in UTC, using Amsterdam local time."""
+    now_local = (now_utc or datetime.now(timezone.utc)).astimezone(REPORT_TIMEZONE)
+    candidate = now_local.replace(
+        hour=WEEKLY_INSIGHTS_HOUR,
+        minute=WEEKLY_INSIGHTS_MINUTE,
+        second=0,
+        microsecond=0,
+    )
+    days_until = (WEEKLY_INSIGHTS_WEEKDAY - candidate.weekday()) % 7
+    candidate += timedelta(days=days_until)
+    if candidate <= now_local:
+        candidate += timedelta(days=7)
+    return candidate.astimezone(timezone.utc)
+
+
+def _run_weekly_insights_scheduler():
+    if not WEEKLY_INSIGHTS_ENABLED:
+        return
+    while True:
+        next_run = _next_weekly_insights_run()
+        wait_seconds = max(0.0, (next_run - datetime.now(timezone.utc)).total_seconds())
+        while wait_seconds > 0:
+            time.sleep(min(60.0, wait_seconds))
+            wait_seconds = max(0.0, (next_run - datetime.now(timezone.utc)).total_seconds())
+        try:
+            generate_and_distribute_weekly_insights()
+        except Exception:
+            # The following week's report should still be attempted after a transient failure.
+            pass
+
+
 @app.on_event("startup")
 def _startup_auto_sync_scheduler():
     global _auto_sync_scheduler_started
@@ -3562,6 +3881,19 @@ def _startup_auto_sync_scheduler():
         thread = threading.Thread(target=_run_auto_sync_scheduler, daemon=True, name="auto-sync-scheduler")
         thread.start()
         _auto_sync_scheduler_started = True
+
+
+@app.on_event("startup")
+def _startup_weekly_insights_scheduler():
+    global _weekly_insights_scheduler_started
+    if not WEEKLY_INSIGHTS_ENABLED:
+        return
+    with _weekly_insights_scheduler_lock:
+        if _weekly_insights_scheduler_started:
+            return
+        thread = threading.Thread(target=_run_weekly_insights_scheduler, daemon=True, name="weekly-insights-scheduler")
+        thread.start()
+        _weekly_insights_scheduler_started = True
 
 
 @app.get("/meta")
@@ -3723,6 +4055,47 @@ def update_servicedesk_config(payload: ServicedeskConfigPayload):
             where id = 1;
             """,
             (team_members, onderwerpen_to_save, ai_insight_threshold_pct, onderwerpen_customized),
+        )
+        c.commit()
+    return get_servicedesk_config()
+
+
+@app.put("/config/weekly-insights-email-recipients")
+def update_weekly_insights_email_recipients(payload: WeeklyInsightsEmailRecipientsPayload):
+    ensure_schema()
+    try:
+        recipients = _normalize_email_recipients(payload.recipients)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    with conn() as c, c.cursor() as cur:
+        cur.execute("insert into dashboard_config(id) values (1) on conflict (id) do nothing;")
+        cur.execute(
+            """
+            update dashboard_config
+            set weekly_insights_email_recipients = %s,
+                updated_at = now()
+            where id = 1;
+            """,
+            (recipients,),
+        )
+        c.commit()
+    return get_servicedesk_config()
+
+
+@app.put("/config/weekly-insights-email-settings")
+def update_weekly_insights_email_settings(payload: WeeklyInsightsEmailSettingsPayload):
+    """Enable or disable the automatic Weekly Insights e-mail distribution."""
+    ensure_schema()
+    with conn() as c, c.cursor() as cur:
+        cur.execute("insert into dashboard_config(id) values (1) on conflict (id) do nothing;")
+        cur.execute(
+            """
+            update dashboard_config
+            set weekly_insights_email_enabled = %s,
+                updated_at = now()
+            where id = 1;
+            """,
+            (payload.enabled,),
         )
         c.commit()
     return get_servicedesk_config()
@@ -5192,6 +5565,55 @@ def alerts_weekly_insights_pdf(servicedesk_only: bool = True):
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@app.get("/alerts/weekly-insights/reports/{filename}")
+def alerts_weekly_insights_report(filename: str):
+    try:
+        report_path = _weekly_insights_report_path(filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not report_path.is_file():
+        raise HTTPException(status_code=404, detail="Weekly insights PDF niet gevonden of verlopen")
+    cutoff = datetime.now(timezone.utc).timestamp() - (WEEKLY_INSIGHTS_RETENTION_DAYS * 86400)
+    if report_path.stat().st_mtime < cutoff:
+        try:
+            report_path.unlink()
+        except OSError:
+            pass
+        raise HTTPException(status_code=404, detail="Weekly insights PDF niet gevonden of verlopen")
+    return Response(
+        content=report_path.read_bytes(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{report_path.name}"'},
+    )
+
+
+@app.post("/dev/weekly-insights/send-test-email")
+def send_weekly_insights_test_email():
+    """Send the most recently generated Weekly Insights PDF to the test mailbox only."""
+    report_path = _latest_weekly_insights_report_path()
+    if report_path is None:
+        raise HTTPException(status_code=404, detail="Er is nog geen actuele Weekly Insights-PDF beschikbaar")
+    try:
+        payload = _weekly_insights_payload_from_filename(report_path.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    recipients = _normalize_email_recipients(WEEKLY_INSIGHTS_TEST_EMAIL_TO)
+    result = _send_weekly_insights_email(
+        payload,
+        report_path.read_bytes(),
+        report_path.name,
+        _weekly_insights_report_url(report_path.name),
+        recipients_override=recipients,
+    )
+    if not result.get("sent"):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Testmail kon niet worden verstuurd: {result.get('reason', 'onbekende fout')}",
+        )
+    return {"sent": True, "filename": report_path.name, "recipient": recipients[0] if recipients else None}
 
 
 @app.post("/alerts/logs/clear")

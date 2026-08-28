@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta, timezone
+import base64
 import re
 
 import pytest
@@ -613,6 +614,161 @@ def test_weekly_insights_pdf_lines_formats_breakdowns_and_empty_states():
     assert "- Alice: 2" in lines
 
 
+def test_weekly_insights_report_storage_cleanup_and_internal_url(monkeypatch, tmp_path):
+    monkeypatch.setattr(api, "WEEKLY_INSIGHTS_REPORT_DIR", tmp_path)
+    monkeypatch.setattr(api, "WEEKLY_INSIGHTS_RETENTION_DAYS", 28)
+    monkeypatch.setattr(api, "WEEKLY_INSIGHTS_PUBLIC_BASE_URL", "https://dashboard.intern")
+    payload = {"week": {"start_date": "2026-03-09", "end_date": "2026-03-15"}}
+
+    stored = api._store_weekly_insights_report(payload, b"%PDF-1.4\nweekly")
+    assert stored.read_bytes() == b"%PDF-1.4\nweekly"
+    assert api._weekly_insights_report_url(stored.name) == (
+        "https://dashboard.intern/alerts/weekly-insights/reports/weekly-insights-2026-03-09-2026-03-15.pdf"
+    )
+
+    old_report = tmp_path / "weekly-insights-2026-01-01-2026-01-07.pdf"
+    old_report.write_bytes(b"old")
+    old_timestamp = (datetime.now(timezone.utc) - timedelta(days=29)).timestamp()
+    import os
+    os.utime(old_report, (old_timestamp, old_timestamp))
+
+    assert api._cleanup_weekly_insights_reports() == 1
+    assert not old_report.exists()
+    assert stored.exists()
+
+
+def test_weekly_insights_report_endpoint_serves_archived_pdf(monkeypatch, tmp_path):
+    monkeypatch.setattr(api, "WEEKLY_INSIGHTS_REPORT_DIR", tmp_path)
+    filename = "weekly-insights-2026-03-09-2026-03-15.pdf"
+    (tmp_path / filename).write_bytes(b"%PDF-1.4\narchived")
+
+    response = client.get(f"/alerts/weekly-insights/reports/{filename}")
+
+    assert response.status_code == 200
+    assert response.content == b"%PDF-1.4\narchived"
+    assert response.headers["content-disposition"] == f'attachment; filename="{filename}"'
+
+
+def test_send_weekly_insights_test_email_uses_latest_archived_report(monkeypatch, tmp_path):
+    older = tmp_path / "weekly-insights-2026-03-02-2026-03-08.pdf"
+    older.write_bytes(b"%PDF-1.4\nolder")
+    latest = tmp_path / "weekly-insights-2026-03-09-2026-03-15.pdf"
+    latest.write_bytes(b"%PDF-1.4\nlatest")
+    import os
+    latest_timestamp = (datetime.now(timezone.utc) + timedelta(seconds=1)).timestamp()
+    os.utime(latest, (latest_timestamp, latest_timestamp))
+    monkeypatch.setattr(api, "WEEKLY_INSIGHTS_REPORT_DIR", tmp_path)
+    monkeypatch.setattr(api, "WEEKLY_INSIGHTS_TEST_EMAIL_TO", ["johan+test@planningsagenda.nl"])
+
+    sent = {}
+
+    def send_email(payload, pdf, filename, report_url, recipients_override=None):
+        sent.update(
+            payload=payload,
+            pdf=pdf,
+            filename=filename,
+            recipients_override=recipients_override,
+        )
+        return {"sent": True}
+
+    monkeypatch.setattr(api, "_send_weekly_insights_email", send_email)
+
+    response = client.post("/dev/weekly-insights/send-test-email")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "sent": True,
+        "filename": latest.name,
+        "recipient": "johan+test@planningsagenda.nl",
+    }
+    assert sent["pdf"] == b"%PDF-1.4\nlatest"
+    assert sent["filename"] == latest.name
+    assert sent["payload"]["week"]["start_date"] == "2026-03-09"
+    assert sent["recipients_override"] == ["johan+test@planningsagenda.nl"]
+
+
+def test_next_weekly_insights_run_uses_amsterdam_schedule(monkeypatch):
+    monkeypatch.setattr(api, "WEEKLY_INSIGHTS_WEEKDAY", 0)
+    monkeypatch.setattr(api, "WEEKLY_INSIGHTS_HOUR", 8)
+    monkeypatch.setattr(api, "WEEKLY_INSIGHTS_MINUTE", 0)
+
+    # Friday before the daylight-saving transition: Monday 08:00 Amsterdam is 06:00 UTC.
+    next_run = api._next_weekly_insights_run(datetime(2026, 3, 27, 12, 0, tzinfo=timezone.utc))
+
+    assert next_run == datetime(2026, 3, 30, 6, 0, tzinfo=timezone.utc)
+
+
+def test_generate_and_distribute_weekly_insights_stores_then_notifies(monkeypatch, tmp_path):
+    payload = {"week": {"start_date": "2026-03-09", "end_date": "2026-03-15"}}
+    monkeypatch.setattr(api, "WEEKLY_INSIGHTS_REPORT_DIR", tmp_path)
+    monkeypatch.setattr(api, "_weekly_insights_payload", lambda servicedesk_only=True: payload)
+    monkeypatch.setattr(api, "_build_weekly_insights_pdf", lambda report: b"%PDF-1.4\nweekly")
+    monkeypatch.setattr(api, "_weekly_insights_report_url", lambda filename: f"https://intern/{filename}")
+    monkeypatch.setattr(api, "get_servicedesk_config", lambda: {"weekly_insights_email_enabled": True})
+    monkeypatch.setattr(api, "_send_weekly_insights_email", lambda *args: {"sent": True})
+    monkeypatch.setattr(api, "_send_weekly_insights_teams_notification", lambda *args: {"sent": True})
+
+    result = api.generate_and_distribute_weekly_insights()
+
+    assert result["filename"] == "weekly-insights-2026-03-09-2026-03-15.pdf"
+    assert (tmp_path / result["filename"]).read_bytes() == b"%PDF-1.4\nweekly"
+    assert result["email"] == {"sent": True}
+    assert result["teams"] == {"sent": True}
+
+
+def test_automatic_weekly_insights_email_is_disabled_by_default(monkeypatch):
+    monkeypatch.setattr(api, "get_servicedesk_config", lambda: {"weekly_insights_email_enabled": False})
+
+    result = api._send_weekly_insights_email(
+        {"week": {"start_date": "2026-08-17", "end_date": "2026-08-23"}},
+        b"%PDF-1.4\nweekly",
+        "weekly-insights-2026-08-17-2026-08-23.pdf",
+        None,
+    )
+
+    assert result == {"sent": False, "reason": "email_disabled"}
+
+
+def test_weekly_insights_email_subject_uses_iso_week_number():
+    assert api._weekly_insights_subject({"week": {"start_date": "2026-08-17"}}) == (
+        "Weekly insights Servicedesk Twentecs week 34"
+    )
+
+
+def test_weekly_insights_email_uses_resend_with_pdf_attachment(monkeypatch):
+    monkeypatch.setattr(api, "RESEND_API_KEY", "re_test")
+    monkeypatch.setattr(api, "RESEND_FROM", "Weekly Insights <weekly@example.com>")
+    sent = {}
+    monkeypatch.setattr(api.resend.Emails, "send", lambda params: sent.update(params) or {"id": "email-123"})
+
+    result = api._send_weekly_insights_email(
+        {"week": {"start_date": "2026-08-17", "end_date": "2026-08-23"}},
+        b"%PDF-1.4\nweekly",
+        "weekly-insights-2026-08-17-2026-08-23.pdf",
+        None,
+        recipients_override=["johan+test@planningsagenda.nl"],
+    )
+
+    assert result == {"sent": True, "recipients": 1, "provider": "resend", "email_id": "email-123"}
+    assert sent["from"] == "Weekly Insights <weekly@example.com>"
+    assert sent["to"] == ["johan+test@planningsagenda.nl"]
+    assert sent["subject"] == "Weekly insights Servicedesk Twentecs week 34"
+    assert sent["attachments"] == [
+        {
+            "filename": "weekly-insights-2026-08-17-2026-08-23.pdf",
+            "content": base64.b64encode(b"%PDF-1.4\nweekly").decode("ascii"),
+        }
+    ]
+
+
+def test_normalize_email_recipients_validates_deduplicates_and_normalizes_case():
+    assert api._normalize_email_recipients(["Johan+Test@planningsagenda.nl", "johan+test@planningsagenda.nl"]) == [
+        "johan+test@planningsagenda.nl"
+    ]
+    with pytest.raises(ValueError, match="Ongeldig e-mailadres"):
+        api._normalize_email_recipients(["geen-emailadres"])
+
+
 def test_to_utc_z_with_none_naive_and_aware():
     assert api._to_utc_z(None) is None
     assert api._to_utc_z(datetime(2026, 2, 25, 10, 0, 0)) == "2026-02-25T10:00:00Z"
@@ -910,7 +1066,7 @@ def test_upsert_issues_executes_insert(monkeypatch):
             "resolutiondate": None,
             "status": {"name": "Nieuwe melding"},
             "priority": {"name": "P1"},
-            "assignee": {"displayName": "Johan", "avatarUrls": {"48x48": "http://img"}},
+            "assignee": {"displayName": "Johan", "emailAddress": "johan@planningsagenda.nl", "accountId": "account-1", "avatarUrls": {"48x48": "http://img"}},
         },
     }
     api.upsert_issues([issue])
@@ -924,7 +1080,9 @@ def test_upsert_issues_executes_insert(monkeypatch):
     assert params[4] == ["Org A"]
     assert params[9] == "Johan"
     assert params[10] == "http://img"
-    assert params[13].isoformat() == "2026-02-26T10:00:00+00:00"
+    assert params[11] == "johan@planningsagenda.nl"
+    assert params[12] == "account-1"
+    assert params[15].isoformat() == "2026-02-26T10:00:00+00:00"
 
 
 def test_run_sync_once_branches(monkeypatch):
