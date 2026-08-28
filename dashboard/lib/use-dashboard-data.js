@@ -75,14 +75,25 @@ export function useDashboardData({
   }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee, organization, servicedeskOnly]);
 
   const buildP90Params = useCallback(() => {
-    const params = new URLSearchParams({ date_from: p90Period.dateFrom, date_to: p90Period.dateTo });
+    const params = new URLSearchParams({
+      date_from: p90Period.dateFrom,
+      date_to: p90Period.dateTo,
+    });
     if (onderwerp) params.set("onderwerp", onderwerp);
     if (priority) params.set("priority", priority);
     if (assignee) params.set("assignee", assignee);
     if (organization) params.set("organization", organization);
     if (servicedeskOnly) params.set("servicedesk_only", "true");
     return params;
-  }, [p90Period.dateFrom, p90Period.dateTo, onderwerp, priority, assignee, organization, servicedeskOnly]);
+  }, [
+    p90Period.dateFrom,
+    p90Period.dateTo,
+    onderwerp,
+    priority,
+    assignee,
+    organization,
+    servicedeskOnly,
+  ]);
 
   const buildReleaseWorkloadParams = useCallback(() => {
     const currentYear = new Date().getFullYear();
@@ -100,8 +111,8 @@ export function useDashboardData({
   }, [dateTo, requestType, onderwerp, priority, assignee, organization, servicedeskOnly]);
 
   const refreshCurrentWeekFlow = useCallback(() => {
-    const params = buildMetricParams();
-    return fetchJson(`${API}/metrics/current_week_flow?` + params.toString())
+    // Live KPI's deliberately ignore historical dashboard filters.
+    return fetchJson(`${API}/metrics/current_week_flow?servicedesk_only=true`)
       .then((data) => {
         setCurrentWeekFlow(data);
         return data;
@@ -110,14 +121,18 @@ export function useDashboardData({
         setCurrentWeekFlow(null);
         return null;
       });
-  }, [buildMetricParams]);
+  }, []);
 
   const refreshLiveKpis = useCallback(() => {
     const updateCount = (setter) => (data) => setter(Math.max(0, Number(data?.count) || 0));
     return Promise.all([
       refreshCurrentWeekFlow(),
-      fetchJson(`${API}/metrics/in_progress_count`).then(updateCount(setInProgressCount)).catch(() => setInProgressCount(0)),
-      fetchJson(`${API}/metrics/new_melding_count`).then(updateCount(setNewMeldingCount)).catch(() => setNewMeldingCount(0)),
+      fetchJson(`${API}/metrics/in_progress_count`)
+        .then(updateCount(setInProgressCount))
+        .catch(() => setInProgressCount(0)),
+      fetchJson(`${API}/metrics/new_melding_count`)
+        .then(updateCount(setNewMeldingCount))
+        .catch(() => setNewMeldingCount(0)),
     ]).then(() => {
       setCurrentWeekFlowRefreshedAt(new Date().toISOString());
     });
@@ -127,13 +142,38 @@ export function useDashboardData({
     const params = buildMetricParams();
     const metricRequests = [
       { endpoint: "volume_weekly", setter: setVolume, transform: false, fallback: [] },
-      { endpoint: "volume_weekly_by_onderwerp", setter: setOnderwerpVolume, transform: true, fallback: [] },
+      {
+        endpoint: "volume_weekly_by_onderwerp",
+        setter: setOnderwerpVolume,
+        transform: true,
+        fallback: [],
+      },
       { endpoint: "volume_by_priority", setter: setPriorityVolume, transform: true, fallback: [] },
       { endpoint: "volume_by_assignee", setter: setAssigneeVolume, transform: true, fallback: [] },
-      { endpoint: "volume_weekly_by_organization", setter: setOrganizationVolume, transform: true, fallback: [] },
-      { endpoint: "inflow_vs_closed_weekly", setter: setInflowVsClosedWeekly, transform: true, fallback: [] },
-      { endpoint: "time_to_first_response_weekly", setter: setFirstResponseWeekly, transform: true, fallback: [] },
-      { endpoint: "ttfr_overdue_weekly", setter: setTtfrOverdueWeekly, transform: true, fallback: [] },
+      {
+        endpoint: "volume_weekly_by_organization",
+        setter: setOrganizationVolume,
+        transform: true,
+        fallback: [],
+      },
+      {
+        endpoint: "inflow_vs_closed_weekly",
+        setter: setInflowVsClosedWeekly,
+        transform: true,
+        fallback: [],
+      },
+      {
+        endpoint: "time_to_first_response_weekly",
+        setter: setFirstResponseWeekly,
+        transform: true,
+        fallback: [],
+      },
+      {
+        endpoint: "ttfr_overdue_weekly",
+        setter: setTtfrOverdueWeekly,
+        transform: true,
+        fallback: [],
+      },
     ];
 
     metricRequests.forEach(({ endpoint, setter, transform, fallback }) => {
@@ -147,12 +187,15 @@ export function useDashboardData({
 
     const ttrParams = new URLSearchParams(params);
     ttrParams.delete("request_type");
-    fetchJson(`${API}/metrics/time_to_resolution_weekly_by_type?` + ttrParams.toString()).then(
-      setArrayState(setIncidentResolutionWeekly)
-    ).catch(() => setIncidentResolutionWeekly([]));
+    fetchJson(`${API}/metrics/time_to_resolution_weekly_by_type?` + ttrParams.toString())
+      .then(setArrayState(setIncidentResolutionWeekly))
+      .catch(() => setIncidentResolutionWeekly([]));
 
     const releaseParams = buildReleaseWorkloadParams();
-    releaseParams.set("anchor_iso", process.env.NEXT_PUBLIC_RELEASE_ANCHOR_ISO || "2026-01-27T16:00:00Z");
+    releaseParams.set(
+      "anchor_iso",
+      process.env.NEXT_PUBLIC_RELEASE_ANCHOR_ISO || "2026-01-27T16:00:00Z"
+    );
     releaseParams.set("interval_days", "14");
     fetchJson(`${API}/metrics/release_followup_workload?` + releaseParams.toString())
       .then(setArrayState(setReleaseFollowupWorkload))
@@ -165,7 +208,9 @@ export function useDashboardData({
     } else {
       const p = buildP90Params();
 
-      fetchJson(`${API}/metrics/leadtime_p90_by_type?` + p.toString()).then(setP90).catch(() => setP90([]));
+      fetchJson(`${API}/metrics/leadtime_p90_by_type?` + p.toString())
+        .then(setP90)
+        .catch(() => setP90([]));
     }
   }, [
     buildMetricParams,
@@ -179,11 +224,15 @@ export function useDashboardData({
 
   const refreshDashboard = useCallback(async () => {
     refreshMetrics();
-    fetchJson(`${API}/meta`).then(setMeta).catch(() => setMeta(DEFAULT_META));
+    fetchJson(`${API}/meta`)
+      .then(setMeta)
+      .catch(() => setMeta(DEFAULT_META));
   }, [refreshMetrics]);
 
   useEffect(() => {
-    fetchJson(`${API}/meta`).then(setMeta).catch(() => setMeta(DEFAULT_META));
+    fetchJson(`${API}/meta`)
+      .then(setMeta)
+      .catch(() => setMeta(DEFAULT_META));
   }, []);
 
   useEffect(() => {
@@ -194,9 +243,12 @@ export function useDashboardData({
   }, [refreshMetrics]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      refreshLiveKpis();
-    }, isPageVisible ? CURRENT_WEEK_FLOW_VISIBLE_POLL_MS : CURRENT_WEEK_FLOW_HIDDEN_POLL_MS);
+    const timer = window.setInterval(
+      () => {
+        refreshLiveKpis();
+      },
+      isPageVisible ? CURRENT_WEEK_FLOW_VISIBLE_POLL_MS : CURRENT_WEEK_FLOW_HIDDEN_POLL_MS
+    );
     return () => window.clearInterval(timer);
   }, [isPageVisible, refreshLiveKpis]);
 

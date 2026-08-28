@@ -81,7 +81,11 @@ import { useSyncStatus } from "../lib/use-sync-status";
 import { useVacationsData } from "../lib/use-vacations-data";
 import { useWeeklyInsights } from "../lib/use-weekly-insights";
 import { computeInsights } from "../lib/dashboard-insights";
-import { buildMovingAverage, buildTopicTrendSeries, resolveSelectedTopic } from "../lib/topic-trends";
+import {
+  buildMovingAverage,
+  buildTopicTrendSeries,
+  resolveSelectedTopic,
+} from "../lib/topic-trends";
 
 ChartJS.register(
   CategoryScale,
@@ -107,11 +111,11 @@ const AUTO_RESET_IDLE_MS = Math.max(
 );
 const CHART_RENDER_TIMEOUT_MS = Math.max(
   600,
-  (Number(process.env.NEXT_PUBLIC_CHART_RENDER_TIMEOUT_MS) || 900)
+  Number(process.env.NEXT_PUBLIC_CHART_RENDER_TIMEOUT_MS) || 900
 );
 const CHART_RENDER_OVERLAY_MAX_MS = Math.max(
   CHART_RENDER_TIMEOUT_MS + 1000,
-  (Number(process.env.NEXT_PUBLIC_CHART_RENDER_OVERLAY_MAX_MS) || 7000)
+  Number(process.env.NEXT_PUBLIC_CHART_RENDER_OVERLAY_MAX_MS) || 7000
 );
 const RELEASE_WEEKDAY_OPTIONS = [
   { value: 1, label: "Maandag" },
@@ -133,7 +137,12 @@ function releaseSlotStatusMeta(slot, label) {
       text: `${label} vervallen (${fmtDateWithWeekday(slot.base_release_date || slot.release_date)})`,
     };
   }
-  if (slot?.source === "override" && slot?.base_release_date && slot?.release_date && slot.base_release_date !== slot.release_date) {
+  if (
+    slot?.source === "override" &&
+    slot?.base_release_date &&
+    slot?.release_date &&
+    slot.base_release_date !== slot.release_date
+  ) {
     return {
       kind: "adjusted",
       isoDate: slot.release_date,
@@ -187,43 +196,43 @@ function alertKindPillStyle(kind) {
         ? "rgba(127, 29, 29, 0.42)"
         : kind === "TTR_WARNING"
           ? "rgba(96, 165, 250, 0.42)"
-        : kind === "TTR_CRITICAL"
-          ? "rgba(37, 99, 235, 0.42)"
-        : kind === "TTR_OVERDUE"
-          ? "rgba(30, 58, 138, 0.42)"
-        : kind === "LOGBOOK_EVENT"
-          ? "rgba(71, 85, 105, 0.42)"
-        : kind === "SLA_OVERDUE"
-          ? "rgba(126, 34, 206, 0.42)"
-          : "rgba(180, 83, 9, 0.42)",
+          : kind === "TTR_CRITICAL"
+            ? "rgba(37, 99, 235, 0.42)"
+            : kind === "TTR_OVERDUE"
+              ? "rgba(30, 58, 138, 0.42)"
+              : kind === "LOGBOOK_EVENT"
+                ? "rgba(71, 85, 105, 0.42)"
+                : kind === "SLA_OVERDUE"
+                  ? "rgba(126, 34, 206, 0.42)"
+                  : "rgba(180, 83, 9, 0.42)",
     background:
       kind === "P1"
         ? "color-mix(in srgb, #ef4444 18%, var(--surface))"
         : kind === "TTR_WARNING"
           ? "color-mix(in srgb, #60a5fa 16%, var(--surface))"
-        : kind === "TTR_CRITICAL"
-          ? "color-mix(in srgb, #2563eb 16%, var(--surface))"
-        : kind === "TTR_OVERDUE"
-          ? "color-mix(in srgb, #1e3a8a 18%, var(--surface))"
-        : kind === "LOGBOOK_EVENT"
-          ? "color-mix(in srgb, #64748b 14%, var(--surface))"
-        : kind === "SLA_OVERDUE"
-          ? "color-mix(in srgb, #a855f7 16%, var(--surface))"
-          : "color-mix(in srgb, #f59e0b 16%, var(--surface))",
+          : kind === "TTR_CRITICAL"
+            ? "color-mix(in srgb, #2563eb 16%, var(--surface))"
+            : kind === "TTR_OVERDUE"
+              ? "color-mix(in srgb, #1e3a8a 18%, var(--surface))"
+              : kind === "LOGBOOK_EVENT"
+                ? "color-mix(in srgb, #64748b 14%, var(--surface))"
+                : kind === "SLA_OVERDUE"
+                  ? "color-mix(in srgb, #a855f7 16%, var(--surface))"
+                  : "color-mix(in srgb, #f59e0b 16%, var(--surface))",
     color:
       kind === "P1"
         ? "#b91c1c"
         : kind === "TTR_WARNING"
           ? "#1d4ed8"
-        : kind === "TTR_CRITICAL"
-          ? "#1e40af"
-        : kind === "TTR_OVERDUE"
-          ? "#1e3a8a"
-        : kind === "LOGBOOK_EVENT"
-          ? "#334155"
-        : kind === "SLA_OVERDUE"
-          ? "#7e22ce"
-          : "#b45309",
+          : kind === "TTR_CRITICAL"
+            ? "#1e40af"
+            : kind === "TTR_OVERDUE"
+              ? "#1e3a8a"
+              : kind === "LOGBOOK_EVENT"
+                ? "#334155"
+                : kind === "SLA_OVERDUE"
+                  ? "#7e22ce"
+                  : "#b45309",
   };
 }
 
@@ -289,6 +298,21 @@ const WEEKLY_INSIGHTS_GROUP_KEY = "__weekly_insights__";
 const DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY = "jsm_dashboard_layout_scope_v1";
 const DASHBOARD_THEME_STORAGE_KEY = "jsm_dashboard_theme_preference_v1";
 const THEME_PREFERENCES = new Set(["system", "light", "dark"]);
+
+function SettingsGearIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M10.3 3.8h3.4l.6 2.3c.5.2 1 .5 1.5.8l2.2-.7 1.7 2.9-1.6 1.6c.1.5.1 1.1 0 1.6l1.6 1.6-1.7 2.9-2.2-.7c-.5.4-1 .6-1.5.8l-.6 2.3h-3.4l-.6-2.3c-.5-.2-1-.5-1.5-.8l-2.2.7-1.7-2.9 1.6-1.6a6.8 6.8 0 0 1 0-1.6L4.6 9.1l1.7-2.9 2.2.7c.5-.4 1-.6 1.5-.8l.3-2.3Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="12" cy="12" r="2.6" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  );
+}
 
 function resolveCssVarColor(name, fallback) {
   if (typeof window === "undefined" || typeof document === "undefined") return fallback;
@@ -417,9 +441,14 @@ export default function Home() {
   const [expandedCard, setExpandedCard] = useState("");
   const [selectedTopicTrend, setSelectedTopicTrend] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [dashboardSettingsOpen, setDashboardSettingsOpen] = useState(false);
   const [showStartupSkeleton, setShowStartupSkeleton] = useState(true);
   const [dashboardLayout, setDashboardLayout] = useState(createDefaultDashboardLayout);
   const [aiInsightThresholdDraft, setAiInsightThresholdDraft] = useState(75);
+  const [weeklyInsightsEmailDraft, setWeeklyInsightsEmailDraft] = useState([]);
+  const [weeklyInsightsEmailInput, setWeeklyInsightsEmailInput] = useState("");
+  const [weeklyInsightsEmailSaving, setWeeklyInsightsEmailSaving] = useState(false);
+  const [weeklyInsightsEmailEnabledSaving, setWeeklyInsightsEmailEnabledSaving] = useState(false);
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
   const [topOnderwerpSort, setTopOnderwerpSort] = useState("wow");
   const [isTvMode, setIsTvMode] = useState(false);
@@ -487,8 +516,18 @@ export default function Home() {
   const normalizeDashboardLayout = useCallback((input) => normalizeDashboardLayoutState(input), []);
 
   const layoutDirty = useMemo(
-    () => layoutSavedSnapshot !== JSON.stringify(dashboardLayout) || themePreferenceDraft !== themePreference || tvModeDraft !== isTvMode,
-    [isTvMode, layoutSavedSnapshot, dashboardLayout, themePreference, themePreferenceDraft, tvModeDraft]
+    () =>
+      layoutSavedSnapshot !== JSON.stringify(dashboardLayout) ||
+      themePreferenceDraft !== themePreference ||
+      tvModeDraft !== isTvMode,
+    [
+      isTvMode,
+      layoutSavedSnapshot,
+      dashboardLayout,
+      themePreference,
+      themePreferenceDraft,
+      tvModeDraft,
+    ]
   );
 
   const chartSettingsFor = useCallback(
@@ -525,7 +564,8 @@ export default function Home() {
 
   const DRILL_LIMIT = 100;
   const ALERT_LOG_LIMIT = 300;
-  const sidePanelOpen = sidePanelMode === "alerts" || sidePanelMode === "insights" || !!selectedWeek;
+  const sidePanelOpen =
+    sidePanelMode === "alerts" || sidePanelMode === "insights" || !!selectedWeek;
   const filtersAreDefault = useMemo(() => {
     const { fromIso, toIso } = getStandardDateRange();
     return (
@@ -538,7 +578,17 @@ export default function Home() {
       !organization &&
       servicedeskOnly === DEFAULT_SERVICEDESK_ONLY
     );
-  }, [dateFrom, dateTo, requestType, onderwerp, priority, assignee, organization, servicedeskOnly, getStandardDateRange]);
+  }, [
+    dateFrom,
+    dateTo,
+    requestType,
+    onderwerp,
+    priority,
+    assignee,
+    organization,
+    servicedeskOnly,
+    getStandardDateRange,
+  ]);
   const { syncStatus, refreshSyncStatus } = useSyncStatus();
   const syncBusy = syncLoading || !!syncStatus?.running;
   const backendAutoSyncEnabled = !!syncStatus?.auto_sync?.enabled;
@@ -548,7 +598,9 @@ export default function Home() {
       ? "Synchroniseren…"
       : `Bijgewerkt: ${syncStatus.last_sync ? fmtDateTime(syncStatus.last_sync) : "—"}`;
     const upserts =
-      syncStatus.last_result?.upserts != null ? ` · ${syncStatus.last_result.upserts} bijgewerkt` : "";
+      syncStatus.last_result?.upserts != null
+        ? ` · ${syncStatus.last_result.upserts} bijgewerkt`
+        : "";
     const err = syncStatus.last_error ? ` · fout: ${syncStatus.last_error}` : "";
     return `${base}${upserts}${err}`;
   }, [syncStatus]);
@@ -566,6 +618,13 @@ export default function Home() {
     setAiInsightThresholdDraft(Number(servicedeskConfig?.ai_insight_threshold_pct || 75));
   }, [servicedeskConfig?.ai_insight_threshold_pct]);
   useEffect(() => {
+    setWeeklyInsightsEmailDraft(
+      Array.isArray(servicedeskConfig?.weekly_insights_email_recipients)
+        ? servicedeskConfig.weekly_insights_email_recipients
+        : []
+    );
+  }, [servicedeskConfig?.weekly_insights_email_recipients]);
+  useEffect(() => {
     setReleaseDrafts({
       last: {
         weekday: weekdayIndexFromIsoDate(servicedeskConfig?.saas_releases?.last?.release_date) ?? 2,
@@ -576,13 +635,23 @@ export default function Home() {
         cancelled: Boolean(servicedeskConfig?.saas_releases?.next?.cancelled),
       },
     });
-  }, [servicedeskConfig?.saas_releases?.last?.cancelled, servicedeskConfig?.saas_releases?.last?.release_date, servicedeskConfig?.saas_releases?.next?.cancelled, servicedeskConfig?.saas_releases?.next?.release_date]);
+  }, [
+    servicedeskConfig?.saas_releases?.last?.cancelled,
+    servicedeskConfig?.saas_releases?.last?.release_date,
+    servicedeskConfig?.saas_releases?.next?.cancelled,
+    servicedeskConfig?.saas_releases?.next?.release_date,
+  ]);
   const servicedeskTeamMembers = useMemo(() => {
-    const values = Array.isArray(servicedeskConfig?.team_members) ? servicedeskConfig.team_members : [];
+    const values = Array.isArray(servicedeskConfig?.team_members)
+      ? servicedeskConfig.team_members
+      : [];
     return values.length ? values : VACATION_TEAM_MEMBERS;
   }, [servicedeskConfig]);
   const activeFilterItems = useMemo(() => {
     const items = [];
+    const { fromIso, toIso } = getStandardDateRange();
+    if (dateFrom !== fromIso || dateTo !== toIso)
+      items.push(`Periode: ${fmtDate(dateFrom)} t/m ${fmtDate(dateTo)}`);
     if (requestType) items.push(`Type: ${requestType}`);
     if (onderwerp) items.push(`Onderwerp: ${onderwerp}`);
     if (priority) items.push(`Prioriteit: ${priority}`);
@@ -599,6 +668,9 @@ export default function Home() {
     assignee,
     organization,
     servicedeskOnly,
+    dateFrom,
+    dateTo,
+    getStandardDateRange,
   ]);
   const p90Period = useMemo(() => {
     const weekStarts = buildWeekStartsFromRange(dateFrom, dateTo);
@@ -658,21 +730,15 @@ export default function Home() {
     todayVacations,
     refreshVacations,
   } = useVacationsData();
-  const {
-    alertLogEntries,
-    hasNewAlertLogEntry,
-    refreshAlertLogs,
-    clearHasNewAlertLogEntry,
-  } = useAlertLogs({
-    limit: ALERT_LOG_LIMIT,
-    sidePanelMode,
-    resetKey: servicedeskOnly,
+  const { alertLogEntries, hasNewAlertLogEntry, refreshAlertLogs, clearHasNewAlertLogEntry } =
+    useAlertLogs({
+      limit: ALERT_LOG_LIMIT,
+      sidePanelMode,
+      resetKey: servicedeskOnly,
+    });
+  const { weeklyInsights, weeklyInsightsLoading, weeklyInsightsError } = useWeeklyInsights({
+    servicedeskOnly: true,
   });
-  const {
-    weeklyInsights,
-    weeklyInsightsLoading,
-    weeklyInsightsError,
-  } = useWeeklyInsights({ servicedeskOnly: true });
   const {
     liveInsights,
     insightLogEntries,
@@ -774,14 +840,17 @@ export default function Home() {
     }
   }, []);
 
-  const openInsightLogPanel = useCallback((insightId = "") => {
-    setSelectedInsightId(insightId ? String(insightId) : "");
-    if (insightId) {
-      setExpandedInsightIds((prev) => ({ ...prev, [insightId]: true }));
-    }
-    setSidePanelMode("insights");
-    setInsightUrl(insightId);
-  }, [setInsightUrl]);
+  const openInsightLogPanel = useCallback(
+    (insightId = "") => {
+      setSelectedInsightId(insightId ? String(insightId) : "");
+      if (insightId) {
+        setExpandedInsightIds((prev) => ({ ...prev, [insightId]: true }));
+      }
+      setSidePanelMode("insights");
+      setInsightUrl(insightId);
+    },
+    [setInsightUrl]
+  );
 
   const flashToast = useCallback((message, kind = "success", ms = 3000) => {
     setSyncMessage(message);
@@ -829,20 +898,23 @@ export default function Home() {
     setDateToUi(fmtDate(toIso));
   }, []);
 
-  const resetFilters = useCallback((showToast = true) => {
-    const { fromIso, toIso, fromLabel, toLabel } = getStandardDateRange();
-    setDateFrom(fromIso);
-    setDateTo(toIso);
-    setDateFromUi(fromLabel);
-    setDateToUi(toLabel);
-    setRequestType("");
-    setOnderwerp("");
-    setPriority("");
-    setAssignee("");
-    setOrganization("");
-    setServicedeskOnly(DEFAULT_SERVICEDESK_ONLY);
-    if (showToast) flashToast("Filters en datumrange gereset (laatste maand)");
-  }, [flashToast, getStandardDateRange]);
+  const resetFilters = useCallback(
+    (showToast = true) => {
+      const { fromIso, toIso, fromLabel, toLabel } = getStandardDateRange();
+      setDateFrom(fromIso);
+      setDateTo(toIso);
+      setDateFromUi(fromLabel);
+      setDateToUi(toLabel);
+      setRequestType("");
+      setOnderwerp("");
+      setPriority("");
+      setAssignee("");
+      setOrganization("");
+      setServicedeskOnly(DEFAULT_SERVICEDESK_ONLY);
+      if (showToast) flashToast("Filters en datumrange gereset (laatste maand)");
+    },
+    [flashToast, getStandardDateRange]
+  );
 
   const applyTvModePreference = useCallback((next) => {
     setIsTvMode(next);
@@ -872,17 +944,23 @@ export default function Home() {
     }
   }, []);
 
-  const toggleTeamMemberDraft = useCallback((name) => {
-    setTeamMembersDraft((prev) =>
-      prev.includes(name) ? prev.filter((x) => x !== name) : [...prev, name]
-    );
-  }, [setTeamMembersDraft]);
+  const toggleTeamMemberDraft = useCallback(
+    (name) => {
+      setTeamMembersDraft((prev) =>
+        prev.includes(name) ? prev.filter((x) => x !== name) : [...prev, name]
+      );
+    },
+    [setTeamMembersDraft]
+  );
 
-  const toggleOnderwerpDraft = useCallback((name) => {
-    setOnderwerpenDraft((prev) =>
-      prev.includes(name) ? prev.filter((x) => x !== name) : [...prev, name]
-    );
-  }, [setOnderwerpenDraft]);
+  const toggleOnderwerpDraft = useCallback(
+    (name) => {
+      setOnderwerpenDraft((prev) =>
+        prev.includes(name) ? prev.filter((x) => x !== name) : [...prev, name]
+      );
+    },
+    [setOnderwerpenDraft]
+  );
   const updateReleaseDraft = useCallback((slot, patch) => {
     setReleaseDrafts((prev) => ({
       ...prev,
@@ -893,26 +971,101 @@ export default function Home() {
     }));
   }, []);
 
-  const normalizedOnderwerpenSelection = useCallback((values) => {
-    const available = Array.isArray(meta?.onderwerpen) ? meta.onderwerpen : [];
-    if (!available.length) return Array.isArray(values) ? values : [];
-    const availableMap = new Map(
-      available.map((item) => {
-        const text = String(item);
-        return [text.toLowerCase(), text];
-      })
-    );
-    return Array.from(
-      new Set(
-        (Array.isArray(values) ? values : [])
-          .map((item) => availableMap.get(String(item).toLowerCase()) || null)
-          .filter(Boolean)
-      )
-    );
-  }, [meta]);
+  const normalizedOnderwerpenSelection = useCallback(
+    (values) => {
+      const available = Array.isArray(meta?.onderwerpen) ? meta.onderwerpen : [];
+      if (!available.length) return Array.isArray(values) ? values : [];
+      const availableMap = new Map(
+        available.map((item) => {
+          const text = String(item);
+          return [text.toLowerCase(), text];
+        })
+      );
+      return Array.from(
+        new Set(
+          (Array.isArray(values) ? values : [])
+            .map((item) => availableMap.get(String(item).toLowerCase()) || null)
+            .filter(Boolean)
+        )
+      );
+    },
+    [meta]
+  );
+
+  const saveWeeklyInsightsRecipients = useCallback(
+    async (recipients) => {
+      setWeeklyInsightsEmailSaving(true);
+      try {
+        const res = await fetch(`${API}/config/weekly-insights-email-recipients`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ recipients }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(
+            err?.detail || `Opslaan van e-mailadressen mislukt (HTTP ${res.status}).`
+          );
+        }
+        const updated = await res.json();
+        applyServicedeskConfig(updated, normalizedOnderwerpenSelection);
+        flashToast("Ontvangers voor weekly insights opgeslagen.");
+      } catch (err) {
+        flashToast(err?.message || "Opslaan van e-mailadressen mislukt.", "error");
+      } finally {
+        setWeeklyInsightsEmailSaving(false);
+      }
+    },
+    [applyServicedeskConfig, flashToast, normalizedOnderwerpenSelection]
+  );
+
+  const setWeeklyInsightsEmailEnabled = useCallback(
+    async (enabled) => {
+      setWeeklyInsightsEmailEnabledSaving(true);
+      try {
+        const res = await fetch(`${API}/config/weekly-insights-email-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err?.detail || `Opslaan van e-mailinstelling mislukt (HTTP ${res.status}).`);
+        }
+        const updated = await res.json();
+        applyServicedeskConfig(updated, normalizedOnderwerpenSelection);
+        flashToast(enabled ? "Automatisch versturen is ingeschakeld." : "Automatisch versturen is uitgeschakeld.");
+      } catch (err) {
+        flashToast(err?.message || "Opslaan van e-mailinstelling mislukt.", "error");
+      } finally {
+        setWeeklyInsightsEmailEnabledSaving(false);
+      }
+    },
+    [applyServicedeskConfig, flashToast, normalizedOnderwerpenSelection]
+  );
+
+  const addWeeklyInsightsRecipient = useCallback(async () => {
+    const candidate = weeklyInsightsEmailInput.trim().toLowerCase();
+    if (!candidate) return;
+    if (weeklyInsightsEmailDraft.some((email) => email.toLowerCase() === candidate)) {
+      setWeeklyInsightsEmailInput("");
+      return;
+    }
+    await saveWeeklyInsightsRecipients([...weeklyInsightsEmailDraft, candidate]);
+    setWeeklyInsightsEmailInput("");
+  }, [saveWeeklyInsightsRecipients, weeklyInsightsEmailDraft, weeklyInsightsEmailInput]);
+
+  const removeWeeklyInsightsRecipient = useCallback(
+    async (email) => {
+      await saveWeeklyInsightsRecipients(weeklyInsightsEmailDraft.filter((item) => item !== email));
+    },
+    [saveWeeklyInsightsRecipients, weeklyInsightsEmailDraft]
+  );
 
   const cancelTeamConfig = useCallback(() => {
-    setTeamMembersDraft(Array.isArray(servicedeskConfig?.team_members) ? servicedeskConfig.team_members : []);
+    setTeamMembersDraft(
+      Array.isArray(servicedeskConfig?.team_members) ? servicedeskConfig.team_members : []
+    );
   }, [servicedeskConfig, setTeamMembersDraft]);
 
   const cancelOnderwerpConfig = useCallback(() => {
@@ -922,13 +1075,17 @@ export default function Home() {
   const cancelAiInsightConfig = useCallback(() => {
     setAiInsightThresholdDraft(Number(servicedeskConfig?.ai_insight_threshold_pct || 75));
   }, [servicedeskConfig?.ai_insight_threshold_pct]);
-  const cancelReleaseConfig = useCallback((slot) => {
-    updateReleaseDraft(slot, {
-      weekday: weekdayIndexFromIsoDate(servicedeskConfig?.saas_releases?.[slot]?.release_date) ?? 2,
-      cancelled: Boolean(servicedeskConfig?.saas_releases?.[slot]?.cancelled),
-    });
-    setOpenReleaseEditor("");
-  }, [servicedeskConfig, updateReleaseDraft]);
+  const cancelReleaseConfig = useCallback(
+    (slot) => {
+      updateReleaseDraft(slot, {
+        weekday:
+          weekdayIndexFromIsoDate(servicedeskConfig?.saas_releases?.[slot]?.release_date) ?? 2,
+        cancelled: Boolean(servicedeskConfig?.saas_releases?.[slot]?.cancelled),
+      });
+      setOpenReleaseEditor("");
+    },
+    [servicedeskConfig, updateReleaseDraft]
+  );
 
   const zichtbareOnderwerpenDraft = useMemo(
     () => normalizedOnderwerpenSelection(onderwerpenDraft),
@@ -936,11 +1093,15 @@ export default function Home() {
   );
   const onderwerpFilterOpties = useMemo(() => {
     const servicedeskOnderwerpen = normalizedOnderwerpenSelection(servicedeskConfig?.onderwerpen);
-    return servicedeskOnderwerpen.length ? servicedeskOnderwerpen : normalizedOnderwerpenSelection(meta?.onderwerpen);
+    return servicedeskOnderwerpen.length
+      ? servicedeskOnderwerpen
+      : normalizedOnderwerpenSelection(meta?.onderwerpen);
   }, [meta, normalizedOnderwerpenSelection, servicedeskConfig]);
 
   const teamConfigDirty = useMemo(() => {
-    const base = Array.isArray(servicedeskConfig?.team_members) ? servicedeskConfig.team_members : [];
+    const base = Array.isArray(servicedeskConfig?.team_members)
+      ? servicedeskConfig.team_members
+      : [];
     return !sameStringSet(teamMembersDraft, base);
   }, [teamMembersDraft, servicedeskConfig]);
 
@@ -954,7 +1115,8 @@ export default function Home() {
   }, [servicedeskConfig]);
 
   const aiInsightConfigDirty = useMemo(
-    () => Number(aiInsightThresholdDraft) !== Number(servicedeskConfig?.ai_insight_threshold_pct || 75),
+    () =>
+      Number(aiInsightThresholdDraft) !== Number(servicedeskConfig?.ai_insight_threshold_pct || 75),
     [aiInsightThresholdDraft, servicedeskConfig?.ai_insight_threshold_pct]
   );
   const saasReleaseItems = useMemo(
@@ -1000,7 +1162,14 @@ export default function Home() {
     } finally {
       setTeamConfigSaving(false);
     }
-  }, [aiInsightThresholdDraft, applyServicedeskConfig, flashToast, normalizedOnderwerpenSelection, teamMembersDraft, onderwerpenDraft]);
+  }, [
+    aiInsightThresholdDraft,
+    applyServicedeskConfig,
+    flashToast,
+    normalizedOnderwerpenSelection,
+    teamMembersDraft,
+    onderwerpenDraft,
+  ]);
 
   const saveOnderwerpConfig = useCallback(async () => {
     const normalizedOnderwerpen = normalizedOnderwerpenSelection(onderwerpenDraft);
@@ -1031,7 +1200,14 @@ export default function Home() {
     } finally {
       setOnderwerpConfigSaving(false);
     }
-  }, [aiInsightThresholdDraft, applyServicedeskConfig, flashToast, normalizedOnderwerpenSelection, onderwerpenDraft, teamMembersDraft]);
+  }, [
+    aiInsightThresholdDraft,
+    applyServicedeskConfig,
+    flashToast,
+    normalizedOnderwerpenSelection,
+    onderwerpenDraft,
+    teamMembersDraft,
+  ]);
 
   const resetOnderwerpConfig = useCallback(async () => {
     const baseline = normalizedOnderwerpenSelection(servicedeskOnderwerpenBaseline);
@@ -1059,7 +1235,14 @@ export default function Home() {
     } finally {
       setOnderwerpConfigSaving(false);
     }
-  }, [aiInsightThresholdDraft, applyServicedeskConfig, flashToast, normalizedOnderwerpenSelection, servicedeskOnderwerpenBaseline, teamMembersDraft]);
+  }, [
+    aiInsightThresholdDraft,
+    applyServicedeskConfig,
+    flashToast,
+    normalizedOnderwerpenSelection,
+    servicedeskOnderwerpenBaseline,
+    teamMembersDraft,
+  ]);
 
   const saveAiInsightConfig = useCallback(async () => {
     setOnderwerpConfigSaving(true);
@@ -1098,47 +1281,59 @@ export default function Home() {
     zichtbareOnderwerpenDraft,
   ]);
 
-  const saveReleaseConfig = useCallback(async (slot) => {
-    const currentSlot = servicedeskConfig?.saas_releases?.[slot];
-    const draft = releaseDrafts?.[slot];
-    const baseReleaseDate = currentSlot?.base_release_date;
-    if (!baseReleaseDate || !draft) {
-      flashToast("Geen release gevonden om aan te passen.", "error");
-      return;
-    }
-    const releaseDate = shiftIsoDateToWeekday(baseReleaseDate, draft.weekday);
-    if (!releaseDate) {
-      flashToast("Kies een geldige dag voor deze releaseweek.", "error");
-      return;
-    }
-    setReleaseConfigSaving(true);
-    try {
-      const res = await fetch(`${API}/config/saas-releases`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          slot,
-          release_date: releaseDate,
-          cancelled: Boolean(draft.cancelled),
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err?.detail || "Opslaan van releaseconfiguratie mislukt.");
+  const saveReleaseConfig = useCallback(
+    async (slot) => {
+      const currentSlot = servicedeskConfig?.saas_releases?.[slot];
+      const draft = releaseDrafts?.[slot];
+      const baseReleaseDate = currentSlot?.base_release_date;
+      if (!baseReleaseDate || !draft) {
+        flashToast("Geen release gevonden om aan te passen.", "error");
+        return;
       }
-      const updated = await res.json();
-      applyServicedeskConfig(updated, normalizedOnderwerpenSelection);
-      await refreshDashboard();
-      await refreshLiveInsights();
-      await refreshInsightLog();
-      setOpenReleaseEditor("");
-      flashToast("SaaS release opgeslagen.");
-    } catch (err) {
-      flashToast(err?.message || "Opslaan van releaseconfiguratie mislukt.", "error");
-    } finally {
-      setReleaseConfigSaving(false);
-    }
-  }, [applyServicedeskConfig, flashToast, normalizedOnderwerpenSelection, refreshDashboard, refreshInsightLog, refreshLiveInsights, releaseDrafts, servicedeskConfig]);
+      const releaseDate = shiftIsoDateToWeekday(baseReleaseDate, draft.weekday);
+      if (!releaseDate) {
+        flashToast("Kies een geldige dag voor deze releaseweek.", "error");
+        return;
+      }
+      setReleaseConfigSaving(true);
+      try {
+        const res = await fetch(`${API}/config/saas-releases`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            slot,
+            release_date: releaseDate,
+            cancelled: Boolean(draft.cancelled),
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err?.detail || "Opslaan van releaseconfiguratie mislukt.");
+        }
+        const updated = await res.json();
+        applyServicedeskConfig(updated, normalizedOnderwerpenSelection);
+        await refreshDashboard();
+        await refreshLiveInsights();
+        await refreshInsightLog();
+        setOpenReleaseEditor("");
+        flashToast("SaaS release opgeslagen.");
+      } catch (err) {
+        flashToast(err?.message || "Opslaan van releaseconfiguratie mislukt.", "error");
+      } finally {
+        setReleaseConfigSaving(false);
+      }
+    },
+    [
+      applyServicedeskConfig,
+      flashToast,
+      normalizedOnderwerpenSelection,
+      refreshDashboard,
+      refreshInsightLog,
+      refreshLiveInsights,
+      releaseDrafts,
+      servicedeskConfig,
+    ]
+  );
 
   const saveDashboardLayout = useCallback(async () => {
     const serialized = JSON.stringify(dashboardLayout);
@@ -1166,13 +1361,25 @@ export default function Home() {
       setLayoutSavedSnapshot(serialized);
       setIsLayoutEditing(false);
       setOpenCardSettings("");
-      flashToast(layoutStorageScope === "shared" ? "Indeling opgeslagen voor iedereen" : "Indeling opgeslagen voor jou");
+      flashToast(
+        layoutStorageScope === "shared"
+          ? "Indeling opgeslagen voor iedereen"
+          : "Indeling opgeslagen voor jou"
+      );
     } catch (error) {
       flashToast(error?.message || "Opslaan van de indeling is mislukt.", "error");
     } finally {
       setLayoutSaving(false);
     }
-  }, [applyThemePreference, applyTvModePreference, dashboardLayout, flashToast, layoutStorageScope, themePreferenceDraft, tvModeDraft]);
+  }, [
+    applyThemePreference,
+    applyTvModePreference,
+    dashboardLayout,
+    flashToast,
+    layoutStorageScope,
+    themePreferenceDraft,
+    tvModeDraft,
+  ]);
 
   const startLayoutEditing = useCallback(() => {
     setVacationEditMode(false);
@@ -1212,7 +1419,9 @@ export default function Home() {
 
   const cancelLayoutEditing = useCallback(() => {
     try {
-      const parsed = layoutSavedSnapshot ? JSON.parse(layoutSavedSnapshot) : createDefaultDashboardLayout();
+      const parsed = layoutSavedSnapshot
+        ? JSON.parse(layoutSavedSnapshot)
+        : createDefaultDashboardLayout();
       setDashboardLayout(normalizeDashboardLayout(parsed));
     } catch {
       setDashboardLayout(normalizeDashboardLayout(createDefaultDashboardLayout()));
@@ -1241,7 +1450,9 @@ export default function Home() {
         if (!response.ok) throw new Error("Herstellen voor iedereen is mislukt.");
       } catch (error) {
         try {
-          const previous = layoutSavedSnapshot ? JSON.parse(layoutSavedSnapshot) : createDefaultDashboardLayout();
+          const previous = layoutSavedSnapshot
+            ? JSON.parse(layoutSavedSnapshot)
+            : createDefaultDashboardLayout();
           setDashboardLayout(normalizeDashboardLayout(previous));
         } catch {
           setDashboardLayout(normalizeDashboardLayout(createDefaultDashboardLayout()));
@@ -1266,8 +1477,19 @@ export default function Home() {
     setCardDropHint(null);
     setKpiDropHint(null);
     dragStateRef.current = null;
-    flashToast(layoutStorageScope === "shared" ? "Indeling voor iedereen hersteld" : "Indeling voor jou hersteld");
-  }, [flashToast, isTvMode, layoutSavedSnapshot, layoutStorageScope, normalizeDashboardLayout, themePreference]);
+    flashToast(
+      layoutStorageScope === "shared"
+        ? "Indeling voor iedereen hersteld"
+        : "Indeling voor jou hersteld"
+    );
+  }, [
+    flashToast,
+    isTvMode,
+    layoutSavedSnapshot,
+    layoutStorageScope,
+    normalizeDashboardLayout,
+    themePreference,
+  ]);
 
   const { liveAlerts, refreshLiveAlerts } = useLiveAlerts({
     onRefresh: async () => {
@@ -1320,7 +1542,11 @@ export default function Home() {
     }
 
     if (newP1.length) {
-      flashToast(`ALERT P1: ${newP1[0].issue_key}${newP1.length > 1 ? ` +${newP1.length - 1}` : ""}`, "error", 9000);
+      flashToast(
+        `ALERT P1: ${newP1[0].issue_key}${newP1.length > 1 ? ` +${newP1.length - 1}` : ""}`,
+        "error",
+        9000
+      );
     } else if (newTtrCritical.length) {
       flashToast(
         `ALERT INCIDENT TTR <60m: ${newTtrCritical[0].issue_key}${newTtrCritical.length > 1 ? ` +${newTtrCritical.length - 1}` : ""}`,
@@ -1334,7 +1560,11 @@ export default function Home() {
         9000
       );
     } else if (newOverdue.length) {
-      flashToast(`ALERT SLA VERLOPEN: ${newOverdue[0].issue_key}${newOverdue.length > 1 ? ` +${newOverdue.length - 1}` : ""}`, "error", 9000);
+      flashToast(
+        `ALERT SLA VERLOPEN: ${newOverdue[0].issue_key}${newOverdue.length > 1 ? ` +${newOverdue.length - 1}` : ""}`,
+        "error",
+        9000
+      );
     } else if (newTtrWarning.length) {
       flashToast(
         `ALERT INCIDENT TTR <24u: ${newTtrWarning[0].issue_key}${newTtrWarning.length > 1 ? ` +${newTtrWarning.length - 1}` : ""}`,
@@ -1426,20 +1656,23 @@ export default function Home() {
     setVacationEndUi("");
   }, [servicedeskTeamMembers]);
 
-  const applyVacationStartDate = useCallback((nextStartDate) => {
-    const iso = String(nextStartDate || "").trim();
-    if (!iso) return;
-    const prevStart = String(vacationForm.startDate || "").trim();
-    const prevEnd = String(vacationForm.endDate || "").trim();
-    const shouldSyncEnd = !prevEnd || prevEnd === prevStart || prevEnd < iso;
-    setVacationForm((prev) => ({
-      ...prev,
-      startDate: iso,
-      endDate: shouldSyncEnd ? iso : prev.endDate,
-    }));
-    setVacationStartUi(fmtDate(iso));
-    if (shouldSyncEnd) setVacationEndUi(fmtDate(iso));
-  }, [vacationForm.startDate, vacationForm.endDate]);
+  const applyVacationStartDate = useCallback(
+    (nextStartDate) => {
+      const iso = String(nextStartDate || "").trim();
+      if (!iso) return;
+      const prevStart = String(vacationForm.startDate || "").trim();
+      const prevEnd = String(vacationForm.endDate || "").trim();
+      const shouldSyncEnd = !prevEnd || prevEnd === prevStart || prevEnd < iso;
+      setVacationForm((prev) => ({
+        ...prev,
+        startDate: iso,
+        endDate: shouldSyncEnd ? iso : prev.endDate,
+      }));
+      setVacationStartUi(fmtDate(iso));
+      if (shouldSyncEnd) setVacationEndUi(fmtDate(iso));
+    },
+    [vacationForm.startDate, vacationForm.endDate]
+  );
 
   const vacationFormDirty = useMemo(() => {
     const current = {
@@ -1510,63 +1743,69 @@ export default function Home() {
     }
   }, [vacationForm, flashToast, refreshVacations, cancelVacationEdit]);
 
-  const removeVacation = useCallback(async (vacationId) => {
-    if (!vacationId) return;
-    setVacationSaving(true);
-    try {
-      const response = await fetch(`${API}/vacations/${vacationId}`, { method: "DELETE" });
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        throw new Error(err?.detail || "Vakantie verwijderen mislukt.");
+  const removeVacation = useCallback(
+    async (vacationId) => {
+      if (!vacationId) return;
+      setVacationSaving(true);
+      try {
+        const response = await fetch(`${API}/vacations/${vacationId}`, { method: "DELETE" });
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}));
+          throw new Error(err?.detail || "Vakantie verwijderen mislukt.");
+        }
+        await refreshVacations();
+        flashToast("Vakantie verwijderd");
+        if (vacationForm.id === vacationId) {
+          cancelVacationEdit();
+        }
+      } catch (err) {
+        flashToast(err?.message || "Vakantie verwijderen mislukt.", "error");
+      } finally {
+        setVacationSaving(false);
       }
-      await refreshVacations();
-      flashToast("Vakantie verwijderd");
-      if (vacationForm.id === vacationId) {
-        cancelVacationEdit();
+    },
+    [flashToast, refreshVacations, vacationForm.id, cancelVacationEdit]
+  );
+
+  const triggerSync = useCallback(
+    async ({ silent = false } = {}) => {
+      setSyncLoading(true);
+      if (!silent) setSyncMessage("");
+
+      try {
+        await fetch(`${API}/sync`, { method: "POST" });
+
+        let last = null;
+        // Poll status for up to ~60s
+        for (let i = 0; i < 20; i++) {
+          last = await refreshSyncStatus();
+          if (!last?.running) break;
+          await new Promise((res) => setTimeout(res, 3000));
+        }
+
+        await refreshDashboard();
+        await refreshLiveInsights();
+        await refreshInsightLog();
+
+        if (!silent) {
+          const upserts = last?.last_result?.upserts;
+          setSyncMessage(`Sync klaar${upserts != null ? `: ${upserts} tickets geüpdatet` : ""}`);
+          setSyncMessageKind("success");
+          setTimeout(() => setSyncMessage(""), 5000);
+        }
+      } catch (e) {
+        if (!silent) {
+          setSyncMessage("Sync mislukt (zie status/error)");
+          setSyncMessageKind("error");
+          setTimeout(() => setSyncMessage(""), 8000);
+        }
+        throw e;
+      } finally {
+        setSyncLoading(false);
       }
-    } catch (err) {
-      flashToast(err?.message || "Vakantie verwijderen mislukt.", "error");
-    } finally {
-      setVacationSaving(false);
-    }
-  }, [flashToast, refreshVacations, vacationForm.id, cancelVacationEdit]);
-
-  const triggerSync = useCallback(async ({ silent = false } = {}) => {
-    setSyncLoading(true);
-    if (!silent) setSyncMessage("");
-
-    try {
-      await fetch(`${API}/sync`, { method: "POST" });
-
-      let last = null;
-      // Poll status for up to ~60s
-      for (let i = 0; i < 20; i++) {
-        last = await refreshSyncStatus();
-        if (!last?.running) break;
-        await new Promise((res) => setTimeout(res, 3000));
-      }
-
-      await refreshDashboard();
-      await refreshLiveInsights();
-      await refreshInsightLog();
-
-      if (!silent) {
-        const upserts = last?.last_result?.upserts;
-        setSyncMessage(`Sync klaar${upserts != null ? `: ${upserts} tickets geüpdatet` : ""}`);
-        setSyncMessageKind("success");
-        setTimeout(() => setSyncMessage(""), 5000);
-      }
-    } catch (e) {
-      if (!silent) {
-        setSyncMessage("Sync mislukt (zie status/error)");
-        setSyncMessageKind("error");
-        setTimeout(() => setSyncMessage(""), 8000);
-      }
-      throw e;
-    } finally {
-      setSyncLoading(false);
-    }
-  }, [refreshInsightLog, refreshLiveInsights, refreshSyncStatus, refreshDashboard]);
+    },
+    [refreshInsightLog, refreshLiveInsights, refreshSyncStatus, refreshDashboard]
+  );
 
   useEffect(() => {
     if (typeof document === "undefined") return;
@@ -1668,7 +1907,8 @@ export default function Home() {
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
-    if (window.localStorage.getItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY) === "local") return undefined;
+    if (window.localStorage.getItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY) === "local")
+      return undefined;
     let cancelled = false;
     fetch(`${API}/config/dashboard-layout`)
       .then(async (response) => {
@@ -1719,10 +1959,18 @@ export default function Home() {
 
   const faviconSignal = useMemo(() => {
     const hasP1 = Array.isArray(liveAlerts?.priority1) && liveAlerts.priority1.length > 0;
-    const hasSlaWarning = Array.isArray(liveAlerts?.first_response_due_warning) && liveAlerts.first_response_due_warning.length > 0;
-    const hasSlaCritical = Array.isArray(liveAlerts?.first_response_due_critical) && liveAlerts.first_response_due_critical.length > 0;
-    const hasOverdue = Array.isArray(liveAlerts?.first_response_overdue) && liveAlerts.first_response_overdue.length > 0;
-    const hasTtrCritical = Array.isArray(liveAlerts?.time_to_resolution_critical) && liveAlerts.time_to_resolution_critical.length > 0;
+    const hasSlaWarning =
+      Array.isArray(liveAlerts?.first_response_due_warning) &&
+      liveAlerts.first_response_due_warning.length > 0;
+    const hasSlaCritical =
+      Array.isArray(liveAlerts?.first_response_due_critical) &&
+      liveAlerts.first_response_due_critical.length > 0;
+    const hasOverdue =
+      Array.isArray(liveAlerts?.first_response_overdue) &&
+      liveAlerts.first_response_overdue.length > 0;
+    const hasTtrCritical =
+      Array.isArray(liveAlerts?.time_to_resolution_critical) &&
+      liveAlerts.time_to_resolution_critical.length > 0;
     const hasSla = hasSlaWarning || hasSlaCritical || hasOverdue;
     const showTtrSignal = hasTtrCritical && !ttrAlertsCollapsed;
     if (!hasP1 && !hasSla && !showTtrSignal) {
@@ -1784,7 +2032,9 @@ export default function Home() {
     const lastSync = lastSyncRaw ? new Date(lastSyncRaw) : null;
     const now = Date.now();
     const isStale =
-      !lastSync || Number.isNaN(lastSync.getTime()) || now - lastSync.getTime() > STALE_SYNC_THRESHOLD_MS;
+      !lastSync ||
+      Number.isNaN(lastSync.getTime()) ||
+      now - lastSync.getTime() > STALE_SYNC_THRESHOLD_MS;
     if (!isStale) return;
 
     // Throttle automatic retries when sync fails or takes long.
@@ -1810,7 +2060,14 @@ export default function Home() {
           scheduleTimer();
           return;
         }
-        if (vacationEditMode || isLayoutEditing || hotkeysOpen || sidePanelOpen || filtersOpen) {
+        if (
+          vacationEditMode ||
+          isLayoutEditing ||
+          hotkeysOpen ||
+          sidePanelOpen ||
+          filtersOpen ||
+          dashboardSettingsOpen
+        ) {
           scheduleTimer();
           return;
         }
@@ -1838,7 +2095,17 @@ export default function Home() {
       window.removeEventListener("wheel", onActivity);
       window.removeEventListener("touchstart", onActivity);
     };
-  }, [filtersAreDefault, vacationEditMode, isLayoutEditing, hotkeysOpen, sidePanelOpen, filtersOpen, resetFilters, flashToast]);
+  }, [
+    filtersAreDefault,
+    vacationEditMode,
+    isLayoutEditing,
+    hotkeysOpen,
+    sidePanelOpen,
+    filtersOpen,
+    dashboardSettingsOpen,
+    resetFilters,
+    flashToast,
+  ]);
 
   useEffect(() => {
     if (!vacationEditMode) return;
@@ -1888,7 +2155,15 @@ export default function Home() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [syncBusy, hotkeysOpen, vacationEditMode, applyDateRange, flashToast, resetFilters, triggerSync]);
+  }, [
+    syncBusy,
+    hotkeysOpen,
+    vacationEditMode,
+    applyDateRange,
+    flashToast,
+    resetFilters,
+    triggerSync,
+  ]);
 
   useEffect(() => {
     if (!hotkeysOpen) return;
@@ -1933,14 +2208,17 @@ export default function Home() {
   }, [expandedCard]);
 
   useEffect(() => {
-    if (!filtersOpen) return;
+    if (!filtersOpen && !dashboardSettingsOpen) return;
     function onKeyDown(e) {
       if (isTextEntryTarget(e.target)) return;
-      if (e.key === "Escape") setFiltersOpen(false);
+      if (e.key === "Escape") {
+        setFiltersOpen(false);
+        setDashboardSettingsOpen(false);
+      }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [filtersOpen]);
+  }, [dashboardSettingsOpen, filtersOpen]);
 
   useEffect(() => {
     if (!filtersOpen) return;
@@ -2038,7 +2316,9 @@ export default function Home() {
     [releaseStatusMeta]
   );
   const releaseCadenceEvents = useMemo(() => {
-    const byIsoDate = new Map(releaseMarkerDates.map((isoDate) => [isoDate, { isoDate, status: "default", label: "" }]));
+    const byIsoDate = new Map(
+      releaseMarkerDates.map((isoDate) => [isoDate, { isoDate, status: "default", label: "" }])
+    );
     releaseStatusEvents.forEach((item) => {
       if (item?.isoDate) byIsoDate.set(item.isoDate, item);
     });
@@ -2054,7 +2334,15 @@ export default function Home() {
     return "Release";
   }, [releaseStatusMeta]);
   const weeklyPartialCardKeys = useMemo(
-    () => new Set(["volume", "onderwerp", "inflowVsClosed", "incidentResolution", "firstResponseAll", "organizationWeekly"]),
+    () =>
+      new Set([
+        "volume",
+        "onderwerp",
+        "inflowVsClosed",
+        "incidentResolution",
+        "firstResponseAll",
+        "organizationWeekly",
+      ]),
     []
   );
   const [slowChartCards, setSlowChartCards] = useState({});
@@ -2071,35 +2359,49 @@ export default function Home() {
       slowChartTimersRef.current.delete(cardKey);
     }
   }, []);
-  const armSlowChart = useCallback((cardKey) => {
-    clearSlowChartTimer(cardKey);
-    setSlowChartCards((prev) => (prev?.[cardKey] ? { ...prev, [cardKey]: false } : prev));
-    const showTimer = window.setTimeout(() => {
-      setSlowChartCards((prev) => ({ ...prev, [cardKey]: true }));
-    }, CHART_RENDER_TIMEOUT_MS);
-    const hideTimer = window.setTimeout(() => {
+  const armSlowChart = useCallback(
+    (cardKey) => {
+      clearSlowChartTimer(cardKey);
       setSlowChartCards((prev) => (prev?.[cardKey] ? { ...prev, [cardKey]: false } : prev));
-      slowChartTimersRef.current.delete(cardKey);
-    }, CHART_RENDER_OVERLAY_MAX_MS);
-    slowChartTimersRef.current.set(cardKey, { showTimer, hideTimer });
-  }, [clearSlowChartTimer]);
-  const markChartRendered = useCallback((cardKey) => {
-    clearSlowChartTimer(cardKey);
-    setSlowChartCards((prev) => (prev?.[cardKey] ? { ...prev, [cardKey]: false } : prev));
-  }, [clearSlowChartTimer]);
+      const showTimer = window.setTimeout(() => {
+        setSlowChartCards((prev) => ({ ...prev, [cardKey]: true }));
+      }, CHART_RENDER_TIMEOUT_MS);
+      const hideTimer = window.setTimeout(() => {
+        setSlowChartCards((prev) => (prev?.[cardKey] ? { ...prev, [cardKey]: false } : prev));
+        slowChartTimersRef.current.delete(cardKey);
+      }, CHART_RENDER_OVERLAY_MAX_MS);
+      slowChartTimersRef.current.set(cardKey, { showTimer, hideTimer });
+    },
+    [clearSlowChartTimer]
+  );
+  const markChartRendered = useCallback(
+    (cardKey) => {
+      clearSlowChartTimer(cardKey);
+      setSlowChartCards((prev) => (prev?.[cardKey] ? { ...prev, [cardKey]: false } : prev));
+    },
+    [clearSlowChartTimer]
+  );
   const releaseCadencePlugin = useMemo(
-    () => ({ weeks, partialWeekIndex: trailingPartialWeekIndex, releaseDates: releaseMarkerDates, releaseEvents: releaseCadenceEvents }),
+    () => ({
+      weeks,
+      partialWeekIndex: trailingPartialWeekIndex,
+      releaseDates: releaseMarkerDates,
+      releaseEvents: releaseCadenceEvents,
+    }),
     [releaseCadenceEvents, releaseMarkerDates, trailingPartialWeekIndex, weeks]
   );
   const releaseCadenceOnderwerpPlugin = useMemo(
-    () => ({ weeks: weeksOnderwerp, partialWeekIndex: trailingPartialWeekIndex, releaseDates: releaseMarkerDates, releaseEvents: releaseCadenceEvents }),
+    () => ({
+      weeks: weeksOnderwerp,
+      partialWeekIndex: trailingPartialWeekIndex,
+      releaseDates: releaseMarkerDates,
+      releaseEvents: releaseCadenceEvents,
+    }),
     [releaseCadenceEvents, releaseMarkerDates, trailingPartialWeekIndex, weeksOnderwerp]
   );
   const fullWeekInfo = useMemo(() => {
     const currentWeek = weekStartIsoFromDate();
-    const indices = weeks
-      .map((w, idx) => (w < currentWeek ? idx : -1))
-      .filter((idx) => idx >= 0);
+    const indices = weeks.map((w, idx) => (w < currentWeek ? idx : -1)).filter((idx) => idx >= 0);
     const lastIndex = indices.length ? indices[indices.length - 1] : -1;
     const prevIndex = indices.length > 1 ? indices[indices.length - 2] : -1;
     const periodFrom = indices.length ? fmtDate(weeks[indices[0]]) : "—";
@@ -2136,12 +2438,24 @@ export default function Home() {
   }, [weeks, volume, meta.request_types, requestType]);
 
   const allTopicTrendSeries = useMemo(
-    () => buildTopicTrendSeries({ rows: onderwerpVolume, bucketKeys: weeksOnderwerp, selectedTopic: onderwerp, limit: Number.MAX_SAFE_INTEGER }),
+    () =>
+      buildTopicTrendSeries({
+        rows: onderwerpVolume,
+        bucketKeys: weeksOnderwerp,
+        selectedTopic: onderwerp,
+        limit: Number.MAX_SAFE_INTEGER,
+      }),
     [weeksOnderwerp, onderwerpVolume, onderwerp]
   );
 
   const topicTrendSeries = useMemo(
-    () => buildTopicTrendSeries({ rows: onderwerpVolume, bucketKeys: weeksOnderwerp, selectedTopic: onderwerp, limit: 5 }),
+    () =>
+      buildTopicTrendSeries({
+        rows: onderwerpVolume,
+        bucketKeys: weeksOnderwerp,
+        selectedTopic: onderwerp,
+        limit: 5,
+      }),
     [weeksOnderwerp, onderwerpVolume, onderwerp]
   );
 
@@ -2177,60 +2491,68 @@ export default function Home() {
       })),
     });
   }, [allTopicTrendSeries, inflowVsClosedWeekly, weeks, weeklyLabels]);
-  const visibleDashboardInsights = useMemo(() => dashboardInsights.filter((card) => !(dashboardLayout.hiddenInsights || []).includes(card.id)), [dashboardInsights, dashboardLayout.hiddenInsights]);
-  const hideDashboardInsight = useCallback((insightId) => setDashboardLayout((previous) => ({ ...previous, hiddenInsights: [...new Set([...(previous.hiddenInsights || []), insightId])] })), []);
+  const visibleDashboardInsights = useMemo(
+    () =>
+      dashboardInsights.filter((card) => !(dashboardLayout.hiddenInsights || []).includes(card.id)),
+    [dashboardInsights, dashboardLayout.hiddenInsights]
+  );
+  const hideDashboardInsight = useCallback(
+    (insightId) =>
+      setDashboardLayout((previous) => ({
+        ...previous,
+        hiddenInsights: [...new Set([...(previous.hiddenInsights || []), insightId])],
+      })),
+    []
+  );
 
   const typeColor = useCallback((label) => {
     const key = String(label || "").toLowerCase();
     return TYPE_COLORS[key] || "#6b7280";
   }, []);
 
-  const lineData = useMemo(
-    () => {
-      const labels = weeklyLabels(weeks);
-      const datasets = series.map((s) => ({
-        label: s.label,
-        data: s.data,
-        tension: 0.2,
-        borderColor: typeColor(s.label),
-        backgroundColor: typeColor(s.label),
-        pointBackgroundColor: typeColor(s.label),
-        pointBorderColor: typeColor(s.label),
-        borderDash: isTotalLabel(s.label) ? [6, 4] : undefined,
-      }));
+  const lineData = useMemo(() => {
+    const labels = weeklyLabels(weeks);
+    const datasets = series.map((s) => ({
+      label: s.label,
+      data: s.data,
+      tension: 0.2,
+      borderColor: typeColor(s.label),
+      backgroundColor: typeColor(s.label),
+      pointBackgroundColor: typeColor(s.label),
+      pointBorderColor: typeColor(s.label),
+      borderDash: isTotalLabel(s.label) ? [6, 4] : undefined,
+    }));
 
-      const totalSeries = series.find((s) => isTotalLabel(s.label));
-      if (totalSeries && !requestType) {
-        datasets.push({
-          label: "Voortschrijdend gemiddelde totaal",
-          data: buildMovingAverage(totalSeries.data, 3),
-          tension: 0.25,
-          borderColor: "#c62828",
-          backgroundColor: "#c62828",
-          borderDash: [4, 4],
-          pointRadius: 0,
-          pointHitRadius: 0,
-        });
-      }
+    const totalSeries = series.find((s) => isTotalLabel(s.label));
+    if (totalSeries && !requestType) {
+      datasets.push({
+        label: "Voortschrijdend gemiddelde totaal",
+        data: buildMovingAverage(totalSeries.data, 3),
+        tension: 0.25,
+        borderColor: "#c62828",
+        backgroundColor: "#c62828",
+        borderDash: [4, 4],
+        pointRadius: 0,
+        pointHitRadius: 0,
+      });
+    }
 
-      if (requestType && series[0]) {
-        const typeSeries = series[0];
-        datasets.push({
-          label: `Voortschrijdend gemiddelde ${typeSeries.label}`,
-          data: buildMovingAverage(typeSeries.data, 3),
-          tension: 0.25,
-          borderColor: "#c62828",
-          backgroundColor: "#c62828",
-          borderDash: [4, 4],
-          pointRadius: 0,
-          pointHitRadius: 0,
-        });
-      }
+    if (requestType && series[0]) {
+      const typeSeries = series[0];
+      datasets.push({
+        label: `Voortschrijdend gemiddelde ${typeSeries.label}`,
+        data: buildMovingAverage(typeSeries.data, 3),
+        tension: 0.25,
+        borderColor: "#c62828",
+        backgroundColor: "#c62828",
+        borderDash: [4, 4],
+        pointRadius: 0,
+        pointHitRadius: 0,
+      });
+    }
 
-      return { labels, datasets };
-    },
-    [weeks, weeklyLabels, series, requestType, typeColor]
-  );
+    return { labels, datasets };
+  }, [weeks, weeklyLabels, series, requestType, typeColor]);
 
   const priorityColors = useMemo(
     () => priorityVolume.map((_, i) => uniqueChartColor(i, priorityVolume.length)),
@@ -2254,8 +2576,13 @@ export default function Home() {
 
   const assigneeTopVolume = useMemo(() => {
     const data = Array.isArray(assigneeVolume) ? assigneeVolume : [];
-    const allowed = Array.isArray(servicedeskConfig?.team_members) ? servicedeskConfig.team_members : [];
-    const filtered = servicedeskOnly && allowed.length ? data.filter((row) => allowed.includes(row?.assignee)) : data;
+    const allowed = Array.isArray(servicedeskConfig?.team_members)
+      ? servicedeskConfig.team_members
+      : [];
+    const filtered =
+      servicedeskOnly && allowed.length
+        ? data.filter((row) => allowed.includes(row?.assignee))
+        : data;
     return filtered.slice(0, 5);
   }, [assigneeVolume, servicedeskConfig, servicedeskOnly]);
 
@@ -2350,7 +2677,12 @@ export default function Home() {
       new Set(rows.map((x) => String(x?.request_type || "").trim()).filter(Boolean))
     );
     const sourceTypes = allTypes.length ? allTypes : typeSetFromRows;
-    const types = sourceTypes.filter((typeLabel) => String(typeLabel || "").trim().toLowerCase() === "incident");
+    const types = sourceTypes.filter(
+      (typeLabel) =>
+        String(typeLabel || "")
+          .trim()
+          .toLowerCase() === "incident"
+    );
     const datasets = types.flatMap((typeLabel) => {
       const actualData = weeks.map((w) => {
         const row = rows.find(
@@ -2511,21 +2843,29 @@ export default function Home() {
     markChartRendered,
   ]);
 
-  useEffect(() => () => {
-    slowChartTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-    slowChartTimersRef.current.clear();
-  }, []);
+  useEffect(
+    () => () => {
+      slowChartTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      slowChartTimersRef.current.clear();
+    },
+    []
+  );
 
   const kpiStats = useMemo(() => {
     const indices = fullWeekInfo.indices;
 
     const totalSeries = series.find((s) => isTotalLabel(s.label)) || series[0];
-    const totalTickets = indices.reduce((sum, idx) => sum + (Number(totalSeries?.data?.[idx]) || 0), 0);
+    const totalTickets = indices.reduce(
+      (sum, idx) => sum + (Number(totalSeries?.data?.[idx]) || 0),
+      0
+    );
 
     const lastCompletedIdx = indices.length ? indices[indices.length - 1] : -1;
     const prevCompletedIdx = indices.length > 1 ? indices[indices.length - 2] : -1;
-    const latestTickets = lastCompletedIdx >= 0 ? Number(totalSeries?.data?.[lastCompletedIdx] || 0) : 0;
-    const previousTickets = prevCompletedIdx >= 0 ? Number(totalSeries?.data?.[prevCompletedIdx] || 0) : null;
+    const latestTickets =
+      lastCompletedIdx >= 0 ? Number(totalSeries?.data?.[lastCompletedIdx] || 0) : 0;
+    const previousTickets =
+      prevCompletedIdx >= 0 ? Number(totalSeries?.data?.[prevCompletedIdx] || 0) : null;
     const wowChangePct =
       previousTickets && previousTickets > 0
         ? ((latestTickets - previousTickets) / previousTickets) * 100
@@ -2584,11 +2924,19 @@ export default function Home() {
     ttfrRows.forEach((row) => {
       const weekIso = String(row?.week || "").slice(0, 10);
       if (!weekIso || !completeWeekSet.has(weekIso)) return;
-      ttfrOverdueByWeek.set(weekIso, (ttfrOverdueByWeek.get(weekIso) || 0) + (Number(row?.tickets) || 0));
+      ttfrOverdueByWeek.set(
+        weekIso,
+        (ttfrOverdueByWeek.get(weekIso) || 0) + (Number(row?.tickets) || 0)
+      );
     });
-    const ttfrOverdueTotal = Array.from(ttfrOverdueByWeek.values()).reduce((sum, n) => sum + (Number(n) || 0), 0);
+    const ttfrOverdueTotal = Array.from(ttfrOverdueByWeek.values()).reduce(
+      (sum, n) => sum + (Number(n) || 0),
+      0
+    );
     const ttfrOverdueLatest = weekLastIso ? Number(ttfrOverdueByWeek.get(weekLastIso) || 0) : 0;
-    const ttfrOverduePrevious = weekPrevIso ? Number(ttfrOverdueByWeek.get(weekPrevIso) || 0) : null;
+    const ttfrOverduePrevious = weekPrevIso
+      ? Number(ttfrOverdueByWeek.get(weekPrevIso) || 0)
+      : null;
     const ttfrOverdueWowPct =
       ttfrOverduePrevious && ttfrOverduePrevious > 0
         ? ((ttfrOverdueLatest - ttfrOverduePrevious) / ttfrOverduePrevious) * 100
@@ -2599,16 +2947,15 @@ export default function Home() {
     const amsterdamNow = zonedDateTimeParts(new Date(), AMSTERDAM_TIME_ZONE);
     const latestReleaseIndex = releaseRows.length - 1;
     const holdLatestRelease =
-      latestReleaseIndex >= 0
-      && releaseRows[latestReleaseIndex]?.followup_date === amsterdamNow?.isoDate
-      && (
-        Number(amsterdamNow?.hour) < 8
-        || (Number(amsterdamNow?.hour) === 8 && Number(amsterdamNow?.minute) < 30)
-      )
-      && releaseRows.length > 1;
+      latestReleaseIndex >= 0 &&
+      releaseRows[latestReleaseIndex]?.followup_date === amsterdamNow?.isoDate &&
+      (Number(amsterdamNow?.hour) < 8 ||
+        (Number(amsterdamNow?.hour) === 8 && Number(amsterdamNow?.minute) < 30)) &&
+      releaseRows.length > 1;
     const effectiveLatestIndex = holdLatestRelease ? latestReleaseIndex - 1 : latestReleaseIndex;
     const latestReleaseRow = effectiveLatestIndex >= 0 ? releaseRows[effectiveLatestIndex] : null;
-    const previousReleaseRow = effectiveLatestIndex > 0 ? releaseRows[effectiveLatestIndex - 1] : null;
+    const previousReleaseRow =
+      effectiveLatestIndex > 0 ? releaseRows[effectiveLatestIndex - 1] : null;
     const releaseTrend = trendInfo(latestReleaseRow?.tickets, previousReleaseRow?.tickets);
     const currentFlow = currentWeekFlow || {};
     return {
@@ -2628,30 +2975,41 @@ export default function Home() {
       ttfrOverdueLatest,
       ttfrOverdueWowPct,
       releaseWednesdayLatestTickets: Number(latestReleaseRow?.tickets) || 0,
-      releaseWednesdayPreviousTickets: previousReleaseRow ? Number(previousReleaseRow?.tickets) || 0 : null,
+      releaseWednesdayPreviousTickets: previousReleaseRow
+        ? Number(previousReleaseRow?.tickets) || 0
+        : null,
       releaseWednesdayLatestReleaseDate: latestReleaseRow?.release_date || "",
-      releaseWednesdayLatestDateLabel: latestReleaseRow?.followup_date ? fmtDateWithWeekday(latestReleaseRow.followup_date) : "—",
-      releaseWednesdayLatestReleaseLabel: latestReleaseRow?.release_date ? fmtDate(latestReleaseRow.release_date) : "—",
-      releaseWednesdayPreviousDateLabel: previousReleaseRow?.followup_date ? fmtDateWithWeekday(previousReleaseRow.followup_date) : "—",
-      releaseWednesdayPreviousReleaseLabel: previousReleaseRow?.release_date ? fmtDate(previousReleaseRow.release_date) : "—",
+      releaseWednesdayLatestDateLabel: latestReleaseRow?.followup_date
+        ? fmtDateWithWeekday(latestReleaseRow.followup_date)
+        : "—",
+      releaseWednesdayLatestReleaseLabel: latestReleaseRow?.release_date
+        ? fmtDate(latestReleaseRow.release_date)
+        : "—",
+      releaseWednesdayPreviousDateLabel: previousReleaseRow?.followup_date
+        ? fmtDateWithWeekday(previousReleaseRow.followup_date)
+        : "—",
+      releaseWednesdayPreviousReleaseLabel: previousReleaseRow?.release_date
+        ? fmtDate(previousReleaseRow.release_date)
+        : "—",
       releaseWednesdayTrendText: previousReleaseRow ? releaseTrend.text : "—",
       releaseWednesdayTrendSymbol: previousReleaseRow ? releaseTrend.symbol : "",
       releaseWednesdayTrendColor: previousReleaseRow ? releaseTrend.color : "var(--text-main)",
-      releaseWednesdayIssueKeys: Array.isArray(latestReleaseRow?.issue_keys) ? latestReleaseRow.issue_keys : [],
+      releaseWednesdayIssueKeys: Array.isArray(latestReleaseRow?.issue_keys)
+        ? latestReleaseRow.issue_keys
+        : [],
       releaseWednesdayFollowupDate: latestReleaseRow?.followup_date || "",
       currentWeekReceived: Number(currentFlow.current_received) || 0,
       currentWeekClosed: Number(currentFlow.current_closed) || 0,
       previousWeekReceived: Number(currentFlow.previous_received) || 0,
       previousWeekClosed: Number(currentFlow.previous_closed) || 0,
-      currentWeekCutoffTimeLabel:
-        currentFlow.current_cutoff
-          ? new Intl.DateTimeFormat("nl-NL", {
-              hour: "2-digit",
-              minute: "2-digit",
-              hour12: false,
-              timeZone: AMSTERDAM_TIME_ZONE,
-            }).format(new Date(currentFlow.current_cutoff))
-          : "—",
+      currentWeekCutoffTimeLabel: currentFlow.current_cutoff
+        ? new Intl.DateTimeFormat("nl-NL", {
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+            timeZone: AMSTERDAM_TIME_ZONE,
+          }).format(new Date(currentFlow.current_cutoff))
+        : "—",
       periodLabel: fullWeekInfo.periodLabel,
       completeWeeksCount: fullWeekInfo.count,
     };
@@ -2663,7 +3021,7 @@ export default function Home() {
     fullWeekInfo,
     ttfrOverdueWeekly,
     releaseFollowupWorkload,
-      currentWeekFlow,
+    currentWeekFlow,
   ]);
 
   const topOnderwerpRows = useMemo(() => {
@@ -2680,7 +3038,8 @@ export default function Home() {
       const tickets = Number(row?.tickets) || 0;
       cur.total += tickets;
       if (weekIso === weeks[fullWeekInfo.lastIndex]) cur.last += tickets;
-      if (fullWeekInfo.prevIndex >= 0 && weekIso === weeks[fullWeekInfo.prevIndex]) cur.prev += tickets;
+      if (fullWeekInfo.prevIndex >= 0 && weekIso === weeks[fullWeekInfo.prevIndex])
+        cur.prev += tickets;
       map.set(label, cur);
     });
 
@@ -2706,15 +3065,21 @@ export default function Home() {
   const vacationBannerItems = useMemo(() => {
     const items = [];
     const avatarMap =
-      servicedeskConfig?.team_member_avatars && typeof servicedeskConfig.team_member_avatars === "object"
+      servicedeskConfig?.team_member_avatars &&
+      typeof servicedeskConfig.team_member_avatars === "object"
         ? servicedeskConfig.team_member_avatars
         : {};
     const todayIso = isoDate(new Date());
     const active = Array.isArray(todayVacations) ? todayVacations : [];
-    const activeNames = Array.from(new Set(active.map((item) => item?.member_name).filter(Boolean)));
+    const activeNames = Array.from(
+      new Set(active.map((item) => item?.member_name).filter(Boolean))
+    );
     activeNames.forEach((memberName) => {
       const memberRows = active.filter((item) => item?.member_name === memberName);
-      const endDates = memberRows.map((item) => item?.end_date).filter(Boolean).sort();
+      const endDates = memberRows
+        .map((item) => item?.end_date)
+        .filter(Boolean)
+        .sort();
       const latestEndDate = endDates.length ? endDates[endDates.length - 1] : null;
       const text =
         latestEndDate && latestEndDate > todayIso
@@ -2849,76 +3214,62 @@ export default function Home() {
     });
   }, [servicedeskTeamMembers]);
 
-  const fetchDrilldown = useCallback(async (
-    weekStart,
-    typeLabel,
-    onderwerpLabel,
-    offset = 0,
-    options = {}
-  ) => {
-    if (isLayoutEditing) return;
-    setSidePanelMode("drilldown");
-    const dateField = options?.dateField === "resolved" ? "resolved" : "created";
-    const basisLabel = options?.basisLabel || (dateField === "resolved" ? "Afgesloten" : "Binnengekomen");
-    const dateFrom = options?.dateFrom || weekStart;
-    const dateTo = options?.dateTo || addDaysIso(weekStart, 7);
-    const issueKeys = Array.isArray(options?.issueKeys) ? options.issueKeys.filter(Boolean) : [];
-    setSelectedWeek(weekStart || dateFrom);
-    setSelectedType(typeLabel || "");
-    setSelectedOnderwerp(onderwerpLabel || onderwerp || "");
-    setSelectedDrillDateField(dateField);
-    setSelectedDrillBasisLabel(basisLabel);
-    setSelectedDrillTitle(options?.title || "");
-    setSelectedDrillMeta(options?.meta || "");
-    setSelectedDrillDateFrom(dateFrom);
-    setSelectedDrillDateTo(dateTo);
-    setSelectedDrillIssueKeys(issueKeys);
-    setDrillOffset(offset);
-    setDrillLoading(true);
+  const fetchDrilldown = useCallback(
+    async (weekStart, typeLabel, onderwerpLabel, offset = 0, options = {}) => {
+      if (isLayoutEditing) return;
+      setSidePanelMode("drilldown");
+      const dateField = options?.dateField === "resolved" ? "resolved" : "created";
+      const basisLabel =
+        options?.basisLabel || (dateField === "resolved" ? "Afgesloten" : "Binnengekomen");
+      const dateFrom = options?.dateFrom || weekStart;
+      const dateTo = options?.dateTo || addDaysIso(weekStart, 7);
+      const issueKeys = Array.isArray(options?.issueKeys) ? options.issueKeys.filter(Boolean) : [];
+      setSelectedWeek(weekStart || dateFrom);
+      setSelectedType(typeLabel || "");
+      setSelectedOnderwerp(onderwerpLabel || onderwerp || "");
+      setSelectedDrillDateField(dateField);
+      setSelectedDrillBasisLabel(basisLabel);
+      setSelectedDrillTitle(options?.title || "");
+      setSelectedDrillMeta(options?.meta || "");
+      setSelectedDrillDateFrom(dateFrom);
+      setSelectedDrillDateTo(dateTo);
+      setSelectedDrillIssueKeys(issueKeys);
+      setDrillOffset(offset);
+      setDrillLoading(true);
 
-    try {
-      const params = new URLSearchParams({
-        date_from: dateFrom,
-        date_to: dateTo,
-        date_field: dateField,
-        limit: String(DRILL_LIMIT),
-        offset: String(offset),
-      });
+      try {
+        const params = new URLSearchParams({
+          date_from: dateFrom,
+          date_to: dateTo,
+          date_field: dateField,
+          limit: String(DRILL_LIMIT),
+          offset: String(offset),
+        });
 
-      if (typeLabel) params.set("request_type", typeLabel);
-      if (onderwerpLabel) params.set("onderwerp", onderwerpLabel);
-      else if (onderwerp) params.set("onderwerp", onderwerp);
-      if (priority) params.set("priority", priority);
-      if (assignee) params.set("assignee", assignee);
-      if (organization) params.set("organization", organization);
-      if (servicedeskOnly) params.set("servicedesk_only", "true");
-      if (issueKeys.length) params.set("issue_keys", issueKeys.join(","));
+        if (typeLabel) params.set("request_type", typeLabel);
+        if (onderwerpLabel) params.set("onderwerp", onderwerpLabel);
+        else if (onderwerp) params.set("onderwerp", onderwerp);
+        if (priority) params.set("priority", priority);
+        if (assignee) params.set("assignee", assignee);
+        if (organization) params.set("organization", organization);
+        if (servicedeskOnly) params.set("servicedesk_only", "true");
+        if (issueKeys.length) params.set("issue_keys", issueKeys.join(","));
 
-      const res = await fetch(`${API}/issues?` + params.toString());
-      const data = await res.json();
-      setDrillIssues(data);
-      setDrillHasNext(Array.isArray(data) && data.length === DRILL_LIMIT);
-    } finally {
-      setDrillLoading(false);
-    }
-  }, [
-    DRILL_LIMIT,
-    assignee,
-    isLayoutEditing,
-    onderwerp,
-    organization,
-    priority,
-    servicedeskOnly,
-  ]);
+        const res = await fetch(`${API}/issues?` + params.toString());
+        const data = await res.json();
+        setDrillIssues(data);
+        setDrillHasNext(Array.isArray(data) && data.length === DRILL_LIMIT);
+      } finally {
+        setDrillLoading(false);
+      }
+    },
+    [DRILL_LIMIT, assignee, isLayoutEditing, onderwerp, organization, priority, servicedeskOnly]
+  );
 
-  const openReleaseWorkloadDrilldown = useCallback((row) => {
-    if (!row?.followup_date) return;
-    fetchDrilldown(
-      row.followup_date,
-      "",
-      "",
-      0,
-      {
+  const openReleaseWorkloadDrilldown = useCallback(
+    (row) => {
+      if (!row?.followup_date) return;
+      fetchDrilldown(row.followup_date, "", "", 0, {
         dateField: "created",
         basisLabel: "Na release",
         dateFrom: row.followup_date,
@@ -2926,9 +3277,10 @@ export default function Home() {
         issueKeys: row.issue_keys || [],
         title: `Release ${fmtDate(row.release_date)}`,
         meta: `${num(row.tickets)} tickets op de werkdag na release`,
-      }
-    );
-  }, [fetchDrilldown]);
+      });
+    },
+    [fetchDrilldown]
+  );
 
   const filterPanelStyle = {
     marginBottom: 12,
@@ -2942,6 +3294,10 @@ export default function Home() {
     gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
     gap: 10,
     alignItems: "end",
+  };
+  const filterModalGridStyle = {
+    ...filterGridStyle,
+    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
   };
   const configSectionStyle = {
     marginTop: 14,
@@ -2975,6 +3331,17 @@ export default function Home() {
     alignContent: "start",
   };
   const fieldStyle = { display: "flex", flexDirection: "column", gap: 6, minWidth: 0 };
+  const filterAccentColor = "#22c55e";
+  const filterFieldStyle = (isActive) =>
+    isActive
+      ? {
+          ...fieldStyle,
+          padding: 10,
+          margin: -10,
+          borderRadius: 10,
+          background: `color-mix(in srgb, ${filterAccentColor} 14%, var(--surface))`,
+        }
+      : fieldStyle;
   const labelStyle = { fontSize: 12, fontWeight: 600, color: "var(--text-subtle)" };
   const inputBaseStyle = {
     height: 36,
@@ -3086,8 +3453,13 @@ export default function Home() {
     },
     [slowChartCards]
   );
-  const slowChartAnimation = useCallback((cardKey) => (slowChartCards?.[cardKey] ? false : undefined), [slowChartCards]);
-  const interactionDisabledStyle = isLayoutEditing ? { pointerEvents: "none", userSelect: "none" } : null;
+  const slowChartAnimation = useCallback(
+    (cardKey) => (slowChartCards?.[cardKey] ? false : undefined),
+    [slowChartCards]
+  );
+  const interactionDisabledStyle = isLayoutEditing
+    ? { pointerEvents: "none", userSelect: "none" }
+    : null;
   const pagePaddingX = isTvMode ? "clamp(8px, 1dvh, 12px)" : "clamp(8px, 1.2dvh, 14px)";
   const pagePaddingTop = pagePaddingX;
   const pagePaddingBottom = "clamp(20px, 3dvh, 40px)";
@@ -3144,10 +3516,15 @@ export default function Home() {
     padding: "8px 10px",
     minWidth: 0,
   };
+  const filterAffectedStyle = {
+    background: `linear-gradient(135deg, color-mix(in srgb, ${filterAccentColor} 10%, var(--surface)), var(--surface) 64%)`,
+  };
   const liveKpiCardStyle = {
     borderColor: "color-mix(in srgb, var(--accent) 64%, var(--border))",
-    background: "linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, var(--surface)), var(--surface) 62%)",
-    boxShadow: "inset 3px 0 0 var(--accent), 0 8px 18px color-mix(in srgb, var(--accent) 12%, transparent)",
+    background:
+      "linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, var(--surface)), var(--surface) 62%)",
+    boxShadow:
+      "inset 3px 0 0 var(--accent), 0 8px 18px color-mix(in srgb, var(--accent) 12%, transparent)",
   };
   const liveKpiStatusStyle = {
     display: "inline-flex",
@@ -3198,7 +3575,8 @@ export default function Home() {
   const skeletonBarStyle = {
     height: 12,
     borderRadius: 8,
-    background: "linear-gradient(100deg, var(--surface-muted) 25%, var(--surface) 40%, var(--surface-muted) 65%)",
+    background:
+      "linear-gradient(100deg, var(--surface-muted) 25%, var(--surface) 40%, var(--surface-muted) 65%)",
     backgroundSize: "220% 100%",
     animation: "dashSkeletonWave 1.35s ease-in-out infinite",
   };
@@ -3392,7 +3770,7 @@ export default function Home() {
     inset: 0,
     background: "var(--overlay-bg)",
     zIndex: 1100,
-    opacity: filtersOpen ? 1 : 0,
+    opacity: filtersOpen || dashboardSettingsOpen ? 1 : 0,
     transition: "opacity 160ms ease",
   };
   const filterModalStyle = {
@@ -3768,25 +4146,28 @@ export default function Home() {
     }
   }, [refreshInsightLog, refreshLiveInsights]);
 
-  const handleInsightFeedback = useCallback(async (insightId, vote, reason = null) => {
-    if (!insightId) return;
-    setInsightFeedbackBusyId(insightId);
-    try {
-      await submitInsightFeedback({ insightId, vote, reason });
-      await refreshInsightLog();
-      if (vote === "down") {
-        setPendingInsightDownvoteId(null);
-        setPendingInsightReason(AI_INSIGHT_DOWNVOTE_REASONS[0]);
-        flashToast("AI-card verwijderd en feedback opgeslagen.");
-      } else {
-        flashToast("Feedback op AI-card opgeslagen.");
+  const handleInsightFeedback = useCallback(
+    async (insightId, vote, reason = null) => {
+      if (!insightId) return;
+      setInsightFeedbackBusyId(insightId);
+      try {
+        await submitInsightFeedback({ insightId, vote, reason });
+        await refreshInsightLog();
+        if (vote === "down") {
+          setPendingInsightDownvoteId(null);
+          setPendingInsightReason(AI_INSIGHT_DOWNVOTE_REASONS[0]);
+          flashToast("AI-card verwijderd en feedback opgeslagen.");
+        } else {
+          flashToast("Feedback op AI-card opgeslagen.");
+        }
+      } catch (err) {
+        flashToast(err?.message || "Feedback opslaan mislukt.", "error");
+      } finally {
+        setInsightFeedbackBusyId(null);
       }
-    } catch (err) {
-      flashToast(err?.message || "Feedback opslaan mislukt.", "error");
-    } finally {
-      setInsightFeedbackBusyId(null);
-    }
-  }, [flashToast, refreshInsightLog, submitInsightFeedback]);
+    },
+    [flashToast, refreshInsightLog, submitInsightFeedback]
+  );
 
   function formatAiInsightHero(insight) {
     const payload = insight?.source_payload || {};
@@ -3798,7 +4179,10 @@ export default function Home() {
       if (!value) return "";
       const date = new Date(value);
       if (Number.isNaN(date.getTime())) return "";
-      return new Intl.DateTimeFormat("nl-NL", { month: "long", timeZone: "Europe/Amsterdam" }).format(date);
+      return new Intl.DateTimeFormat("nl-NL", {
+        month: "long",
+        timeZone: "Europe/Amsterdam",
+      }).format(date);
     };
     const currentMonth = monthLabel(current.month_start);
     const previousMonth = monthLabel(previous.month_start);
@@ -3807,9 +4191,10 @@ export default function Home() {
       return {
         eyebrow: comparisonLabel || "Onderwerp stijgt",
         headline: label || "Onderwerp",
-        valueLine: previousMonth && currentMonth
-          ? `van ${previous.tickets ?? "?"} in ${previousMonth} naar ${current.tickets ?? "?"} in ${currentMonth}`
-          : `${previous.tickets ?? "?"} -> ${current.tickets ?? "?"} tickets`,
+        valueLine:
+          previousMonth && currentMonth
+            ? `van ${previous.tickets ?? "?"} in ${previousMonth} naar ${current.tickets ?? "?"} in ${currentMonth}`
+            : `${previous.tickets ?? "?"} -> ${current.tickets ?? "?"} tickets`,
         supporting: "Onderwerpvolume laat een duidelijke stijging zien",
       };
     }
@@ -3817,9 +4202,10 @@ export default function Home() {
       return {
         eyebrow: comparisonLabel || "Partner stijgt",
         headline: label || "Partner",
-        valueLine: previousMonth && currentMonth
-          ? `van ${previous.tickets ?? "?"} in ${previousMonth} naar ${current.tickets ?? "?"} in ${currentMonth}`
-          : `${previous.tickets ?? "?"} -> ${current.tickets ?? "?"} tickets`,
+        valueLine:
+          previousMonth && currentMonth
+            ? `van ${previous.tickets ?? "?"} in ${previousMonth} naar ${current.tickets ?? "?"} in ${currentMonth}`
+            : `${previous.tickets ?? "?"} -> ${current.tickets ?? "?"} tickets`,
         supporting: "Partnervolume laat een duidelijke stijging zien",
       };
     }
@@ -3876,7 +4262,10 @@ export default function Home() {
       if (!value) return null;
       const date = new Date(value);
       if (Number.isNaN(date.getTime())) return null;
-      return new Intl.DateTimeFormat("nl-NL", { month: "long", timeZone: "Europe/Amsterdam" }).format(date);
+      return new Intl.DateTimeFormat("nl-NL", {
+        month: "long",
+        timeZone: "Europe/Amsterdam",
+      }).format(date);
     };
 
     const weekLabel = (value) => {
@@ -3961,7 +4350,8 @@ export default function Home() {
       return { symbol: "→", text: "—", color: "var(--text-muted)" };
     }
     if (deviation > 0.5) return { symbol: "↑", text: `+${num(deviation, 1)}%`, color: "var(--ok)" };
-    if (deviation < -0.5) return { symbol: "↓", text: `${num(deviation, 1)}%`, color: "var(--danger)" };
+    if (deviation < -0.5)
+      return { symbol: "↓", text: `${num(deviation, 1)}%`, color: "var(--danger)" };
     return { symbol: "→", text: `${num(deviation, 1)}%`, color: "var(--text-muted)" };
   }
 
@@ -4002,8 +4392,24 @@ export default function Home() {
             boxShadow: "0 10px 24px color-mix(in srgb, #0f766e 20%, transparent)",
           }}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start", marginBottom: expanded ? 6 : 4 }}>
-            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, width: "100%" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 10,
+              alignItems: "flex-start",
+              marginBottom: expanded ? 6 : 4,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                justifyContent: "space-between",
+                gap: 12,
+                width: "100%",
+              }}
+            >
               <span
                 style={{
                   display: "inline-flex",
@@ -4038,7 +4444,15 @@ export default function Home() {
                   boxShadow: "0 4px 12px color-mix(in srgb, #0f172a 12%, transparent)",
                 }}
               >
-                <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.5, textTransform: "uppercase", color: "color-mix(in srgb, var(--text-main) 64%, transparent)" }}>
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 800,
+                    letterSpacing: 0.5,
+                    textTransform: "uppercase",
+                    color: "color-mix(in srgb, var(--text-main) 64%, transparent)",
+                  }}
+                >
                   Delta
                 </span>
                 <span
@@ -4071,35 +4485,76 @@ export default function Home() {
             >
               {hero.eyebrow}
             </div>
-            <strong style={{ fontSize: expanded ? 34 : 28, lineHeight: 1.02, maxWidth: 560, letterSpacing: -0.5 }}>
+            <strong
+              style={{
+                fontSize: expanded ? 34 : 28,
+                lineHeight: 1.02,
+                maxWidth: 560,
+                letterSpacing: -0.5,
+              }}
+            >
               {hero.headline}
             </strong>
-            <div style={{ fontSize: expanded ? 20 : 17, lineHeight: 1.15, fontWeight: 800, color: "var(--text-main)" }}>{hero.valueLine}</div>
-            <div style={{ color: "color-mix(in srgb, var(--text-main) 74%, transparent)", lineHeight: 1.35, fontSize: expanded ? 15 : 13, fontWeight: 600 }}>
+            <div
+              style={{
+                fontSize: expanded ? 20 : 17,
+                lineHeight: 1.15,
+                fontWeight: 800,
+                color: "var(--text-main)",
+              }}
+            >
+              {hero.valueLine}
+            </div>
+            <div
+              style={{
+                color: "color-mix(in srgb, var(--text-main) 74%, transparent)",
+                lineHeight: 1.35,
+                fontSize: expanded ? 15 : 13,
+                fontWeight: 600,
+              }}
+            >
               {hero.supporting}
             </div>
-            {expanded ? <div style={{ color: "color-mix(in srgb, var(--text-main) 70%, transparent)", lineHeight: 1.4, fontSize: 14 }}>{insight.summary}</div> : null}
+            {expanded ? (
+              <div
+                style={{
+                  color: "color-mix(in srgb, var(--text-main) 70%, transparent)",
+                  lineHeight: 1.4,
+                  fontSize: 14,
+                }}
+              >
+                {insight.summary}
+              </div>
+            ) : null}
           </div>
         </div>
         {expanded ? (
           <div
-              style={{
-                display: "grid",
-                gap: 8,
-                padding: "14px 16px",
-                borderRadius: 14,
+            style={{
+              display: "grid",
+              gap: 8,
+              padding: "14px 16px",
+              borderRadius: 14,
               background: "var(--surface-muted)",
               border: "1px dashed color-mix(in srgb, #0f766e 28%, var(--border))",
             }}
           >
-            <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 700 }}>Waarom deze kaart nu zichtbaar is</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 700 }}>
+              Waarom deze kaart nu zichtbaar is
+            </div>
             <div style={{ color: "var(--text-muted)", lineHeight: 1.5 }}>
-              Deze AI-card heeft tijdelijk de standaardkaart vervangen zodat het signaal direct in de hoofdview opvalt.
+              Deze AI-card heeft tijdelijk de standaardkaart vervangen zodat het signaal direct in
+              de hoofdview opvalt.
             </div>
           </div>
         ) : null}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          {insight.deviation_pct != null ? <span style={fixedMetricBadgeStyle}>Afwijking: {insight.deviation_pct > 0 ? "+" : ""}{insight.deviation_pct}%</span> : null}
+          {insight.deviation_pct != null ? (
+            <span style={fixedMetricBadgeStyle}>
+              Afwijking: {insight.deviation_pct > 0 ? "+" : ""}
+              {insight.deviation_pct}%
+            </span>
+          ) : null}
           <span style={fixedMetricBadgeStyle}>TTL: {aiInsightTtlHours} uur</span>
           {insight.feedback_status !== "pending" ? (
             <span
@@ -4114,7 +4569,9 @@ export default function Home() {
             </span>
           ) : null}
         </div>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <div
+          style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}
+        >
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <button
               type="button"
@@ -4124,9 +4581,15 @@ export default function Home() {
                 ...iconButtonStyle,
                 minWidth: 42,
                 fontWeight: 700,
-                borderColor: upvoteActive ? "color-mix(in srgb, #16a34a 52%, var(--border))" : "var(--border)",
-                background: upvoteActive ? "color-mix(in srgb, #16a34a 16%, var(--surface))" : "var(--surface)",
-                color: upvoteActive ? "color-mix(in srgb, #16a34a 82%, var(--text-main))" : "var(--text-main)",
+                borderColor: upvoteActive
+                  ? "color-mix(in srgb, #16a34a 52%, var(--border))"
+                  : "var(--border)",
+                background: upvoteActive
+                  ? "color-mix(in srgb, #16a34a 16%, var(--surface))"
+                  : "var(--surface)",
+                color: upvoteActive
+                  ? "color-mix(in srgb, #16a34a 82%, var(--text-main))"
+                  : "var(--text-main)",
               }}
               title="Relevant"
               aria-label="Relevant"
@@ -4144,9 +4607,15 @@ export default function Home() {
                 ...iconButtonStyle,
                 minWidth: 42,
                 fontWeight: 700,
-                borderColor: downvoteActive ? "color-mix(in srgb, var(--danger) 52%, var(--border))" : "var(--border)",
-                background: downvoteActive ? "color-mix(in srgb, var(--danger) 14%, var(--surface))" : "var(--surface)",
-                color: downvoteActive ? "color-mix(in srgb, var(--danger) 86%, var(--text-main))" : "var(--text-main)",
+                borderColor: downvoteActive
+                  ? "color-mix(in srgb, var(--danger) 52%, var(--border))"
+                  : "var(--border)",
+                background: downvoteActive
+                  ? "color-mix(in srgb, var(--danger) 14%, var(--surface))"
+                  : "var(--surface)",
+                color: downvoteActive
+                  ? "color-mix(in srgb, var(--danger) 86%, var(--text-main))"
+                  : "var(--text-main)",
               }}
               title="Niet relevant"
               aria-label="Niet relevant"
@@ -4154,7 +4623,11 @@ export default function Home() {
               👎
             </button>
           </div>
-          <button type="button" onClick={() => openInsightLogPanel(String(insight.id))} style={{ ...filterOpenButtonStyle, padding: "6px 10px" }}>
+          <button
+            type="button"
+            onClick={() => openInsightLogPanel(String(insight.id))}
+            style={{ ...filterOpenButtonStyle, padding: "6px 10px" }}
+          >
             Details
           </button>
         </div>
@@ -4187,19 +4660,35 @@ export default function Home() {
                 boxShadow: "0 18px 40px color-mix(in srgb, #0f172a 18%, transparent)",
               }}
             >
-              <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 700 }}>Waarom wil je deze AI-card wegstemmen?</div>
-              <select value={pendingInsightReason} onChange={(e) => setPendingInsightReason(e.target.value)} style={inputBaseStyle}>
+              <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 700 }}>
+                Waarom wil je deze AI-card wegstemmen?
+              </div>
+              <select
+                value={pendingInsightReason}
+                onChange={(e) => setPendingInsightReason(e.target.value)}
+                style={inputBaseStyle}
+              >
                 {AI_INSIGHT_DOWNVOTE_REASONS.map((reason) => (
                   <option key={reason} value={reason}>
                     {reason}
                   </option>
                 ))}
               </select>
-              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                <button type="button" onClick={() => handleInsightFeedback(insight.id, "down", pendingInsightReason)} style={layoutPrimaryButtonStyle}>
+              <div
+                style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}
+              >
+                <button
+                  type="button"
+                  onClick={() => handleInsightFeedback(insight.id, "down", pendingInsightReason)}
+                  style={layoutPrimaryButtonStyle}
+                >
                   Bevestig downvote
                 </button>
-                <button type="button" onClick={() => setPendingInsightDownvoteId(null)} style={filterOpenButtonStyle}>
+                <button
+                  type="button"
+                  onClick={() => setPendingInsightDownvoteId(null)}
+                  style={filterOpenButtonStyle}
+                >
                   Annuleren
                 </button>
               </div>
@@ -4211,12 +4700,18 @@ export default function Home() {
   }
 
   function renderCardContent(cardKey, expanded = false) {
-    const bodyStyle = expanded ? { height: "100%", minHeight: 0, position: "relative" } : chartBodyStyle;
-    const emptyStyle = expanded ? { ...hiddenChartPlaceholderStyle, minHeight: 0 } : hiddenChartPlaceholderStyle;
+    const bodyStyle = expanded
+      ? { height: "100%", minHeight: 0, position: "relative" }
+      : chartBodyStyle;
+    const emptyStyle = expanded
+      ? { ...hiddenChartPlaceholderStyle, minHeight: 0 }
+      : hiddenChartPlaceholderStyle;
     if (cardKey === "topOnderwerpen") {
       return (
         <div style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
-          <p style={topListHintStyle}>Tickets en trend per laatste volledige week ({fullWeekInfo.periodLabel})</p>
+          <p style={topListHintStyle}>
+            Tickets en trend per laatste volledige week ({fullWeekInfo.periodLabel})
+          </p>
           <div style={topListTableWrapStyle}>
             {topOnderwerpRows.length ? (
               <table style={topListTableStyle}>
@@ -4228,7 +4723,8 @@ export default function Home() {
                         ...topListThStyle,
                         textAlign: "right",
                         cursor: "pointer",
-                        color: topOnderwerpSort === "tickets" ? "var(--accent)" : "var(--text-muted)",
+                        color:
+                          topOnderwerpSort === "tickets" ? "var(--accent)" : "var(--text-muted)",
                       }}
                       onClick={() => setTopOnderwerpSort("tickets")}
                       title="Sorteer op tickets (laatste volledige week)"
@@ -4277,7 +4773,15 @@ export default function Home() {
         ? liveAlerts.time_to_resolution_overdue
         : [];
       return (
-        <div style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%", gap: 10 }}>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            minHeight: 0,
+            height: "100%",
+            gap: 10,
+          }}
+        >
           <div
             style={{
               display: "flex",
@@ -4290,14 +4794,31 @@ export default function Home() {
               color: "#dbeafe",
             }}
           >
-            <span style={{ fontSize: 11, border: "1px solid rgba(255,255,255,0.35)", borderRadius: 999, padding: "2px 8px" }}>TTR X</span>
+            <span
+              style={{
+                fontSize: 11,
+                border: "1px solid rgba(255,255,255,0.35)",
+                borderRadius: 999,
+                padding: "2px 8px",
+              }}
+            >
+              TTR X
+            </span>
             <strong style={{ fontSize: 28, lineHeight: 1 }}>{overdueTtrItems.length}</strong>
             <span style={{ fontSize: 13, fontWeight: 700 }}>
               {overdueTtrItems.length === 1 ? "ticket buiten SLA" : "tickets buiten SLA"}
             </span>
           </div>
           {overdueTtrItems.length ? (
-            <ul style={{ margin: 0, padding: "0 4px", listStyle: "none", display: "grid", overflow: "auto" }}>
+            <ul
+              style={{
+                margin: 0,
+                padding: "0 4px",
+                listStyle: "none",
+                display: "grid",
+                overflow: "auto",
+              }}
+            >
               {overdueTtrItems.slice(0, 8).map((item) => (
                 <li
                   key={item.issue_key}
@@ -4320,20 +4841,45 @@ export default function Home() {
                   >
                     {item.issue_key}
                   </a>
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 600 }} title={item.issue_summary || "Titel onbekend"}>
+                  <span
+                    style={{
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      fontWeight: 600,
+                    }}
+                    title={item.issue_summary || "Titel onbekend"}
+                  >
                     {item.issue_summary || "Titel onbekend"}
                   </span>
-                  <span style={{ gridColumn: 2, color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <span
+                    style={{
+                      gridColumn: 2,
+                      color: "var(--text-muted)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
                     {item.status || "Status onbekend"}
                   </span>
-                  <span style={{ gridColumn: 3, gridRow: 1, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                  <span
+                    style={{
+                      gridColumn: 3,
+                      gridRow: 1,
+                      color: "var(--text-muted)",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
                     {formatOverdueMinutes(item.minutes_overdue)}
                   </span>
                 </li>
               ))}
             </ul>
           ) : (
-            <div style={{ ...hiddenChartPlaceholderStyle, minHeight: 0, flex: 1 }}>Geen tickets buiten de TTR-SLA.</div>
+            <div style={{ ...hiddenChartPlaceholderStyle, minHeight: 0, flex: 1 }}>
+              Geen tickets buiten de TTR-SLA.
+            </div>
           )}
         </div>
       );
@@ -4345,7 +4891,11 @@ export default function Home() {
         ...lineData,
         datasets: lineData.datasets.filter((dataset) => {
           if (!settings.total && isTotalLabel(dataset.label)) return false;
-          if (!settings.movingAverage && String(dataset.label || "").startsWith("Voortschrijdend gemiddelde")) return false;
+          if (
+            !settings.movingAverage &&
+            String(dataset.label || "").startsWith("Voortschrijdend gemiddelde")
+          )
+            return false;
           return true;
         }),
       };
@@ -4365,7 +4915,11 @@ export default function Home() {
                   const weekStart = weeks[el.index];
                   const typeLabel = chartData.datasets[el.datasetIndex]?.label;
                   if (String(typeLabel || "").startsWith("Voortschrijdend gemiddelde")) return;
-                  const effectiveType = requestType ? requestType : isTotalLabel(typeLabel) ? "" : typeLabel;
+                  const effectiveType = requestType
+                    ? requestType
+                    : isTotalLabel(typeLabel)
+                      ? ""
+                      : typeLabel;
                   fetchDrilldown(weekStart, effectiveType, "");
                 },
                 plugins: {
@@ -4373,12 +4927,18 @@ export default function Home() {
                   tooltip: { mode: "nearest", intersect: false },
                   releaseCadence: releaseCadencePlugin,
                   renderWatch: { onReady: () => markChartRendered("volume") },
-                  simpleDataLabels: buildSimpleDataLabels({ mode: "line", maxLabels: expanded ? 24 : 12 }),
+                  simpleDataLabels: buildSimpleDataLabels({
+                    mode: "line",
+                    maxLabels: expanded ? 24 : 12,
+                  }),
                 },
                 interaction: { mode: "nearest", intersect: false },
                 scales: {
                   x: buildChartAxis({}),
-                  y: buildChartAxis({ title: "Aantal tickets", tickCallback: (value) => num(value) }),
+                  y: buildChartAxis({
+                    title: "Aantal tickets",
+                    tickCallback: (value) => num(value),
+                  }),
                 },
               }}
             />
@@ -4403,7 +4963,9 @@ export default function Home() {
                 topics={topicTrendSeries}
                 selectedTopic={selectedTopicTrend}
                 onSelectTopic={setSelectedTopicTrend}
-                onDetailPointClick={(bucketLabel, topicLabel) => fetchDrilldown(bucketLabel, requestType, topicLabel)}
+                onDetailPointClick={(bucketLabel, topicLabel) =>
+                  fetchDrilldown(bucketLabel, requestType, topicLabel)
+                }
                 labels={weeklyLabels(weeksOnderwerp)}
                 buildChartAxis={buildChartAxis}
                 chartKey={chartRenderKey("onderwerp")}
@@ -4452,11 +5014,18 @@ export default function Home() {
                         },
                       },
                       renderWatch: { onReady: () => markChartRendered("priority") },
-                      simpleDataLabels: buildSimpleDataLabels({ mode: "bar", maxLabels: expanded ? 20 : 10 }),
+                      simpleDataLabels: buildSimpleDataLabels({
+                        mode: "bar",
+                        maxLabels: expanded ? 20 : 10,
+                      }),
                     },
                     interaction: { mode: "nearest", intersect: false },
                     scales: {
-                      x: buildChartAxis({ title: "Aantal tickets", tickCallback: (value) => num(value), beginAtZero: true }),
+                      x: buildChartAxis({
+                        title: "Aantal tickets",
+                        tickCallback: (value) => num(value),
+                        beginAtZero: true,
+                      }),
                       y: buildChartAxis({ gridDisplay: false }),
                     },
                   }}
@@ -4502,11 +5071,18 @@ export default function Home() {
                         },
                       },
                       renderWatch: { onReady: () => markChartRendered("assignee") },
-                      simpleDataLabels: buildSimpleDataLabels({ mode: "bar", maxLabels: expanded ? 20 : 10 }),
+                      simpleDataLabels: buildSimpleDataLabels({
+                        mode: "bar",
+                        maxLabels: expanded ? 20 : 10,
+                      }),
                     },
                     interaction: { mode: "nearest", intersect: false },
                     scales: {
-                      x: buildChartAxis({ title: "Aantal tickets", tickCallback: (value) => num(value), beginAtZero: true }),
+                      x: buildChartAxis({
+                        title: "Aantal tickets",
+                        tickCallback: (value) => num(value),
+                        beginAtZero: true,
+                      }),
                       y: buildChartAxis({ gridDisplay: false }),
                     },
                   }}
@@ -4536,8 +5112,16 @@ export default function Home() {
                   responsive: true,
                   maintainAspectRatio: false,
                   plugins: {
-                    legend: { display: settings.legend, position: "top", labels: chartLegendLabels },
-                    simpleDataLabels: buildSimpleDataLabels({ mode: "bar", maxLabels: expanded ? 20 : 10, datasetIndexes: [2] }),
+                    legend: {
+                      display: settings.legend,
+                      position: "top",
+                      labels: chartLegendLabels,
+                    },
+                    simpleDataLabels: buildSimpleDataLabels({
+                      mode: "bar",
+                      maxLabels: expanded ? 20 : 10,
+                      datasetIndexes: [2],
+                    }),
                   },
                   scales: {
                     x: buildChartAxis({
@@ -4564,58 +5148,56 @@ export default function Home() {
       const settings = chartSettingsFor("inflowVsClosed");
       return (
         <div style={bodyStyle}>
-            {hasDataPoints(inflowVsClosedLineData) ? (
-              <Line
-                key={chartRenderKey("inflowVsClosed")}
-                data={inflowVsClosedLineData}
-                options={{
-                  responsive: true,
-                  maintainAspectRatio: false,
-                  animation: slowChartAnimation("inflowVsClosed"),
-                  onClick: (_evt, elements) => {
+          {hasDataPoints(inflowVsClosedLineData) ? (
+            <Line
+              key={chartRenderKey("inflowVsClosed")}
+              data={inflowVsClosedLineData}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: slowChartAnimation("inflowVsClosed"),
+                onClick: (_evt, elements) => {
                   const el = elements?.[0];
                   if (!el) return;
                   const weekStart = weeks[el.index];
-                  const datasetLabel = inflowVsClosedLineData.datasets?.[el.datasetIndex]?.label || "";
+                  const datasetLabel =
+                    inflowVsClosedLineData.datasets?.[el.datasetIndex]?.label || "";
                   const isClosed = String(datasetLabel).toLowerCase().includes("afgesloten");
-                  fetchDrilldown(
-                    weekStart,
-                    requestType,
-                    onderwerp || "",
-                    0,
-                    {
-                      dateField: isClosed ? "resolved" : "created",
-                      basisLabel: isClosed ? "Afgesloten" : "Binnengekomen",
-                    }
-                  );
+                  fetchDrilldown(weekStart, requestType, onderwerp || "", 0, {
+                    dateField: isClosed ? "resolved" : "created",
+                    basisLabel: isClosed ? "Afgesloten" : "Binnengekomen",
+                  });
                 },
-                  plugins: {
-                    legend: {
-                      display: settings.legend,
-                      position: "top",
-                      labels: chartLegendLabels,
-                    },
-                    renderWatch: { onReady: () => markChartRendered("inflowVsClosed") },
-                    tooltip: {
-                      mode: "nearest",
-                      intersect: false,
-                      callbacks: {
-                        label: (ctx) => `${ctx.dataset.label}: ${num(ctx.parsed.y)} tickets`,
-                      },
-                    },
-                    releaseCadence: releaseCadencePlugin,
-                    simpleDataLabels: false,
+                plugins: {
+                  legend: {
+                    display: settings.legend,
+                    position: "top",
+                    labels: chartLegendLabels,
                   },
-                  interaction: { mode: "nearest", intersect: false },
-                  scales: {
-                    x: buildChartAxis({}),
-                    y: buildChartAxis({ title: "Aantal tickets", tickCallback: (value) => num(value) }),
+                  renderWatch: { onReady: () => markChartRendered("inflowVsClosed") },
+                  tooltip: {
+                    mode: "nearest",
+                    intersect: false,
+                    callbacks: {
+                      label: (ctx) => `${ctx.dataset.label}: ${num(ctx.parsed.y)} tickets`,
+                    },
                   },
-                }}
-              />
-            ) : (
-              <EmptyChartState filterLabel="Binnengekomen/Afgesloten" style={emptyStyle} />
-            )}
+                  releaseCadence: releaseCadencePlugin,
+                  simpleDataLabels: false,
+                },
+                interaction: { mode: "nearest", intersect: false },
+                scales: {
+                  x: buildChartAxis({}),
+                  y: buildChartAxis({
+                    title: "Aantal tickets",
+                    tickCallback: (value) => num(value),
+                  }),
+                },
+              }}
+            />
+          ) : (
+            <EmptyChartState filterLabel="Binnengekomen/Afgesloten" style={emptyStyle} />
+          )}
           {renderSlowChartOverlay("inflowVsClosed")}
         </div>
       );
@@ -4624,10 +5206,24 @@ export default function Home() {
     if (cardKey === "releaseWorkload") {
       const settings = chartSettingsFor("releaseWorkload");
       return (
-        <div style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%", gap: 8 }}>
-          <div style={{ display: "grid", gap: 4, color: "var(--text-muted)", fontSize: 12, lineHeight: 1.35, flexShrink: 0 }}>
+        <div
+          style={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%", gap: 8 }}
+        >
+          <div
+            style={{
+              display: "grid",
+              gap: 4,
+              color: "var(--text-muted)",
+              fontSize: 12,
+              lineHeight: 1.35,
+              flexShrink: 0,
+            }}
+          >
             <div>
-              Laatste release: {kpiStats.releaseWednesdayLatestReleaseDate ? fmtDateWithWeekday(kpiStats.releaseWednesdayLatestReleaseDate) : "—"}
+              Laatste release:{" "}
+              {kpiStats.releaseWednesdayLatestReleaseDate
+                ? fmtDateWithWeekday(kpiStats.releaseWednesdayLatestReleaseDate)
+                : "—"}
             </div>
             {releaseStatusMeta.map((item) => (
               <div
@@ -4662,7 +5258,11 @@ export default function Home() {
                   responsive: true,
                   maintainAspectRatio: false,
                   plugins: {
-                    legend: { display: settings.legend, position: "top", labels: chartLegendLabels },
+                    legend: {
+                      display: settings.legend,
+                      position: "top",
+                      labels: chartLegendLabels,
+                    },
                     tooltip: {
                       callbacks: {
                         title: (items) => {
@@ -4672,7 +5272,10 @@ export default function Home() {
                         label: (ctx) => `${num(ctx.parsed.y)} tickets`,
                       },
                     },
-                    simpleDataLabels: buildSimpleDataLabels({ mode: "line", maxLabels: expanded ? 20 : 10 }),
+                    simpleDataLabels: buildSimpleDataLabels({
+                      mode: "line",
+                      maxLabels: expanded ? 20 : 10,
+                    }),
                   },
                   onClick: (_evt, elements) => {
                     const el = elements?.[0];
@@ -4699,41 +5302,42 @@ export default function Home() {
       const settings = chartSettingsFor("incidentResolution");
       return (
         <div style={bodyStyle}>
-            {hasDataPoints(incidentResolutionLineData) ? (
-              <Line
-                key={chartRenderKey("incidentResolution")}
-                data={incidentResolutionLineData}
-                options={{
-                  responsive: true,
-                  maintainAspectRatio: false,
-                  animation: slowChartAnimation("incidentResolution"),
-                  plugins: {
-                    legend: {
-                      display: settings.legend,
-                      position: "top",
-                      labels: chartLegendLabels,
-                    },
-                    renderWatch: { onReady: () => markChartRendered("incidentResolution") },
-                    tooltip: {
-                      mode: "nearest",
-                      intersect: false,
-                      callbacks: {
-                        label: (ctx) => `${ctx.dataset.label}: ${formatDurationHoursForTooltip(ctx.parsed.y)}`,
-                      },
-                    },
-                    releaseCadence: releaseCadencePlugin,
-                    simpleDataLabels: false,
+          {hasDataPoints(incidentResolutionLineData) ? (
+            <Line
+              key={chartRenderKey("incidentResolution")}
+              data={incidentResolutionLineData}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: slowChartAnimation("incidentResolution"),
+                plugins: {
+                  legend: {
+                    display: settings.legend,
+                    position: "top",
+                    labels: chartLegendLabels,
                   },
-                  interaction: { mode: "nearest", intersect: false },
-                  scales: {
-                    x: buildChartAxis({}),
-                    y: buildChartAxis({ title: "Uren" }),
+                  renderWatch: { onReady: () => markChartRendered("incidentResolution") },
+                  tooltip: {
+                    mode: "nearest",
+                    intersect: false,
+                    callbacks: {
+                      label: (ctx) =>
+                        `${ctx.dataset.label}: ${formatDurationHoursForTooltip(ctx.parsed.y)}`,
+                    },
                   },
-                }}
-              />
-            ) : (
-              <EmptyChartState filterLabel="Time to Resolution" style={emptyStyle} />
-            )}
+                  releaseCadence: releaseCadencePlugin,
+                  simpleDataLabels: false,
+                },
+                interaction: { mode: "nearest", intersect: false },
+                scales: {
+                  x: buildChartAxis({}),
+                  y: buildChartAxis({ title: "Uren" }),
+                },
+              }}
+            />
+          ) : (
+            <EmptyChartState filterLabel="Time to Resolution" style={emptyStyle} />
+          )}
           {renderSlowChartOverlay("incidentResolution")}
         </div>
       );
@@ -4743,31 +5347,31 @@ export default function Home() {
       const settings = chartSettingsFor("firstResponseAll");
       return (
         <div style={bodyStyle}>
-            {hasDataPoints(firstResponseLineData) ? (
-              <Line
-                key={chartRenderKey("firstResponseAll")}
-                data={firstResponseLineData}
-                options={{
-                  responsive: true,
-                  maintainAspectRatio: false,
-                  animation: slowChartAnimation("firstResponseAll"),
-                  plugins: {
-                    legend: { display: settings.legend, position: "top", labels: chartLegendLabels },
-                    renderWatch: { onReady: () => markChartRendered("firstResponseAll") },
-                    tooltip: { mode: "nearest", intersect: false },
-                    releaseCadence: releaseCadencePlugin,
-                    simpleDataLabels: false,
-                  },
-                  interaction: { mode: "nearest", intersect: false },
-                  scales: {
-                    x: buildChartAxis({}),
-                    y: buildChartAxis({ title: "Uren" }),
-                  },
-                }}
-              />
-            ) : (
-              <EmptyChartState filterLabel="Time to First Response" style={emptyStyle} />
-            )}
+          {hasDataPoints(firstResponseLineData) ? (
+            <Line
+              key={chartRenderKey("firstResponseAll")}
+              data={firstResponseLineData}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: slowChartAnimation("firstResponseAll"),
+                plugins: {
+                  legend: { display: settings.legend, position: "top", labels: chartLegendLabels },
+                  renderWatch: { onReady: () => markChartRendered("firstResponseAll") },
+                  tooltip: { mode: "nearest", intersect: false },
+                  releaseCadence: releaseCadencePlugin,
+                  simpleDataLabels: false,
+                },
+                interaction: { mode: "nearest", intersect: false },
+                scales: {
+                  x: buildChartAxis({}),
+                  y: buildChartAxis({ title: "Uren" }),
+                },
+              }}
+            />
+          ) : (
+            <EmptyChartState filterLabel="Time to First Response" style={emptyStyle} />
+          )}
           {renderSlowChartOverlay("firstResponseAll")}
         </div>
       );
@@ -4777,34 +5381,34 @@ export default function Home() {
       const settings = chartSettingsFor("organizationWeekly");
       return (
         <div style={bodyStyle}>
-            {hasDataPoints(organizationBarData) ? (
-              <Bar
-                key={chartRenderKey("organizationWeekly")}
-                data={organizationBarData}
-                options={{
-                  responsive: true,
-                  maintainAspectRatio: false,
-                  animation: slowChartAnimation("organizationWeekly"),
-                  plugins: {
-                    legend: {
-                      display: settings.legend,
-                      position: "top",
-                      labels: chartLegendLabels,
-                    },
-                    renderWatch: { onReady: () => markChartRendered("organizationWeekly") },
-                    tooltip: { mode: "nearest", intersect: false },
-                    simpleDataLabels: false,
+          {hasDataPoints(organizationBarData) ? (
+            <Bar
+              key={chartRenderKey("organizationWeekly")}
+              data={organizationBarData}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: slowChartAnimation("organizationWeekly"),
+                plugins: {
+                  legend: {
+                    display: settings.legend,
+                    position: "top",
+                    labels: chartLegendLabels,
                   },
-                  interaction: { mode: "nearest", intersect: false },
-                  scales: {
-                    x: buildChartAxis({}),
-                    y: buildChartAxis({ title: "Aantal tickets" }),
-                  },
-                }}
-              />
-            ) : (
-              <EmptyChartState filterLabel="Partners" style={emptyStyle} />
-            )}
+                  renderWatch: { onReady: () => markChartRendered("organizationWeekly") },
+                  tooltip: { mode: "nearest", intersect: false },
+                  simpleDataLabels: false,
+                },
+                interaction: { mode: "nearest", intersect: false },
+                scales: {
+                  x: buildChartAxis({}),
+                  y: buildChartAxis({ title: "Aantal tickets" }),
+                },
+              }}
+            />
+          ) : (
+            <EmptyChartState filterLabel="Partners" style={emptyStyle} />
+          )}
           {renderSlowChartOverlay("organizationWeekly")}
         </div>
       );
@@ -4812,7 +5416,9 @@ export default function Home() {
 
     if (cardKey === "vacationServicedesk") {
       return (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, minHeight: 0, height: "100%" }}>
+        <div
+          style={{ display: "flex", flexDirection: "column", gap: 8, minHeight: 0, height: "100%" }}
+        >
           {vacationEditMode ? (
             <>
               <div style={vacationFormGridStyle}>
@@ -4820,7 +5426,9 @@ export default function Home() {
                   <span style={labelStyle}>Teamlid</span>
                   <select
                     value={vacationForm.memberName}
-                    onChange={(e) => setVacationForm((prev) => ({ ...prev, memberName: e.target.value }))}
+                    onChange={(e) =>
+                      setVacationForm((prev) => ({ ...prev, memberName: e.target.value }))
+                    }
                     style={inputBaseStyle}
                   >
                     {servicedeskTeamMembers.map((member) => (
@@ -4879,7 +5487,13 @@ export default function Home() {
                         const iso = e.target.value;
                         applyVacationStartDate(iso);
                       }}
-                      style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 0, height: 0 }}
+                      style={{
+                        position: "absolute",
+                        opacity: 0,
+                        pointerEvents: "none",
+                        width: 0,
+                        height: 0,
+                      }}
                       tabIndex={-1}
                       aria-hidden="true"
                     />
@@ -4936,7 +5550,13 @@ export default function Home() {
                         setVacationForm((prev) => ({ ...prev, endDate: iso }));
                         setVacationEndUi(fmtDate(iso));
                       }}
-                      style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 0, height: 0 }}
+                      style={{
+                        position: "absolute",
+                        opacity: 0,
+                        pointerEvents: "none",
+                        width: 0,
+                        height: 0,
+                      }}
                       tabIndex={-1}
                       aria-hidden="true"
                     />
@@ -4965,13 +5585,16 @@ export default function Home() {
           ) : upcomingVacations.length ? (
             <>
               <ul style={vacationListStyle}>
-                {upcomingVacations.slice(0, 3).map((item) => (
+                {upcomingVacations.slice(0, 3).map((item) =>
                   (() => {
                     const isActiveToday = isVacationActiveToday(item);
                     const todayIso = isoDate(new Date());
                     const startDate = String(item?.start_date || "");
-                    const workdaysUntilStart = startDate ? businessDaysUntil(todayIso, startDate) : 0;
-                    const isSoonWarning = !isActiveToday && workdaysUntilStart >= 1 && workdaysUntilStart <= 2;
+                    const workdaysUntilStart = startDate
+                      ? businessDaysUntil(todayIso, startDate)
+                      : 0;
+                    const isSoonWarning =
+                      !isActiveToday && workdaysUntilStart >= 1 && workdaysUntilStart <= 2;
                     const activeTodayStyle = isActiveToday
                       ? {
                           minHeight: 78, // ~1.5x base item height
@@ -4986,65 +5609,113 @@ export default function Home() {
                         }
                       : null;
                     return (
-                  <li
-                    key={`vac-upcoming-${item.id}`}
-                    className="vacation-row"
-                    style={{ ...vacationItemStyle, ...(soonWarningStyle || {}), ...(activeTodayStyle || {}) }}
-                    onMouseEnter={() => setVacationHoverId(item.id)}
-                    onMouseLeave={() => setVacationHoverId((prev) => (prev === item.id ? null : prev))}
-                    onFocus={() => setVacationHoverId(item.id)}
-                    onBlur={() => setVacationHoverId((prev) => (prev === item.id ? null : prev))}
-                  >
-                    <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
-                      <VacationAvatar
-                        name={item.member_name}
-                        avatarUrl={servicedeskConfig?.team_member_avatars?.[item.member_name] || ""}
-                      />
-                      <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
-                      <strong>{item.member_name}</strong>
-                      <span style={{ color: "var(--text-muted)" }}>
-                        {formatVacationRangeLabel(item.start_date, item.end_date)}
-                      </span>
-                      </div>
-                    </div>
-                    <div
-                      className="vacation-row-actions"
-                      style={{
-                        ...vacationRowActionsStyle,
-                        opacity: vacationHoverId === item.id ? 1 : 0,
-                        pointerEvents: vacationHoverId === item.id ? "auto" : "none",
-                      }}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => startVacationEdit(item)}
-                        style={{ ...vacationActionButtonStyle, borderColor: "var(--accent)", color: "var(--accent)" }}
-                        title="Aanpassen"
-                        aria-label="Aanpassen"
-                        disabled={vacationSaving}
+                      <li
+                        key={`vac-upcoming-${item.id}`}
+                        className="vacation-row"
+                        style={{
+                          ...vacationItemStyle,
+                          ...(soonWarningStyle || {}),
+                          ...(activeTodayStyle || {}),
+                        }}
+                        onMouseEnter={() => setVacationHoverId(item.id)}
+                        onMouseLeave={() =>
+                          setVacationHoverId((prev) => (prev === item.id ? null : prev))
+                        }
+                        onFocus={() => setVacationHoverId(item.id)}
+                        onBlur={() =>
+                          setVacationHoverId((prev) => (prev === item.id ? null : prev))
+                        }
                       >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                          <path d="M4 20h4l10-10-4-4L4 16v4Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                          <path d="m12 6 4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                        </svg>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => removeVacation(item.id)}
-                        style={{ ...vacationActionButtonStyle, borderColor: "var(--danger)", color: "var(--danger)" }}
-                        title="Verwijderen"
-                        aria-label="Verwijderen"
-                        disabled={vacationSaving}
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                          <path d="M4 7h16M10 3h4M7 7l1 13h8l1-13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      </button>
-                    </div>
-                  </li>
+                        <div
+                          style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}
+                        >
+                          <VacationAvatar
+                            name={item.member_name}
+                            avatarUrl={
+                              servicedeskConfig?.team_member_avatars?.[item.member_name] || ""
+                            }
+                          />
+                          <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
+                            <strong>{item.member_name}</strong>
+                            <span style={{ color: "var(--text-muted)" }}>
+                              {formatVacationRangeLabel(item.start_date, item.end_date)}
+                            </span>
+                          </div>
+                        </div>
+                        <div
+                          className="vacation-row-actions"
+                          style={{
+                            ...vacationRowActionsStyle,
+                            opacity: vacationHoverId === item.id ? 1 : 0,
+                            pointerEvents: vacationHoverId === item.id ? "auto" : "none",
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => startVacationEdit(item)}
+                            style={{
+                              ...vacationActionButtonStyle,
+                              borderColor: "var(--accent)",
+                              color: "var(--accent)",
+                            }}
+                            title="Aanpassen"
+                            aria-label="Aanpassen"
+                            disabled={vacationSaving}
+                          >
+                            <svg
+                              width="14"
+                              height="14"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              aria-hidden="true"
+                            >
+                              <path
+                                d="M4 20h4l10-10-4-4L4 16v4Z"
+                                stroke="currentColor"
+                                strokeWidth="1.8"
+                                strokeLinejoin="round"
+                              />
+                              <path
+                                d="m12 6 4 4"
+                                stroke="currentColor"
+                                strokeWidth="1.8"
+                                strokeLinecap="round"
+                              />
+                            </svg>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => removeVacation(item.id)}
+                            style={{
+                              ...vacationActionButtonStyle,
+                              borderColor: "var(--danger)",
+                              color: "var(--danger)",
+                            }}
+                            title="Verwijderen"
+                            aria-label="Verwijderen"
+                            disabled={vacationSaving}
+                          >
+                            <svg
+                              width="14"
+                              height="14"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              aria-hidden="true"
+                            >
+                              <path
+                                d="M4 7h16M10 3h4M7 7l1 13h8l1-13"
+                                stroke="currentColor"
+                                strokeWidth="1.8"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                            </svg>
+                          </button>
+                        </div>
+                      </li>
                     );
                   })()
-                ))}
+                )}
               </ul>
               {upcomingVacationTotal > 3 ? (
                 <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
@@ -5073,30 +5744,64 @@ export default function Home() {
     }).format(refreshedAt)}`;
   }, [currentWeekFlowRefreshedAt]);
 
-  const liveKpiItems = useMemo(
-    () => {
-      const receivedTrend = trendInfo(kpiStats.currentWeekReceived, kpiStats.previousWeekReceived);
-      const closedTrend = trendInfo(kpiStats.currentWeekClosed, kpiStats.previousWeekClosed);
+  const liveKpiItems = useMemo(() => {
+    const receivedTrend = trendInfo(kpiStats.currentWeekReceived, kpiStats.previousWeekReceived);
+    const closedTrend = trendInfo(kpiStats.currentWeekClosed, kpiStats.previousWeekClosed);
 
-      return [
+    return [
       liveKpiSettings.currentWeekFlow
         ? {
             key: "currentWeekFlow",
             label: "Lopende week",
             content: (
               <>
-                <span style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+                <span
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                    gap: 12,
+                  }}
+                >
                   <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-                    <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", lineHeight: 1.2 }}>Ontvangen</span>
-                    <span><strong style={{ fontSize: 20 }}>{num(kpiStats.currentWeekReceived)}</strong> <span style={{ color: receivedTrend.color, fontSize: 20 }}>{receivedTrend.symbol}</span></span>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 600,
+                        color: "var(--text-muted)",
+                        lineHeight: 1.2,
+                      }}
+                    >
+                      Ontvangen
+                    </span>
+                    <span>
+                      <strong style={{ fontSize: 20 }}>{num(kpiStats.currentWeekReceived)}</strong>{" "}
+                      <span style={{ color: receivedTrend.color, fontSize: 20 }}>
+                        {receivedTrend.symbol}
+                      </span>
+                    </span>
                   </span>
                   <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-                    <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", lineHeight: 1.2 }}>Gesloten</span>
-                    <span><strong style={{ fontSize: 20 }}>{num(kpiStats.currentWeekClosed)}</strong> <span style={{ color: closedTrend.color, fontSize: 20 }}>{closedTrend.symbol}</span></span>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 600,
+                        color: "var(--text-muted)",
+                        lineHeight: 1.2,
+                      }}
+                    >
+                      Gesloten
+                    </span>
+                    <span>
+                      <strong style={{ fontSize: 20 }}>{num(kpiStats.currentWeekClosed)}</strong>{" "}
+                      <span style={{ color: closedTrend.color, fontSize: 20 }}>
+                        {closedTrend.symbol}
+                      </span>
+                    </span>
                   </span>
                 </span>
                 <span style={{ color: "var(--text-muted)", fontSize: 11 }}>
-                  Vorige week: {num(kpiStats.previousWeekReceived)} ontvangen · {num(kpiStats.previousWeekClosed)} gesloten
+                  Vorige week: {num(kpiStats.previousWeekReceived)} ontvangen ·{" "}
+                  {num(kpiStats.previousWeekClosed)} gesloten
                 </span>
               </>
             ),
@@ -5110,13 +5815,24 @@ export default function Home() {
             key: "newMelding",
             label: "Nieuwe meldingen",
             value: num(newMeldingCount),
-            valueColor: newMeldingCount < 5 ? "var(--ok)" : newMeldingCount < 10 ? "#d97706" : "var(--danger)",
+            valueColor:
+              newMeldingCount < 5
+                ? "var(--ok)"
+                : newMeldingCount < 10
+                  ? "#d97706"
+                  : "var(--danger)",
           }
         : null,
-      ].filter(Boolean);
-    },
-    [inProgressCount, kpiStats.currentWeekClosed, kpiStats.currentWeekReceived, kpiStats.previousWeekClosed, kpiStats.previousWeekReceived, liveKpiSettings, newMeldingCount]
-  );
+    ].filter(Boolean);
+  }, [
+    inProgressCount,
+    kpiStats.currentWeekClosed,
+    kpiStats.currentWeekReceived,
+    kpiStats.previousWeekClosed,
+    kpiStats.previousWeekReceived,
+    liveKpiSettings,
+    newMeldingCount,
+  ]);
 
   const kpiTiles = useMemo(
     () => ({
@@ -5125,11 +5841,29 @@ export default function Home() {
         value: (
           <span style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, width: "100%" }}>
             <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-              <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", lineHeight: 1.2 }}>Totaal</span>
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: "var(--text-muted)",
+                  lineHeight: 1.2,
+                }}
+              >
+                Totaal
+              </span>
               <span>{num(kpiStats.totalTickets)}</span>
             </span>
             <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-              <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", lineHeight: 1.2 }}>Gem./week</span>
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: "var(--text-muted)",
+                  lineHeight: 1.2,
+                }}
+              >
+                Gem./week
+              </span>
               <span>{num(kpiStats.avgPerWeek, 1)}</span>
             </span>
           </span>
@@ -5147,13 +5881,32 @@ export default function Home() {
         live: true,
         gridSpan: Math.max(1, liveKpiItems.length),
         value: (
-          <span style={{ display: "grid", gridTemplateColumns: `repeat(${Math.max(1, liveKpiItems.length)}, minmax(0, 1fr))`, gap: 14, width: "100%" }}>
-            {liveKpiItems.length ? liveKpiItems.map((item) => (
-              <span key={item.key} style={{ display: "grid", gap: 3, minWidth: 0 }}>
-                <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)" }}>{item.label}</span>
-                {item.content || <strong style={{ fontSize: 22, color: item.valueColor || "var(--text-main)" }}>{item.value}</strong>}
+          <span
+            style={{
+              display: "grid",
+              gridTemplateColumns: `repeat(${Math.max(1, liveKpiItems.length)}, minmax(0, 1fr))`,
+              gap: 14,
+              width: "100%",
+            }}
+          >
+            {liveKpiItems.length ? (
+              liveKpiItems.map((item) => (
+                <span key={item.key} style={{ display: "grid", gap: 3, minWidth: 0 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)" }}>
+                    {item.label}
+                  </span>
+                  {item.content || (
+                    <strong style={{ fontSize: 22, color: item.valueColor || "var(--text-main)" }}>
+                      {item.value}
+                    </strong>
+                  )}
+                </span>
+              ))
+            ) : (
+              <span style={{ color: "var(--text-muted)", fontSize: 12 }}>
+                Kies minimaal één live statistiek in de instellingen.
               </span>
-            )) : <span style={{ color: "var(--text-muted)", fontSize: 12 }}>Kies minimaal één live statistiek in de instellingen.</span>}
+            )}
           </span>
         ),
         sub: liveKpiUpdateLabel,
@@ -5162,26 +5915,27 @@ export default function Home() {
       },
       releaseWednesdayWorkload: {
         label: "Workload werkdag na release",
-        value: kpiStats.releaseWednesdayTrendText === "—" ? "—" : `${kpiStats.releaseWednesdayTrendSymbol} ${kpiStats.releaseWednesdayTrendText}`.trim(),
+        value:
+          kpiStats.releaseWednesdayTrendText === "—"
+            ? "—"
+            : `${kpiStats.releaseWednesdayTrendSymbol} ${kpiStats.releaseWednesdayTrendText}`.trim(),
         sub: `Laatste release: ${kpiStats.releaseWednesdayLatestReleaseLabel} · ${num(kpiStats.releaseWednesdayLatestTickets)} tickets`,
-        subSecondary:
-          releaseStatusNote
-            ? releaseStatusNote
-            : kpiStats.releaseWednesdayPreviousTickets == null
-              ? "Nog geen vorige release in de gekozen periode"
-              : `Vorige release (${kpiStats.releaseWednesdayPreviousReleaseLabel}): ${num(kpiStats.releaseWednesdayPreviousTickets)} tickets`,
+        subSecondary: releaseStatusNote
+          ? releaseStatusNote
+          : kpiStats.releaseWednesdayPreviousTickets == null
+            ? "Nog geen vorige release in de gekozen periode"
+            : `Vorige release (${kpiStats.releaseWednesdayPreviousReleaseLabel}): ${num(kpiStats.releaseWednesdayPreviousTickets)} tickets`,
         badge: releaseStatusBadge,
         valueStyle: { color: kpiStats.releaseWednesdayTrendColor },
-        onClick:
-          kpiStats.releaseWednesdayFollowupDate
-            ? () =>
-                openReleaseWorkloadDrilldown({
-                  release_date: kpiStats.releaseWednesdayLatestReleaseDate,
-                  followup_date: kpiStats.releaseWednesdayFollowupDate,
-                  tickets: kpiStats.releaseWednesdayLatestTickets,
-                  issue_keys: kpiStats.releaseWednesdayIssueKeys,
-                })
-            : null,
+        onClick: kpiStats.releaseWednesdayFollowupDate
+          ? () =>
+              openReleaseWorkloadDrilldown({
+                release_date: kpiStats.releaseWednesdayLatestReleaseDate,
+                followup_date: kpiStats.releaseWednesdayFollowupDate,
+                tickets: kpiStats.releaseWednesdayLatestTickets,
+                issue_keys: kpiStats.releaseWednesdayIssueKeys,
+              })
+          : null,
       },
       ttfrOverdue: {
         label: "TTFR verlopen (volledige weken)",
@@ -5194,28 +5948,53 @@ export default function Home() {
         value: (
           <span>
             <span>{kpiStats.topPartnerLabel}</span>{" "}
-            <span style={{ fontSize: "0.7em", fontWeight: 600, color: "var(--text-muted)" }}>met</span>{" "}
+            <span style={{ fontSize: "0.7em", fontWeight: 600, color: "var(--text-muted)" }}>
+              met
+            </span>{" "}
             <span>{num(kpiStats.topPartnerTickets)}</span>{" "}
-            <span style={{ fontSize: "0.7em", fontWeight: 600, color: "var(--text-muted)" }}>tickets</span>
+            <span style={{ fontSize: "0.7em", fontWeight: 600, color: "var(--text-muted)" }}>
+              tickets
+            </span>
           </span>
         ),
         sub: (
           <span>
-            Week ervoor: <strong>{kpiStats.topPartnerPrevLabel}</strong> met <strong>{num(kpiStats.topPartnerPrevTickets)}</strong> tickets
+            Week ervoor: <strong>{kpiStats.topPartnerPrevLabel}</strong> met{" "}
+            <strong>{num(kpiStats.topPartnerPrevTickets)}</strong> tickets
           </span>
         ),
       },
     }),
-    [kpiStats, liveKpiItems, liveKpiUpdateLabel, openReleaseWorkloadDrilldown, releaseStatusBadge, releaseStatusNote]
+    [
+      kpiStats,
+      liveKpiItems,
+      liveKpiUpdateLabel,
+      openReleaseWorkloadDrilldown,
+      releaseStatusBadge,
+      releaseStatusNote,
+    ]
   );
 
   const visibleKpiKeys = dashboardLayout.kpiRow;
   const hiddenKpiKeys = dashboardLayout.hiddenKpis;
   const visibleCardRows = dashboardLayout.cardRows;
   const hiddenCardKeys = dashboardLayout.hiddenCards;
-  const lockedCardKeys = useMemo(() => dashboardLayout.lockedCards || [], [dashboardLayout.lockedCards]);
+  const lockedCardKeys = useMemo(
+    () => dashboardLayout.lockedCards || [],
+    [dashboardLayout.lockedCards]
+  );
   const expandableCardKeys = useMemo(
-    () => new Set(["volume", "onderwerp", "inflowVsClosed", "incidentResolution", "firstResponseAll", "organizationWeekly", "releaseWorkload", "p90"]),
+    () =>
+      new Set([
+        "volume",
+        "onderwerp",
+        "inflowVsClosed",
+        "incidentResolution",
+        "firstResponseAll",
+        "organizationWeekly",
+        "releaseWorkload",
+        "p90",
+      ]),
     []
   );
   const cardTitleByKey = useCallback(
@@ -5263,7 +6042,9 @@ export default function Home() {
     const state = dragStateRef.current;
     clearDrag();
     if (!state || state.kind !== "card" || rowIndex < 0 || rowIndex > 1) return;
-    setDashboardLayout((prev) => moveCardToRowLayout(prev, state.key, rowIndex, targetKey, position));
+    setDashboardLayout((prev) =>
+      moveCardToRowLayout(prev, state.key, rowIndex, targetKey, position)
+    );
   }
 
   function hideCard() {
@@ -5350,7 +6131,8 @@ export default function Home() {
     const overlay = hiddenOverlayRef.current;
     if (!overlay) return undefined;
 
-    const updateHeight = () => setHiddenOverlayHeight(Math.ceil(overlay.getBoundingClientRect().height));
+    const updateHeight = () =>
+      setHiddenOverlayHeight(Math.ceil(overlay.getBoundingClientRect().height));
     updateHeight();
 
     if (typeof ResizeObserver === "undefined") return undefined;
@@ -5406,9 +6188,10 @@ export default function Home() {
                       width: 6,
                       height: 6,
                       borderRadius: 999,
-                      background: idx === (vacationBannerIndex % vacationBannerItems.length)
-                        ? "var(--text-main)"
-                        : "color-mix(in srgb, var(--text-muted) 48%, transparent)",
+                      background:
+                        idx === vacationBannerIndex % vacationBannerItems.length
+                          ? "var(--text-main)"
+                          : "color-mix(in srgb, var(--text-muted) 48%, transparent)",
                     }}
                   />
                 ))}
@@ -5419,7 +6202,9 @@ export default function Home() {
         <div style={headerActionsStyle}>
           {activeFilterItems.length ? (
             <>
-              <span style={activeFiltersBadgeStyle}>{`Filters actief (${activeFilterItems.length})`}</span>
+              <span
+                style={activeFiltersBadgeStyle}
+              >{`Filters actief (${activeFilterItems.length})`}</span>
               <button
                 type="button"
                 onClick={() => resetFilters(true)}
@@ -5443,7 +6228,13 @@ export default function Home() {
             <button
               type="button"
               onClick={() => openInsightLogPanel("")}
-              style={{ ...layoutPrimaryButtonStyle, minWidth: 42, padding: "0 10px", justifyContent: "center", position: "relative" }}
+              style={{
+                ...layoutPrimaryButtonStyle,
+                minWidth: 42,
+                padding: "0 10px",
+                justifyContent: "center",
+                position: "relative",
+              }}
               title="AI inzichtenlog openen"
               aria-label="AI inzichtenlog openen"
             >
@@ -5473,7 +6264,13 @@ export default function Home() {
             <button
               type="button"
               onClick={openAlertLogPanel}
-              style={{ ...layoutPrimaryButtonStyle, width: 36, padding: 0, justifyContent: "center", position: "relative" }}
+              style={{
+                ...layoutPrimaryButtonStyle,
+                width: 36,
+                padding: 0,
+                justifyContent: "center",
+                position: "relative",
+              }}
               title="Alerts logboek openen"
               aria-label="Alerts logboek openen"
             >
@@ -5502,55 +6299,7 @@ export default function Home() {
                 />
               ) : null}
             </button>
-            {isLayoutEditing ? (
-              <>
-                <label
-                  style={{
-                    ...filterOpenButtonStyle,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 7,
-                  }}
-                >
-                  <span aria-hidden="true" style={{ fontSize: 13, lineHeight: 1 }}>
-                    {themePreferenceDraft === "dark" ? "◐" : themePreferenceDraft === "light" ? "☀" : "▣"}
-                  </span>
-                  <span style={{ fontSize: 11 }}>Weergave</span>
-                  <select
-                    value={themePreferenceDraft}
-                    onChange={(event) => setThemePreferenceDraft(event.target.value)}
-                    aria-label="Kies de weergave van het dashboard"
-                    style={{
-                      appearance: "auto",
-                      border: 0,
-                      background: "transparent",
-                      color: "var(--accent)",
-                      fontSize: 11,
-                      fontWeight: 700,
-                      cursor: "pointer",
-                      padding: 0,
-                      outline: 0,
-                    }}
-                  >
-                    <option value="system">Systeem</option>
-                    <option value="light">Licht</option>
-                    <option value="dark">Donker</option>
-                  </select>
-                </label>
-                <button type="button" onClick={cancelLayoutEditing} style={filterOpenButtonStyle}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path
-                      d="M18 6L6 18M6 6l12 12"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                  Annuleren
-                </button>
-              </>
-            ) : (
+            {!isLayoutEditing ? (
               <button type="button" onClick={startLayoutEditing} style={filterOpenButtonStyle}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                   <path
@@ -5563,8 +6312,12 @@ export default function Home() {
                 </svg>
                 Layout aanpassen
               </button>
-            )}
-            <button type="button" onClick={() => setFiltersOpen(true)} style={filterOpenButtonStyle}>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setFiltersOpen(true)}
+              style={{ ...filterOpenButtonStyle, order: 2 }}
+            >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <path
                   d="M4 6h16l-6 7v5l-4 2v-7L4 6z"
@@ -5576,517 +6329,799 @@ export default function Home() {
               </svg>
               Filters openen
             </button>
+            <button
+              type="button"
+              onClick={() => setDashboardSettingsOpen(true)}
+              style={{ ...filterOpenButtonStyle, order: 1 }}
+            >
+              <SettingsGearIcon />
+              Dashboard instellingen
+            </button>
           </div>
         </div>
       </div>
 
-      {filtersOpen ? (
+      {filtersOpen || dashboardSettingsOpen ? (
         <>
-          <div style={filterOverlayStyle} onClick={() => setFiltersOpen(false)} />
-          <div style={filterModalStyle} role="dialog" aria-modal="true" aria-label="Filters">
+          <div
+            style={filterOverlayStyle}
+            onClick={() => {
+              setFiltersOpen(false);
+              setDashboardSettingsOpen(false);
+            }}
+          />
+          <div
+            style={filterModalStyle}
+            role="dialog"
+            aria-modal="true"
+            aria-label={filtersOpen ? "Filters" : "Dashboard instellingen"}
+          >
             <div style={filterModalHeaderStyle}>
-              <strong>Filters</strong>
-              <button type="button" onClick={() => setFiltersOpen(false)} style={buttonBaseStyle}>
+              <strong>{filtersOpen ? "Filters" : "Dashboard instellingen"}</strong>
+              <button
+                type="button"
+                onClick={() => {
+                  setFiltersOpen(false);
+                  setDashboardSettingsOpen(false);
+                }}
+                style={buttonBaseStyle}
+              >
                 Sluiten
               </button>
             </div>
-            <div style={filterPanelStyle}>
-        <div style={filterGridStyle}>
-          <label style={fieldStyle}>
-            <span style={labelStyle}>Van</span>
-            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <input
-              ref={dateFromTextRef}
-              type="text"
-              inputMode="numeric"
-              placeholder="dd/mm/jjjj"
-              value={dateFromUi}
-              onChange={(e) => setDateFromUi(e.target.value)}
-              onBlur={() => {
-                const iso = parseNlDateToIso(dateFromUi);
-                if (iso) {
-                  setDateFrom(iso);
-                } else {
-                  setSyncMessage("Ongeldige datum (Van). Gebruik dd/mm/jjjj.");
-                  setSyncMessageKind("error");
-                  setTimeout(() => setSyncMessage(""), 6000);
-                  setDateFromUi(fmtDate(dateFrom));
-                }
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.currentTarget.blur();
-                }
-              }}
-              style={inputBaseStyle}
-            />
+            {filtersOpen ? (
+              <div style={{ ...filterPanelStyle, padding: 20, marginBottom: 0 }}>
+                <div style={{ display: "grid", gap: 8, marginBottom: 18, maxWidth: 760 }}>
+                  <strong>Analyseer historische ticketgegevens</strong>
+                  <span style={{ color: "var(--text-muted)", lineHeight: 1.5 }}>
+                    Verfijn de periode en kenmerken om patronen in eerdere tickets te onderzoeken.
+                  </span>
+                  {activeFilterItems.length ? (
+                    <div style={{ color: filterAccentColor, fontSize: 13, fontWeight: 700 }}>
+                      Actieve filters passen de dashboardinhoud tijdelijk aan. Na{" "}
+                      {Math.round(AUTO_RESET_IDLE_MS / 60000)} minuten zonder invoer wordt de
+                      standaardweergave automatisch hersteld.
+                    </div>
+                  ) : null}
+                </div>
+                <div style={filterModalGridStyle}>
+                  <label
+                    style={filterFieldStyle(
+                      activeFilterItems.some((item) => item.startsWith("Periode:"))
+                    )}
+                  >
+                    <span style={labelStyle}>Van</span>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input
+                        ref={dateFromTextRef}
+                        type="text"
+                        inputMode="numeric"
+                        placeholder="dd/mm/jjjj"
+                        value={dateFromUi}
+                        onChange={(e) => setDateFromUi(e.target.value)}
+                        onBlur={() => {
+                          const iso = parseNlDateToIso(dateFromUi);
+                          if (iso) {
+                            setDateFrom(iso);
+                          } else {
+                            setSyncMessage("Ongeldige datum (Van). Gebruik dd/mm/jjjj.");
+                            setSyncMessageKind("error");
+                            setTimeout(() => setSyncMessage(""), 6000);
+                            setDateFromUi(fmtDate(dateFrom));
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.currentTarget.blur();
+                          }
+                        }}
+                        style={inputBaseStyle}
+                      />
 
-            <button
-              type="button"
-              onClick={() => {
-                const el = dateFromNativeRef.current;
-                if (!el) return;
-                // Prefer the native picker when supported
-                if (typeof el.showPicker === "function") el.showPicker();
-                else {
-                  el.focus();
-                  el.click();
-                }
-              }}
-              title="Open kalender"
-              aria-label="Open kalender"
-              style={buttonBaseStyle}
-            >
-              📅
-            </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const el = dateFromNativeRef.current;
+                          if (!el) return;
+                          // Prefer the native picker when supported
+                          if (typeof el.showPicker === "function") el.showPicker();
+                          else {
+                            el.focus();
+                            el.click();
+                          }
+                        }}
+                        title="Open kalender"
+                        aria-label="Open kalender"
+                        style={buttonBaseStyle}
+                      >
+                        📅
+                      </button>
 
-            <input
-              ref={dateFromNativeRef}
-              type="date"
-              value={dateFrom}
-              onChange={(e) => {
-                const iso = e.target.value;
-                setDateFrom(iso);
-                setDateFromUi(fmtDate(iso));
-              }}
-              style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 0, height: 0 }}
-              tabIndex={-1}
-              aria-hidden="true"
-            />
-            </div>
-          </label>
+                      <input
+                        ref={dateFromNativeRef}
+                        type="date"
+                        value={dateFrom}
+                        onChange={(e) => {
+                          const iso = e.target.value;
+                          setDateFrom(iso);
+                          setDateFromUi(fmtDate(iso));
+                        }}
+                        style={{
+                          position: "absolute",
+                          opacity: 0,
+                          pointerEvents: "none",
+                          width: 0,
+                          height: 0,
+                        }}
+                        tabIndex={-1}
+                        aria-hidden="true"
+                      />
+                    </div>
+                  </label>
 
-          <label style={fieldStyle}>
-            <span style={labelStyle}>Tot</span>
-            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <input
-              type="text"
-              inputMode="numeric"
-              placeholder="dd/mm/jjjj"
-              value={dateToUi}
-              onChange={(e) => setDateToUi(e.target.value)}
-              onBlur={() => {
-                const iso = parseNlDateToIso(dateToUi);
-                if (iso) {
-                  setDateTo(iso);
-                } else {
-                  setSyncMessage("Ongeldige datum (Tot). Gebruik dd/mm/jjjj.");
-                  setSyncMessageKind("error");
-                  setTimeout(() => setSyncMessage(""), 6000);
-                  setDateToUi(fmtDate(dateTo));
-                }
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.currentTarget.blur();
-                }
-              }}
-              style={inputBaseStyle}
-            />
+                  <label
+                    style={filterFieldStyle(
+                      activeFilterItems.some((item) => item.startsWith("Periode:"))
+                    )}
+                  >
+                    <span style={labelStyle}>Tot</span>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        placeholder="dd/mm/jjjj"
+                        value={dateToUi}
+                        onChange={(e) => setDateToUi(e.target.value)}
+                        onBlur={() => {
+                          const iso = parseNlDateToIso(dateToUi);
+                          if (iso) {
+                            setDateTo(iso);
+                          } else {
+                            setSyncMessage("Ongeldige datum (Tot). Gebruik dd/mm/jjjj.");
+                            setSyncMessageKind("error");
+                            setTimeout(() => setSyncMessage(""), 6000);
+                            setDateToUi(fmtDate(dateTo));
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.currentTarget.blur();
+                          }
+                        }}
+                        style={inputBaseStyle}
+                      />
 
-            <button
-              type="button"
-              onClick={() => {
-                const el = dateToNativeRef.current;
-                if (!el) return;
-                if (typeof el.showPicker === "function") el.showPicker();
-                else {
-                  el.focus();
-                  el.click();
-                }
-              }}
-              title="Open kalender"
-              aria-label="Open kalender"
-              style={buttonBaseStyle}
-            >
-              📅
-            </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const el = dateToNativeRef.current;
+                          if (!el) return;
+                          if (typeof el.showPicker === "function") el.showPicker();
+                          else {
+                            el.focus();
+                            el.click();
+                          }
+                        }}
+                        title="Open kalender"
+                        aria-label="Open kalender"
+                        style={buttonBaseStyle}
+                      >
+                        📅
+                      </button>
 
-            <input
-              ref={dateToNativeRef}
-              type="date"
-              value={dateTo}
-              onChange={(e) => {
-                const iso = e.target.value;
-                setDateTo(iso);
-                setDateToUi(fmtDate(iso));
-              }}
-              style={{ position: "absolute", opacity: 0, pointerEvents: "none", width: 0, height: 0 }}
-              tabIndex={-1}
-              aria-hidden="true"
-            />
-            </div>
-          </label>
+                      <input
+                        ref={dateToNativeRef}
+                        type="date"
+                        value={dateTo}
+                        onChange={(e) => {
+                          const iso = e.target.value;
+                          setDateTo(iso);
+                          setDateToUi(fmtDate(iso));
+                        }}
+                        style={{
+                          position: "absolute",
+                          opacity: 0,
+                          pointerEvents: "none",
+                          width: 0,
+                          height: 0,
+                        }}
+                        tabIndex={-1}
+                        aria-hidden="true"
+                      />
+                    </div>
+                  </label>
 
-          <label style={fieldStyle}>
-            <span style={labelStyle}>Request type</span>
-            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <span
-              aria-hidden
-              style={{
-                width: 10,
-                height: 10,
-                borderRadius: 999,
-                background: typeColor(requestType),
-                display: "inline-block",
-                border: "1px solid var(--indicator-border)",
-              }}
-            />
-            <select
-              value={requestType}
-              onChange={(e) => {
-                setRequestType(e.target.value);
-                e.target.blur();
-              }}
-              style={inputBaseStyle}
-            >
-              <option value="">(alle)</option>
-              {meta.request_types.map((rt) => (
-                <option key={rt} value={rt}>
-                  {rt}
-                </option>
-              ))}
-            </select>
-            </div>
-          </label>
+                  <label style={filterFieldStyle(Boolean(requestType))}>
+                    <span style={labelStyle}>Request type</span>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <span
+                        aria-hidden
+                        style={{
+                          width: 10,
+                          height: 10,
+                          borderRadius: 999,
+                          background: typeColor(requestType),
+                          display: "inline-block",
+                          border: "1px solid var(--indicator-border)",
+                        }}
+                      />
+                      <select
+                        value={requestType}
+                        onChange={(e) => {
+                          setRequestType(e.target.value);
+                          e.target.blur();
+                        }}
+                        style={inputBaseStyle}
+                      >
+                        <option value="">(alle)</option>
+                        {meta.request_types.map((rt) => (
+                          <option key={rt} value={rt}>
+                            {rt}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </label>
 
-          <label style={fieldStyle}>
-            <span style={labelStyle}>Onderwerp</span>
-          <select
-            value={onderwerp}
-            onChange={(e) => {
-              setOnderwerp(e.target.value);
-              e.target.blur();
-            }}
-            style={inputBaseStyle}
-          >
-            <option value="">(alle)</option>
-            {onderwerpFilterOpties.map((o) => (
-              <option key={o} value={o}>
-                {o}
-              </option>
-              ))}
-            </select>
-          </label>
+                  <label style={filterFieldStyle(Boolean(onderwerp))}>
+                    <span style={labelStyle}>Onderwerp</span>
+                    <select
+                      value={onderwerp}
+                      onChange={(e) => {
+                        setOnderwerp(e.target.value);
+                        e.target.blur();
+                      }}
+                      style={inputBaseStyle}
+                    >
+                      <option value="">(alle)</option>
+                      {onderwerpFilterOpties.map((o) => (
+                        <option key={o} value={o}>
+                          {o}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
 
-          <label style={fieldStyle}>
-            <span style={labelStyle}>Prioriteit</span>
-          <select
-            value={priority}
-            onChange={(e) => {
-              setPriority(e.target.value);
-              e.target.blur();
-            }}
-            style={inputBaseStyle}
-          >
-            <option value="">(alle)</option>
-            {meta.priorities.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-              ))}
-            </select>
-          </label>
+                  <label style={filterFieldStyle(Boolean(priority))}>
+                    <span style={labelStyle}>Prioriteit</span>
+                    <select
+                      value={priority}
+                      onChange={(e) => {
+                        setPriority(e.target.value);
+                        e.target.blur();
+                      }}
+                      style={inputBaseStyle}
+                    >
+                      <option value="">(alle)</option>
+                      {meta.priorities.map((p) => (
+                        <option key={p} value={p}>
+                          {p}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
 
-          <label style={fieldStyle}>
-            <span style={labelStyle}>Assignee</span>
-          <select
-            value={assignee}
-            onChange={(e) => {
-              setAssignee(e.target.value);
-              e.target.blur();
-            }}
-            style={inputBaseStyle}
-          >
-            <option value="">(alle)</option>
-            {meta.assignees.map((a) => (
-              <option key={a} value={a}>
-                {a}
-              </option>
-              ))}
-            </select>
-          </label>
+                  <label style={filterFieldStyle(Boolean(assignee))}>
+                    <span style={labelStyle}>Assignee</span>
+                    <select
+                      value={assignee}
+                      onChange={(e) => {
+                        setAssignee(e.target.value);
+                        e.target.blur();
+                      }}
+                      style={inputBaseStyle}
+                    >
+                      <option value="">(alle)</option>
+                      {meta.assignees.map((a) => (
+                        <option key={a} value={a}>
+                          {a}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
 
-          <label style={fieldStyle}>
-            <span style={labelStyle}>Partner</span>
-          <select
-            value={organization}
-            onChange={(e) => {
-              setOrganization(e.target.value);
-              e.target.blur();
-            }}
-            style={inputBaseStyle}
-          >
-            <option value="">(alle)</option>
-            {meta.organizations.map((o) => (
-              <option key={o} value={o}>
-                {o}
-              </option>
-              ))}
-            </select>
-          </label>
+                  <label style={filterFieldStyle(Boolean(organization))}>
+                    <span style={labelStyle}>Partner</span>
+                    <select
+                      value={organization}
+                      onChange={(e) => {
+                        setOrganization(e.target.value);
+                        e.target.blur();
+                      }}
+                      style={inputBaseStyle}
+                    >
+                      <option value="">(alle)</option>
+                      {meta.organizations.map((o) => (
+                        <option key={o} value={o}>
+                          {o}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
 
-          <label style={fieldStyle} title="Sluit uit: Koppelingen, datadump, Rest-endpoints, migratie, SSO-koppeling">
-            <span style={labelStyle}>Scope</span>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "4px" }}>
-              <label style={{ display: "flex", gap: 8, alignItems: "center", minHeight: 28 }}>
-                <input
-                  type="checkbox"
-                  checked={servicedeskOnly}
-                  onChange={(e) => setServicedeskOnly(e.target.checked)}
-                />
-                <span>Alleen servicedesk</span>
-              </label>
-              <span style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.4 }}>
-                Voor tickettellingen wordt servicedesk bepaald door de geselecteerde onderwerpen.
-              </span>
-            </div>
-          </label>
-        </div>
+                  <label
+                    style={filterFieldStyle(servicedeskOnly !== DEFAULT_SERVICEDESK_ONLY)}
+                    title="Sluit uit: Koppelingen, datadump, Rest-endpoints, migratie, SSO-koppeling"
+                  >
+                    <span style={labelStyle}>Scope</span>
+                    <div
+                      style={{ display: "flex", flexDirection: "column", gap: 4, padding: "4px" }}
+                    >
+                      <label
+                        style={{ display: "flex", gap: 8, alignItems: "center", minHeight: 28 }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={servicedeskOnly}
+                          onChange={(e) => setServicedeskOnly(e.target.checked)}
+                        />
+                        <span>Alleen servicedesk</span>
+                      </label>
+                      <span style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.4 }}>
+                        Voor tickettellingen wordt servicedesk bepaald door de geselecteerde
+                        onderwerpen.
+                      </span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            ) : null}
 
-        <div style={configSectionStyle}>
-          <strong>Dashboard configuratie</strong>
-
-          <details style={configDetailsStyle}>
-            <summary style={configSummaryStyle}>Servicedesk teamleden</summary>
-            <div style={{ marginTop: 8, color: "var(--text-muted)", fontSize: 12, lineHeight: 1.5 }}>
-              Gebruikt voor `Tickets per assignee`, `Vakantie Servicedesk` en operationele alerts.
-            </div>
-            <div style={configListStyle}>
-              {meta.assignees.map((name) => (
-                <label key={`cfg-team-${name}`} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 24 }}>
-                  <input
-                    type="checkbox"
-                    checked={teamMembersDraft.includes(name)}
-                    onChange={() => toggleTeamMemberDraft(name)}
-                  />
-                  <span>{name}</span>
-                </label>
-              ))}
-            </div>
-            <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-              <button
-                type="button"
-                onClick={saveTeamConfig}
-                disabled={teamConfigSaving || !teamConfigDirty}
-                style={layoutPrimaryButtonStyle}
-              >
-                Opslaan
-              </button>
-              <button
-                type="button"
-                onClick={cancelTeamConfig}
-                disabled={teamConfigSaving || !teamConfigDirty}
-                style={buttonBaseStyle}
-              >
-                Annuleren
-              </button>
-            </div>
-          </details>
-
-          <details style={configDetailsStyle}>
-            <summary style={configSummaryStyle}>Servicedesk onderwerpen</summary>
-            <div style={{ marginTop: 8, color: "var(--text-muted)", fontSize: 12, lineHeight: 1.5 }}>
-              Bepaalt welke tickets meetellen als servicedesk in grafieken, drilldowns en AI-insights.
-            </div>
-            <div style={configListStyle}>
-              {meta.onderwerpen.map((name) => (
-                <label key={`cfg-onderwerp-${name}`} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 24 }}>
-                  <input
-                    type="checkbox"
-                    checked={zichtbareOnderwerpenDraft.includes(name)}
-                    onChange={() => toggleOnderwerpDraft(name)}
-                  />
-                  <span>{name}</span>
-                </label>
-              ))}
-            </div>
-            <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-              <button
-                type="button"
-                onClick={saveOnderwerpConfig}
-                disabled={onderwerpConfigSaving || !onderwerpConfigDirty}
-                style={layoutPrimaryButtonStyle}
-              >
-                Opslaan
-              </button>
-              <button
-                type="button"
-                onClick={cancelOnderwerpConfig}
-                disabled={onderwerpConfigSaving || !onderwerpConfigDirty}
-                style={buttonBaseStyle}
-              >
-                Annuleren
-              </button>
-              {onderwerpResetAvailable ? (
-                <button
-                  type="button"
-                  onClick={resetOnderwerpConfig}
-                  disabled={onderwerpConfigSaving}
-                  style={filterOpenButtonStyle}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                  Opnieuw beginnen
-                </button>
-              ) : null}
-            </div>
-          </details>
-
-          <details style={configDetailsStyle}>
-            <summary style={configSummaryStyle}>SaaS Releases</summary>
-            <div style={{ marginTop: 8, color: "var(--text-muted)", fontSize: 12, lineHeight: 1.5 }}>
-              Past de releaseweek aan voor alle release-afhankelijke berekeningen, grafieken, KPI&apos;s en AI-signalen.
-            </div>
-            <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
-              {saasReleaseItems.map(({ key, label }) => {
-                const slot = servicedeskConfig?.saas_releases?.[key];
-                const draft = releaseDrafts?.[key] || { weekday: 2, cancelled: false };
-                const isOpen = openReleaseEditor === key;
-                const previewReleaseDate = slot?.base_release_date ? shiftIsoDateToWeekday(slot.base_release_date, draft.weekday) : "";
-                return (
+            {dashboardSettingsOpen ? (
+              <div style={{ ...configSectionStyle, marginTop: 0, borderTop: 0, padding: 20 }}>
+                <details style={configDetailsStyle}>
+                  <summary style={configSummaryStyle}>Servicedesk teamleden</summary>
                   <div
-                    key={`saas-release-${key}`}
                     style={{
-                      border: "1px solid var(--border)",
-                      borderRadius: 12,
-                      padding: 12,
-                      background: "color-mix(in srgb, var(--surface-muted) 58%, transparent)",
+                      marginTop: 8,
+                      color: "var(--text-muted)",
+                      fontSize: 12,
+                      lineHeight: 1.5,
                     }}
                   >
+                    Gebruikt voor `Tickets per assignee`, `Vakantie Servicedesk` en operationele
+                    alerts.
+                  </div>
+                  <div style={configListStyle}>
+                    {meta.assignees.map((name) => (
+                      <label
+                        key={`cfg-team-${name}`}
+                        style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 24 }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={teamMembersDraft.includes(name)}
+                          onChange={() => toggleTeamMemberDraft(name)}
+                        />
+                        <span>{name}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
                     <button
                       type="button"
-                      onClick={() => setOpenReleaseEditor((prev) => (prev === key ? "" : key))}
-                      style={{
-                        width: "100%",
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        gap: 12,
-                        background: "transparent",
-                        border: "none",
-                        padding: 0,
-                        cursor: "pointer",
-                        color: "inherit",
-                        textAlign: "left",
-                      }}
+                      onClick={saveTeamConfig}
+                      disabled={teamConfigSaving || !teamConfigDirty}
+                      style={layoutPrimaryButtonStyle}
                     >
-                      <span style={{ display: "grid", gap: 4 }}>
-                        <span style={{ fontWeight: 700 }}>{label}</span>
-                        <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
-                          {slot?.release_date ? fmtDateWithWeekday(slot.release_date) : "Nog geen releasedatum beschikbaar"}
-                        </span>
-                      </span>
+                      Opslaan
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelTeamConfig}
+                      disabled={teamConfigSaving || !teamConfigDirty}
+                      style={buttonBaseStyle}
+                    >
+                      Annuleren
+                    </button>
+                  </div>
+                </details>
+
+                <details style={configDetailsStyle}>
+                  <summary style={configSummaryStyle}>Weekly insights e-mail</summary>
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 16,
+                      marginTop: 14,
+                      padding: "10px 12px",
+                      borderRadius: 10,
+                      background: "var(--surface-muted)",
+                    }}
+                  >
+                    <span>
+                      <span style={{ display: "block", fontWeight: 700 }}>Automatisch versturen</span>
                       <span
                         style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 8,
-                          color: slot?.cancelled ? "#b45309" : "var(--text-muted)",
+                          display: "block",
+                          marginTop: 2,
+                          color: "var(--text-muted)",
                           fontSize: 12,
-                          fontWeight: 700,
+                          lineHeight: 1.4,
                         }}
                       >
-                        {slot?.cancelled ? "Vervallen" : slot?.source === "override" ? "Aangepast" : "Standaard"}
-                        <span aria-hidden>{isOpen ? "▴" : "▾"}</span>
+                        Verstuur na generatie naar de ingestelde adressen en Jira-teamleden.
                       </span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      checked={Boolean(servicedeskConfig?.weekly_insights_email_enabled)}
+                      onChange={(event) => setWeeklyInsightsEmailEnabled(event.target.checked)}
+                      disabled={weeklyInsightsEmailEnabledSaving}
+                      aria-label="Automatisch versturen van Weekly Insights"
+                    />
+                  </label>
+                  <div
+                    style={{
+                      marginTop: 8,
+                      color: "var(--text-muted)",
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    De PDF wordt na de wekelijkse generatie als bijlage verstuurd wanneer automatisch
+                    versturen is ingeschakeld. Het testadres kun je naar wens verwijderen.
+                  </div>
+                  {Object.keys(servicedeskConfig?.team_member_emails || {}).length ? (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        color: "var(--text-muted)",
+                        fontSize: 12,
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      Ook automatisch verstuurd naar geselecteerde servicemedewerkers:{" "}
+                      {Object.entries(servicedeskConfig.team_member_emails)
+                        .map(([name, email]) => `${name} (${email})`)
+                        .join(", ")}
+                      .
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        color: "var(--text-muted)",
+                        fontSize: 12,
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      Jira heeft voor de geselecteerde servicemedewerkers nog geen zichtbaar
+                      e-mailadres teruggegeven.
+                    </div>
+                  )}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+                    {weeklyInsightsEmailDraft.length ? (
+                      weeklyInsightsEmailDraft.map((email) => (
+                        <span
+                          key={`weekly-email-${email}`}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 6,
+                            border: "1px solid var(--border)",
+                            borderRadius: 999,
+                            padding: "5px 8px",
+                            background: "var(--surface-muted)",
+                          }}
+                        >
+                          {email}
+                          <button
+                            type="button"
+                            onClick={() => removeWeeklyInsightsRecipient(email)}
+                            disabled={weeklyInsightsEmailSaving}
+                            aria-label={`Verwijder ${email}`}
+                            title={`Verwijder ${email}`}
+                            style={{
+                              ...buttonBaseStyle,
+                              minWidth: 22,
+                              minHeight: 22,
+                              padding: 0,
+                              border: 0,
+                            }}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))
+                    ) : (
+                      <span style={{ color: "var(--text-muted)" }}>
+                        Nog geen ontvangers ingesteld.
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                    <input
+                      type="email"
+                      value={weeklyInsightsEmailInput}
+                      onChange={(e) => setWeeklyInsightsEmailInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          addWeeklyInsightsRecipient();
+                        }
+                      }}
+                      placeholder="naam@organisatie.nl"
+                      aria-label="Nieuw e-mailadres voor weekly insights"
+                      style={{ ...inputBaseStyle, flex: 1, minWidth: 220 }}
+                    />
+                    <button
+                      type="button"
+                      onClick={addWeeklyInsightsRecipient}
+                      disabled={weeklyInsightsEmailSaving || !weeklyInsightsEmailInput.trim()}
+                      style={layoutPrimaryButtonStyle}
+                    >
+                      Toevoegen
                     </button>
-                    {isOpen ? (
-                      <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
-                        <label style={fieldStyle}>
-                          <span style={labelStyle}>Dag in de week</span>
-                          <select
-                            value={draft.weekday}
-                            onChange={(e) => updateReleaseDraft(key, { weekday: Number(e.target.value) })}
-                            style={compactInputStyle}
-                            disabled={!slot?.base_release_date}
-                          >
-                            {RELEASE_WEEKDAY_OPTIONS.map((option) => (
-                              <option key={`release-day-${key}-${option.value}`} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
-                          Preview: {previewReleaseDate ? fmtDateWithWeekday(previewReleaseDate) : "—"}
-                        </div>
-                        <label style={{ display: "flex", gap: 8, alignItems: "center", minHeight: 28 }}>
-                          <input
-                            type="checkbox"
-                            checked={Boolean(draft.cancelled)}
-                            onChange={(e) => updateReleaseDraft(key, { cancelled: e.target.checked })}
+                  </div>
+                </details>
+
+                <details style={configDetailsStyle}>
+                  <summary style={configSummaryStyle}>Servicedesk onderwerpen</summary>
+                  <div
+                    style={{
+                      marginTop: 8,
+                      color: "var(--text-muted)",
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    Bepaalt welke tickets meetellen als servicedesk in grafieken, drilldowns en
+                    AI-insights.
+                  </div>
+                  <div style={configListStyle}>
+                    {meta.onderwerpen.map((name) => (
+                      <label
+                        key={`cfg-onderwerp-${name}`}
+                        style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 24 }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={zichtbareOnderwerpenDraft.includes(name)}
+                          onChange={() => toggleOnderwerpDraft(name)}
+                        />
+                        <span>{name}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={saveOnderwerpConfig}
+                      disabled={onderwerpConfigSaving || !onderwerpConfigDirty}
+                      style={layoutPrimaryButtonStyle}
+                    >
+                      Opslaan
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelOnderwerpConfig}
+                      disabled={onderwerpConfigSaving || !onderwerpConfigDirty}
+                      style={buttonBaseStyle}
+                    >
+                      Annuleren
+                    </button>
+                    {onderwerpResetAvailable ? (
+                      <button
+                        type="button"
+                        onClick={resetOnderwerpConfig}
+                        disabled={onderwerpConfigSaving}
+                        style={filterOpenButtonStyle}
+                      >
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          aria-hidden="true"
+                        >
+                          <path
+                            d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6"
+                            stroke="currentColor"
+                            strokeWidth="1.8"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
                           />
-                          <span>{key === "last" ? "Deze release is vervallen" : "Deze release komt te vervallen"}</span>
-                        </label>
-                        <div style={{ display: "flex", gap: 8 }}>
-                          <button
-                            type="button"
-                            onClick={() => saveReleaseConfig(key)}
-                            disabled={releaseConfigSaving || !slot?.base_release_date}
-                            style={layoutPrimaryButtonStyle}
-                          >
-                            Opslaan
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => cancelReleaseConfig(key)}
-                            disabled={releaseConfigSaving}
-                            style={buttonBaseStyle}
-                          >
-                            Annuleren
-                          </button>
-                        </div>
-                      </div>
+                        </svg>
+                        Opnieuw beginnen
+                      </button>
                     ) : null}
                   </div>
-                );
-              })}
-            </div>
-          </details>
+                </details>
 
-          <details style={configDetailsStyle}>
-            <summary style={configSummaryStyle}>AI inzichten</summary>
-            <div style={{ display: "grid", gap: 10 }}>
-              <label style={fieldStyle}>
-                <span style={labelStyle}>Threshold (%)</span>
-                <input
-                  type="number"
-                  min="50"
-                  max="95"
-                  step="1"
-                  value={aiInsightThresholdDraft}
-                  onChange={(e) => setAiInsightThresholdDraft(Number(e.target.value || 75))}
-                  style={compactInputStyle}
-                />
-              </label>
-              <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
-                Live actief: {activeAiThresholdPct}% · max {liveInsights.length}/3 AI-cards · TTL {aiInsightTtlHours} uur
+                <details style={configDetailsStyle}>
+                  <summary style={configSummaryStyle}>SaaS Releases</summary>
+                  <div
+                    style={{
+                      marginTop: 8,
+                      color: "var(--text-muted)",
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    Past de releaseweek aan voor alle release-afhankelijke berekeningen, grafieken,
+                    KPI&apos;s en AI-signalen.
+                  </div>
+                  <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+                    {saasReleaseItems.map(({ key, label }) => {
+                      const slot = servicedeskConfig?.saas_releases?.[key];
+                      const draft = releaseDrafts?.[key] || { weekday: 2, cancelled: false };
+                      const isOpen = openReleaseEditor === key;
+                      const previewReleaseDate = slot?.base_release_date
+                        ? shiftIsoDateToWeekday(slot.base_release_date, draft.weekday)
+                        : "";
+                      return (
+                        <div
+                          key={`saas-release-${key}`}
+                          style={{
+                            border: "1px solid var(--border)",
+                            borderRadius: 12,
+                            padding: 12,
+                            background: "color-mix(in srgb, var(--surface-muted) 58%, transparent)",
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setOpenReleaseEditor((prev) => (prev === key ? "" : key))
+                            }
+                            style={{
+                              width: "100%",
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              gap: 12,
+                              background: "transparent",
+                              border: "none",
+                              padding: 0,
+                              cursor: "pointer",
+                              color: "inherit",
+                              textAlign: "left",
+                            }}
+                          >
+                            <span style={{ display: "grid", gap: 4 }}>
+                              <span style={{ fontWeight: 700 }}>{label}</span>
+                              <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
+                                {slot?.release_date
+                                  ? fmtDateWithWeekday(slot.release_date)
+                                  : "Nog geen releasedatum beschikbaar"}
+                              </span>
+                            </span>
+                            <span
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 8,
+                                color: slot?.cancelled ? "#b45309" : "var(--text-muted)",
+                                fontSize: 12,
+                                fontWeight: 700,
+                              }}
+                            >
+                              {slot?.cancelled
+                                ? "Vervallen"
+                                : slot?.source === "override"
+                                  ? "Aangepast"
+                                  : "Standaard"}
+                              <span aria-hidden>{isOpen ? "▴" : "▾"}</span>
+                            </span>
+                          </button>
+                          {isOpen ? (
+                            <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+                              <label style={fieldStyle}>
+                                <span style={labelStyle}>Dag in de week</span>
+                                <select
+                                  value={draft.weekday}
+                                  onChange={(e) =>
+                                    updateReleaseDraft(key, { weekday: Number(e.target.value) })
+                                  }
+                                  style={compactInputStyle}
+                                  disabled={!slot?.base_release_date}
+                                >
+                                  {RELEASE_WEEKDAY_OPTIONS.map((option) => (
+                                    <option
+                                      key={`release-day-${key}-${option.value}`}
+                                      value={option.value}
+                                    >
+                                      {option.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
+                                Preview:{" "}
+                                {previewReleaseDate ? fmtDateWithWeekday(previewReleaseDate) : "—"}
+                              </div>
+                              <label
+                                style={{
+                                  display: "flex",
+                                  gap: 8,
+                                  alignItems: "center",
+                                  minHeight: 28,
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(draft.cancelled)}
+                                  onChange={(e) =>
+                                    updateReleaseDraft(key, { cancelled: e.target.checked })
+                                  }
+                                />
+                                <span>
+                                  {key === "last"
+                                    ? "Deze release is vervallen"
+                                    : "Deze release komt te vervallen"}
+                                </span>
+                              </label>
+                              <div style={{ display: "flex", gap: 8 }}>
+                                <button
+                                  type="button"
+                                  onClick={() => saveReleaseConfig(key)}
+                                  disabled={releaseConfigSaving || !slot?.base_release_date}
+                                  style={layoutPrimaryButtonStyle}
+                                >
+                                  Opslaan
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => cancelReleaseConfig(key)}
+                                  disabled={releaseConfigSaving}
+                                  style={buttonBaseStyle}
+                                >
+                                  Annuleren
+                                </button>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </details>
+
+                <details style={configDetailsStyle}>
+                  <summary style={configSummaryStyle}>AI inzichten</summary>
+                  <div style={{ display: "grid", gap: 10 }}>
+                    <label style={fieldStyle}>
+                      <span style={labelStyle}>Threshold (%)</span>
+                      <input
+                        type="number"
+                        min="50"
+                        max="95"
+                        step="1"
+                        value={aiInsightThresholdDraft}
+                        onChange={(e) => setAiInsightThresholdDraft(Number(e.target.value || 75))}
+                        style={compactInputStyle}
+                      />
+                    </label>
+                    <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
+                      Live actief: {activeAiThresholdPct}% · max {liveInsights.length}/3 AI-cards ·
+                      TTL {aiInsightTtlHours} uur
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={saveAiInsightConfig}
+                      disabled={onderwerpConfigSaving || !aiInsightConfigDirty}
+                      style={layoutPrimaryButtonStyle}
+                    >
+                      Opslaan
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelAiInsightConfig}
+                      disabled={onderwerpConfigSaving || !aiInsightConfigDirty}
+                      style={buttonBaseStyle}
+                    >
+                      Annuleren
+                    </button>
+                  </div>
+                </details>
               </div>
-            </div>
-            <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-              <button
-                type="button"
-                onClick={saveAiInsightConfig}
-                disabled={onderwerpConfigSaving || !aiInsightConfigDirty}
-                style={layoutPrimaryButtonStyle}
-              >
-                Opslaan
-              </button>
-              <button
-                type="button"
-                onClick={cancelAiInsightConfig}
-                disabled={onderwerpConfigSaving || !aiInsightConfigDirty}
-                style={buttonBaseStyle}
-              >
-                Annuleren
-              </button>
-            </div>
-          </details>
-        </div>
-
-            </div>
+            ) : null}
           </div>
         </>
       ) : null}
@@ -6101,12 +7136,19 @@ export default function Home() {
             </div>
           ))}
         </div>
-      ) : (() => {
-        const renderedKpis = renderKpiRowWithHint(visibleKpiKeys);
-        const hintActive = renderedKpis.includes("__KPI_DROP_HINT__");
-        const kpiColumnCount = Math.max(2, renderedKpis.reduce((count, key) => count + Math.max(1, Number(kpiTiles[key]?.gridSpan) || 1), 0));
-        return (
-          <div
+      ) : (
+        (() => {
+          const renderedKpis = renderKpiRowWithHint(visibleKpiKeys);
+          const hintActive = renderedKpis.includes("__KPI_DROP_HINT__");
+          const kpiColumnCount = Math.max(
+            2,
+            renderedKpis.reduce(
+              (count, key) => count + Math.max(1, Number(kpiTiles[key]?.gridSpan) || 1),
+              0
+            )
+          );
+          return (
+            <div
               style={{
                 ...kpiGridStyle,
                 gridTemplateColumns: `repeat(${kpiColumnCount}, minmax(0, 1fr))`,
@@ -6117,123 +7159,192 @@ export default function Home() {
                 moveKpiToVisible(hint?.targetKey || null, hint?.position || "after");
               }}
             >
-        {renderedKpis.length ? renderedKpis.map((key) => {
-          if (key === "__KPI_DROP_HINT__") {
-            return <div key="kpi-drop-hint" style={dropSkeletonStyle} />;
-          }
-          const tile = kpiTiles[key];
-          if (!tile) return null;
-          const isClickable = !isLayoutEditing && typeof tile.onClick === "function";
-          return (
-            <div
-              key={key}
-              style={{
-                ...kpiCardStyle,
-                ...(tile.live ? liveKpiCardStyle : null),
-                gridColumn: `span ${Math.max(1, Number(tile.gridSpan) || 1)}`,
-                cursor: isLayoutEditing ? "grab" : isClickable ? "pointer" : "default",
-                transform: hintActive ? "scale(0.86)" : "scale(1)",
-                transformOrigin: "center center",
-                transition: "transform 170ms ease, opacity 170ms ease",
-                opacity: hintActive ? 0.94 : 1,
-              }}
-              draggable={isLayoutEditing}
-              onClick={() => {
-                if (isClickable) tile.onClick();
-              }}
-              onDragStart={() => startDrag("kpi", key, { zone: "kpiRow" })}
-              onDragEnd={clearDrag}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setKpiHintFromEvent(key, e);
-              }}
-              onDrop={() => {
-                const hint = kpiDropHint;
-                moveKpiToVisible(hint?.targetKey || key, hint?.position || "before");
-              }}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 2 }}>
-                {key === "liveStatus" && !isLayoutEditing ? <span /> : (
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    {isLayoutEditing ? (
-                      <span style={dragHandleStyle} aria-hidden>
-                        <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-                          <circle cx="2" cy="2" r="1" />
-                          <circle cx="2" cy="5" r="1" />
-                          <circle cx="2" cy="8" r="1" />
-                          <circle cx="8" cy="2" r="1" />
-                          <circle cx="8" cy="5" r="1" />
-                          <circle cx="8" cy="8" r="1" />
-                        </svg>
-                      </span>
-                    ) : null}
-                    <div style={{ ...kpiLabelStyle, marginBottom: 0 }}>{tile.label}</div>
-                  </div>
-                )}
-                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  {tile.badge ? <span style={tile.live ? liveKpiBadgeStyle : fixedMetricBadgeStyle}>{tile.badge}</span> : null}
-                  {isLayoutEditing ? (
-                    key === "liveStatus" ? (
-                      <button
-                        type="button"
-                        onClick={(event) => { event.stopPropagation(); setOpenLiveKpiSettings((open) => !open); }}
-                        style={iconButtonStyle}
-                        title="Live KPI-instellingen"
-                        aria-label="Live KPI-instellingen"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                          <path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06-2.12 2.12-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V20h-3v-.08a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06-2.12-2.12.06-.06A1.65 1.65 0 0 0 7.17 15a1.65 1.65 0 0 0-1.51-1H5.6v-3h.08a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82L6.8 8.12 8.92 6l.06.06A1.65 1.65 0 0 0 10.8 6.4a1.65 1.65 0 0 0 1-1.51V4.8h3v.08a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06 2.12 2.12-.06.06A1.65 1.65 0 0 0 19.4 10c.2.61.76 1 1.4 1h.08v3h-.08c-.64 0-1.2.39-1.4 1Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      </button>
-                    ) : null
-                  ) : null}
-                  {isLayoutEditing ? (
-                    <button
-                      type="button"
-                      onClick={() => hideKpiByKey(key)}
-                      style={iconButtonStyle}
-                      title="Verberg kaart"
-                      aria-label="Verberg kaart"
+              {renderedKpis.length ? (
+                renderedKpis.map((key) => {
+                  if (key === "__KPI_DROP_HINT__") {
+                    return <div key="kpi-drop-hint" style={dropSkeletonStyle} />;
+                  }
+                  const tile = kpiTiles[key];
+                  if (!tile) return null;
+                  const isClickable = !isLayoutEditing && typeof tile.onClick === "function";
+                  return (
+                    <div
+                      key={key}
+                      style={{
+                        ...kpiCardStyle,
+                        ...(tile.live ? liveKpiCardStyle : null),
+                        ...(!filtersAreDefault && !tile.live ? filterAffectedStyle : null),
+                        gridColumn: `span ${Math.max(1, Number(tile.gridSpan) || 1)}`,
+                        cursor: isLayoutEditing ? "grab" : isClickable ? "pointer" : "default",
+                        transform: hintActive ? "scale(0.86)" : "scale(1)",
+                        transformOrigin: "center center",
+                        transition: "transform 170ms ease, opacity 170ms ease",
+                        opacity: hintActive ? 0.94 : 1,
+                      }}
+                      draggable={isLayoutEditing}
+                      onClick={() => {
+                        if (isClickable) tile.onClick();
+                      }}
+                      onDragStart={() => startDrag("kpi", key, { zone: "kpiRow" })}
+                      onDragEnd={clearDrag}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setKpiHintFromEvent(key, e);
+                      }}
+                      onDrop={() => {
+                        const hint = kpiDropHint;
+                        moveKpiToVisible(hint?.targetKey || key, hint?.position || "before");
+                      }}
                     >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                        <path d="M4 7h16M10 3h4M7 7l1 13h8l1-13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    </button>
-                  ) : null}
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          gap: 8,
+                          alignItems: "center",
+                          marginBottom: 2,
+                        }}
+                      >
+                        {key === "liveStatus" && !isLayoutEditing ? (
+                          <span />
+                        ) : (
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            {isLayoutEditing ? (
+                              <span style={dragHandleStyle} aria-hidden>
+                                <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                                  <circle cx="2" cy="2" r="1" />
+                                  <circle cx="2" cy="5" r="1" />
+                                  <circle cx="2" cy="8" r="1" />
+                                  <circle cx="8" cy="2" r="1" />
+                                  <circle cx="8" cy="5" r="1" />
+                                  <circle cx="8" cy="8" r="1" />
+                                </svg>
+                              </span>
+                            ) : null}
+                            <div style={{ ...kpiLabelStyle, marginBottom: 0 }}>{tile.label}</div>
+                          </div>
+                        )}
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          {tile.badge ? (
+                            <span style={tile.live ? liveKpiBadgeStyle : fixedMetricBadgeStyle}>
+                              {tile.badge}
+                            </span>
+                          ) : null}
+                          {isLayoutEditing ? (
+                            key === "liveStatus" ? (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setOpenLiveKpiSettings((open) => !open);
+                                }}
+                                style={iconButtonStyle}
+                                title="Live KPI-instellingen"
+                                aria-label="Live KPI-instellingen"
+                              >
+                                <SettingsGearIcon />
+                              </button>
+                            ) : null
+                          ) : null}
+                          {isLayoutEditing ? (
+                            <button
+                              type="button"
+                              onClick={() => hideKpiByKey(key)}
+                              style={iconButtonStyle}
+                              title="Verberg kaart"
+                              aria-label="Verberg kaart"
+                            >
+                              <svg
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                aria-hidden="true"
+                              >
+                                <path
+                                  d="M4 7h16M10 3h4M7 7l1 13h8l1-13"
+                                  stroke="currentColor"
+                                  strokeWidth="1.8"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+                              </svg>
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                      {isLayoutEditing && key === "liveStatus" && openLiveKpiSettings ? (
+                        <div
+                          style={{
+                            display: "grid",
+                            gap: 6,
+                            marginBottom: 8,
+                            padding: 8,
+                            borderRadius: 8,
+                            background: "color-mix(in srgb, var(--accent) 8%, var(--surface))",
+                          }}
+                        >
+                          <strong style={{ fontSize: 12 }}>Live KPI-instellingen</strong>
+                          {[
+                            ["currentWeekFlow", "Lopende week"],
+                            ["inProgress", "Tickets in behandeling"],
+                            ["newMelding", "Nieuwe meldingen"],
+                          ].map(([settingKey, label]) => (
+                            <label
+                              key={settingKey}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 7,
+                                fontSize: 12,
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={liveKpiSettings[settingKey]}
+                                onChange={(event) =>
+                                  updateLiveKpiSetting(settingKey, event.target.checked)
+                                }
+                              />
+                              {label}
+                            </label>
+                          ))}
+                        </div>
+                      ) : null}
+                      <div
+                        style={{
+                          ...kpiValueStyle,
+                          ...(tile.valueStyle || null),
+                          fontSize: key === "topType" || key === "topSubject" ? 20 : 20,
+                        }}
+                      >
+                        {tile.value}
+                      </div>
+                      <div style={{ ...kpiSubStyle, ...(tile.subStyle || null) }}>{tile.sub}</div>
+                      {tile.subSecondary ? (
+                        <div
+                          style={{
+                            ...kpiSubStyle,
+                            marginTop: 2,
+                            fontSize: 11,
+                            ...(tile.subSecondaryStyle || null),
+                          }}
+                        >
+                          {tile.subSecondary}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })
+              ) : (
+                <div style={{ ...hiddenChartPlaceholderStyle, gridColumn: "1 / -1" }}>
+                  KPI-rij is leeg. Sleep KPI-kaarten terug vanuit Verborgen kaarten.
                 </div>
-              </div>
-              {isLayoutEditing && key === "liveStatus" && openLiveKpiSettings ? (
-                <div style={{ display: "grid", gap: 6, marginBottom: 8, padding: 8, borderRadius: 8, background: "color-mix(in srgb, var(--accent) 8%, var(--surface))" }}>
-                  <strong style={{ fontSize: 12 }}>Live KPI-instellingen</strong>
-                  {[
-                    ["currentWeekFlow", "Lopende week"],
-                    ["inProgress", "Tickets in behandeling"],
-                    ["newMelding", "Nieuwe meldingen"],
-                  ].map(([settingKey, label]) => (
-                    <label key={settingKey} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12 }}>
-                      <input type="checkbox" checked={liveKpiSettings[settingKey]} onChange={(event) => updateLiveKpiSetting(settingKey, event.target.checked)} />
-                      {label}
-                    </label>
-                  ))}
-                </div>
-              ) : null}
-              <div style={{ ...kpiValueStyle, ...(tile.valueStyle || null), fontSize: key === "topType" || key === "topSubject" ? 20 : 20 }}>{tile.value}</div>
-              <div style={{ ...kpiSubStyle, ...(tile.subStyle || null) }}>{tile.sub}</div>
-              {tile.subSecondary ? (
-                <div style={{ ...kpiSubStyle, marginTop: 2, fontSize: 11, ...(tile.subSecondaryStyle || null) }}>
-                  {tile.subSecondary}
-                </div>
-              ) : null}
+              )}
             </div>
           );
-        }) : (
-          <div style={{ ...hiddenChartPlaceholderStyle, gridColumn: "1 / -1" }}>
-            KPI-rij is leeg. Sleep KPI-kaarten terug vanuit Verborgen kaarten.
-          </div>
-        )}
-          </div>
-        );
-      })()}
+        })()
+      )}
 
       {showStartupSkeleton ? (
         <div
@@ -6254,15 +7365,27 @@ export default function Home() {
           ))}
         </div>
       ) : (
-        <InsightsRow cards={visibleDashboardInsights} isTvMode={isTvMode} isLayoutEditing={isLayoutEditing} onHide={hideDashboardInsight} />
+        <InsightsRow
+          cards={visibleDashboardInsights}
+          isTvMode={isTvMode}
+          isLayoutEditing={isLayoutEditing}
+          isFilterActive={!filtersAreDefault}
+          onHide={hideDashboardInsight}
+        />
       )}
 
       {showStartupSkeleton ? (
         <div style={cardRowsWrapStyle}>
           {Array.from({ length: 2 }).map((_, rowIdx) => (
-            <div key={`row-skeleton-${rowIdx}`} style={{ ...cardRowStyle, gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
+            <div
+              key={`row-skeleton-${rowIdx}`}
+              style={{ ...cardRowStyle, gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}
+            >
               {Array.from({ length: 3 }).map((__, colIdx) => (
-                <div key={`card-skeleton-${rowIdx}-${colIdx}`} style={{ ...chartShellStyle, padding: 12 }}>
+                <div
+                  key={`card-skeleton-${rowIdx}-${colIdx}`}
+                  style={{ ...chartShellStyle, padding: 12 }}
+                >
                   <div style={{ ...skeletonBarStyle, width: "45%", marginBottom: 10 }} />
                   <div style={{ ...skeletonBarStyle, width: "100%", height: 140 }} />
                 </div>
@@ -6271,309 +7394,459 @@ export default function Home() {
           ))}
         </div>
       ) : (
-      <div style={cardRowsWrapStyle}>
-        {visibleCardRows.map((row, rowIndex) => {
-          const renderedRow = renderCardRowWithHint(row, rowIndex);
-          const hintActive = renderedRow.includes("__DROP_HINT__");
-          const expandedKey = (dashboardLayout.expandedByRow || [null, null])[rowIndex];
-          const hasExpanded = !!expandedKey && row.includes(expandedKey);
-          const rowColumns = Math.max(2, (renderedRow.length || 2) + (hasExpanded ? 1 : 0));
-          return (
-            <div
-              key={`row-${rowIndex}`}
-              style={{ ...cardRowStyle, gridTemplateColumns: `repeat(${rowColumns}, minmax(0, 1fr))` }}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={() => {
-                const hint = cardDropHint && cardDropHint.rowIndex === rowIndex ? cardDropHint : null;
-                moveCardToRow(rowIndex, hint?.targetKey || null, hint?.position || "after");
-              }}
-            >
-              {!renderedRow.length ? (
-                <div style={{ ...hiddenChartPlaceholderStyle, gridColumn: "1 / -1" }}>
-                  Rij {rowIndex + 1} is leeg. Sleep een kaart hierheen of haal er een terug uit Verborgen kaarten.
-                </div>
-              ) : null}
-              {renderedRow.map((cardKey) => {
-                if (cardKey === "__DROP_HINT__") {
-                  return <div key={`hint-${rowIndex}`} style={dropSkeletonStyle} />;
-                }
-                const aiInsight = aiInsightByCardKey.get(cardKey);
-                const isLocked = lockedCardKeys.includes(cardKey);
-                const displayTitle = aiInsight ? aiInsight.title : cardTitleByKey(cardKey);
-                const showPartialWeekBadge = !aiInsight && Boolean(weeklyScopeHint) && weeklyPartialCardKeys.has(cardKey);
-                const showLastWeekBadge = !aiInsight && cardKey === "topOnderwerpen";
-                const canExpandCard = expandableCardKeys.has(cardKey);
-                const configuredCapabilities = aiInsight ? null : CHART_CARD_SETTING_CAPABILITIES[cardKey];
-                const cardSettingCapabilities = configuredCapabilities && cardKey === "volume" && requestType
-                  ? { ...configuredCapabilities, total: false }
-                  : configuredCapabilities;
-                const cardSettings = cardSettingCapabilities ? chartSettingsFor(cardKey) : null;
-                const cardSettingsOpen = openCardSettings === cardKey;
-                return (
-                  <div
-                    key={cardKey}
-                    className="dashboard-card-shell"
-                    style={{
-                      ...chartShellStyle,
-                      ...(aiInsight
-                        ? {
-                            borderColor: "color-mix(in srgb, #0f766e 48%, var(--border))",
-                            background:
-                              "linear-gradient(180deg, color-mix(in srgb, #0f766e 8%, var(--surface)) 0%, var(--surface) 42%)",
-                            boxShadow: "0 12px 30px color-mix(in srgb, #0f766e 12%, transparent)",
-                          }
-                        : null),
-                      cursor: isLayoutEditing ? "grab" : "default",
-                      gridColumn: hasExpanded && cardKey === expandedKey ? "span 2" : undefined,
-                      transform: hintActive ? "scale(0.86)" : "scale(1)",
-                      transformOrigin: "center center",
-                      transition: "transform 170ms ease, opacity 170ms ease",
-                      opacity: hintActive ? 0.94 : 1,
-                    }}
-                    draggable={isLayoutEditing}
-                    onDragStart={() => startDrag("card", cardKey, { zone: "cardRow", rowIndex })}
-                    onDragEnd={clearDrag}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      setCardHintFromEvent(rowIndex, cardKey, e);
-                    }}
-                    onDrop={() => {
-                      const hint = cardDropHint && cardDropHint.rowIndex === rowIndex ? cardDropHint : null;
-                      moveCardToRow(rowIndex, hint?.targetKey || cardKey, hint?.position || "before");
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 8 }}>
-                      {isLayoutEditing ? (
-                        <div style={{ ...cardTitleButtonStyle, cursor: "default", marginBottom: 0 }}>
-                          <span style={{ display: "inline-flex", alignItems: "baseline", gap: 6 }}>
-                            <span style={dragHandleStyle} aria-hidden>
-                              <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-                                <circle cx="2" cy="2" r="1" />
-                                <circle cx="2" cy="5" r="1" />
-                                <circle cx="2" cy="8" r="1" />
-                                <circle cx="8" cy="2" r="1" />
-                                <circle cx="8" cy="5" r="1" />
-                                <circle cx="8" cy="8" r="1" />
-                              </svg>
+        <div style={cardRowsWrapStyle}>
+          {visibleCardRows.map((row, rowIndex) => {
+            const renderedRow = renderCardRowWithHint(row, rowIndex);
+            const hintActive = renderedRow.includes("__DROP_HINT__");
+            const expandedKey = (dashboardLayout.expandedByRow || [null, null])[rowIndex];
+            const hasExpanded = !!expandedKey && row.includes(expandedKey);
+            const rowColumns = Math.max(2, (renderedRow.length || 2) + (hasExpanded ? 1 : 0));
+            return (
+              <div
+                key={`row-${rowIndex}`}
+                style={{
+                  ...cardRowStyle,
+                  gridTemplateColumns: `repeat(${rowColumns}, minmax(0, 1fr))`,
+                }}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => {
+                  const hint =
+                    cardDropHint && cardDropHint.rowIndex === rowIndex ? cardDropHint : null;
+                  moveCardToRow(rowIndex, hint?.targetKey || null, hint?.position || "after");
+                }}
+              >
+                {!renderedRow.length ? (
+                  <div style={{ ...hiddenChartPlaceholderStyle, gridColumn: "1 / -1" }}>
+                    Rij {rowIndex + 1} is leeg. Sleep een kaart hierheen of haal er een terug uit
+                    Verborgen kaarten.
+                  </div>
+                ) : null}
+                {renderedRow.map((cardKey) => {
+                  if (cardKey === "__DROP_HINT__") {
+                    return <div key={`hint-${rowIndex}`} style={dropSkeletonStyle} />;
+                  }
+                  const aiInsight = aiInsightByCardKey.get(cardKey);
+                  const isLocked = lockedCardKeys.includes(cardKey);
+                  const displayTitle = aiInsight ? aiInsight.title : cardTitleByKey(cardKey);
+                  const showPartialWeekBadge =
+                    !aiInsight && Boolean(weeklyScopeHint) && weeklyPartialCardKeys.has(cardKey);
+                  const showLastWeekBadge = !aiInsight && cardKey === "topOnderwerpen";
+                  const canExpandCard = expandableCardKeys.has(cardKey);
+                  const configuredCapabilities = aiInsight
+                    ? null
+                    : CHART_CARD_SETTING_CAPABILITIES[cardKey];
+                  const cardSettingCapabilities =
+                    configuredCapabilities && cardKey === "volume" && requestType
+                      ? { ...configuredCapabilities, total: false }
+                      : configuredCapabilities;
+                  const cardSettings = cardSettingCapabilities ? chartSettingsFor(cardKey) : null;
+                  const cardSettingsOpen = openCardSettings === cardKey;
+                  return (
+                    <div
+                      key={cardKey}
+                      className="dashboard-card-shell"
+                      style={{
+                        ...chartShellStyle,
+                        ...(!filtersAreDefault &&
+                        !["ttrOverdue", "vacationServicedesk", "topOnderwerpen"].includes(cardKey)
+                          ? filterAffectedStyle
+                          : null),
+                        ...(aiInsight
+                          ? {
+                              borderColor: "color-mix(in srgb, #0f766e 48%, var(--border))",
+                              background:
+                                "linear-gradient(180deg, color-mix(in srgb, #0f766e 8%, var(--surface)) 0%, var(--surface) 42%)",
+                              boxShadow: "0 12px 30px color-mix(in srgb, #0f766e 12%, transparent)",
+                            }
+                          : null),
+                        cursor: isLayoutEditing ? "grab" : "default",
+                        gridColumn: hasExpanded && cardKey === expandedKey ? "span 2" : undefined,
+                        transform: hintActive ? "scale(0.86)" : "scale(1)",
+                        transformOrigin: "center center",
+                        transition: "transform 170ms ease, opacity 170ms ease",
+                        opacity: hintActive ? 0.94 : 1,
+                      }}
+                      draggable={isLayoutEditing}
+                      onDragStart={() => startDrag("card", cardKey, { zone: "cardRow", rowIndex })}
+                      onDragEnd={clearDrag}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setCardHintFromEvent(rowIndex, cardKey, e);
+                      }}
+                      onDrop={() => {
+                        const hint =
+                          cardDropHint && cardDropHint.rowIndex === rowIndex ? cardDropHint : null;
+                        moveCardToRow(
+                          rowIndex,
+                          hint?.targetKey || cardKey,
+                          hint?.position || "before"
+                        );
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          gap: 8,
+                          alignItems: "center",
+                          marginBottom: 8,
+                        }}
+                      >
+                        {isLayoutEditing ? (
+                          <div
+                            style={{ ...cardTitleButtonStyle, cursor: "default", marginBottom: 0 }}
+                          >
+                            <span
+                              style={{ display: "inline-flex", alignItems: "baseline", gap: 6 }}
+                            >
+                              <span style={dragHandleStyle} aria-hidden>
+                                <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                                  <circle cx="2" cy="2" r="1" />
+                                  <circle cx="2" cy="5" r="1" />
+                                  <circle cx="2" cy="8" r="1" />
+                                  <circle cx="8" cy="2" r="1" />
+                                  <circle cx="8" cy="5" r="1" />
+                                  <circle cx="8" cy="8" r="1" />
+                                </svg>
+                              </span>
+                              <span style={chartTitleStyle}>
+                                {aiInsight ? aiInsight.title : cardTitleByKey(cardKey)}
+                              </span>
+                              {aiInsight ? <span style={fixedMetricBadgeStyle}>AI</span> : null}
+                              {showLastWeekBadge ? (
+                                <span style={fixedMetricBadgeStyle}>Periode: laatste week</span>
+                              ) : null}
+                              {showPartialWeekBadge ? (
+                                <span style={fixedMetricBadgeStyle} title={weeklyScopeHint}>
+                                  Lopende week*
+                                </span>
+                              ) : null}
                             </span>
-                            <span style={chartTitleStyle}>{aiInsight ? aiInsight.title : cardTitleByKey(cardKey)}</span>
-                            {aiInsight ? <span style={fixedMetricBadgeStyle}>AI</span> : null}
-                            {showLastWeekBadge ? <span style={fixedMetricBadgeStyle}>Periode: laatste week</span> : null}
-                            {showPartialWeekBadge ? (
-                              <span style={fixedMetricBadgeStyle} title={weeklyScopeHint}>Lopende week*</span>
-                            ) : null}
-                          </span>
-                        </div>
-                      ) : canExpandCard ? (
-                        <button
-                          type="button"
-                          className="card-expand-title"
-                          style={cardTitleButtonStyle}
-                          onClick={() => setExpandedCard(cardKey)}
-                          title="Vergroot kaart"
-                          aria-label={`${displayTitle} vergroten`}
-                        >
-                          <span style={{ display: "inline-flex", alignItems: "baseline", gap: 6 }}>
-                            <span style={chartTitleStyle}>{displayTitle}</span>
-                            {aiInsight ? <span style={fixedMetricBadgeStyle}>AI</span> : null}
-                            {showLastWeekBadge ? <span style={fixedMetricBadgeStyle}>Periode: laatste week</span> : null}
-                            {showPartialWeekBadge ? (
-                              <span style={fixedMetricBadgeStyle} title={weeklyScopeHint}>Lopende week*</span>
-                            ) : null}
-                          </span>
-                          <span style={cardTitleHintStyle} aria-hidden="true">
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
-                              <path
-                                d="M4 10V4h6M20 14v6h-6M14 4h6v6M10 20H4v-6"
-                                stroke="currentColor"
-                                strokeWidth="1.8"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                              />
-                            </svg>
-                          </span>
-                        </button>
-                      ) : (
-                        <div style={{ ...cardTitleButtonStyle, cursor: "default", marginBottom: 0 }}>
-                          <span style={{ display: "inline-flex", alignItems: "baseline", gap: 6 }}>
-                            <span style={chartTitleStyle}>{displayTitle}</span>
-                            {aiInsight ? <span style={fixedMetricBadgeStyle}>AI</span> : null}
-                            {showLastWeekBadge ? <span style={fixedMetricBadgeStyle}>Periode: laatste week</span> : null}
-                            {showPartialWeekBadge ? (
-                              <span style={fixedMetricBadgeStyle} title={weeklyScopeHint}>Lopende week*</span>
-                            ) : null}
-                          </span>
-                        </div>
-                      )}
-                      {isLayoutEditing ? (
-                        <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                          </div>
+                        ) : canExpandCard ? (
                           <button
                             type="button"
-                            onClick={() => toggleCardLock(cardKey)}
-                            style={{
-                              ...iconButtonStyle,
-                              borderColor: isLocked ? "var(--accent)" : "var(--border)",
-                              color: isLocked ? "var(--accent)" : "inherit",
-                            }}
-                            title={isLocked ? "Slot ontgrendelen" : "Slot vergrendelen"}
-                            aria-label={isLocked ? "Slot ontgrendelen" : "Slot vergrendelen"}
+                            className="card-expand-title"
+                            style={cardTitleButtonStyle}
+                            onClick={() => setExpandedCard(cardKey)}
+                            title="Vergroot kaart"
+                            aria-label={`${displayTitle} vergroten`}
                           >
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                              {isLocked ? (
-                                <>
-                                  <path d="M8 10V7a4 4 0 1 1 8 0v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                                  <rect x="5" y="10" width="14" height="10" rx="2" stroke="currentColor" strokeWidth="1.8" />
-                                </>
-                              ) : (
-                                <>
-                                  <path d="M16 10V7a4 4 0 1 0-8 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                                  <path d="M15 10h4v10H5V10h7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                                </>
-                              )}
-                            </svg>
-                          </button>
-                          {cardSettingCapabilities ? (
-                            <button
-                              type="button"
-                              onPointerDown={(event) => event.stopPropagation()}
-                              onClick={() => setOpenCardSettings((current) => (current === cardKey ? "" : cardKey))}
-                              style={{
-                                ...iconButtonStyle,
-                                borderColor: cardSettingsOpen ? "var(--accent)" : "var(--border)",
-                                color: cardSettingsOpen ? "var(--accent)" : "inherit",
-                              }}
-                              title="Kaartinstellingen"
-                              aria-label="Kaartinstellingen"
-                              aria-expanded={cardSettingsOpen}
+                            <span
+                              style={{ display: "inline-flex", alignItems: "baseline", gap: 6 }}
                             >
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                              <span style={chartTitleStyle}>{displayTitle}</span>
+                              {aiInsight ? <span style={fixedMetricBadgeStyle}>AI</span> : null}
+                              {showLastWeekBadge ? (
+                                <span style={fixedMetricBadgeStyle}>Periode: laatste week</span>
+                              ) : null}
+                              {showPartialWeekBadge ? (
+                                <span style={fixedMetricBadgeStyle} title={weeklyScopeHint}>
+                                  Lopende week*
+                                </span>
+                              ) : null}
+                            </span>
+                            <span style={cardTitleHintStyle} aria-hidden="true">
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
                                 <path
-                                  d="M10.3 3.8h3.4l.6 2.3c.5.2 1 .5 1.5.8l2.2-.7 1.7 2.9-1.6 1.6c.1.5.1 1.1 0 1.6l1.6 1.6-1.7 2.9-2.2-.7c-.5.4-1 .6-1.5.8l-.6 2.3h-3.4l-.6-2.3c-.5-.2-1-.5-1.5-.8l-2.2.7-1.7-2.9 1.6-1.6a6.8 6.8 0 0 1 0-1.6L4.6 9.1l1.7-2.9 2.2.7c.5-.4 1-.6 1.5-.8l.3-2.3Z"
+                                  d="M4 10V4h6M20 14v6h-6M14 4h6v6M10 20H4v-6"
                                   stroke="currentColor"
                                   strokeWidth="1.8"
                                   strokeLinecap="round"
                                   strokeLinejoin="round"
                                 />
-                                <circle cx="12" cy="12" r="2.6" stroke="currentColor" strokeWidth="1.8" />
                               </svg>
-                            </button>
-                          ) : null}
-                          {row.length <= 4 ? (
-                            <button
-                              type="button"
-                              onClick={() => toggleRowExpandCard(rowIndex, cardKey)}
-                              style={{ ...iconButtonStyle, borderColor: "var(--accent)", color: "var(--accent)" }}
-                              title={expandedKey === cardKey ? "Normale breedte" : "Verdubbel breedte"}
-                              aria-label={expandedKey === cardKey ? "Normale breedte" : "Verdubbel breedte"}
-                            >
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                <path d="M4 6h7v12H4V6Zm9 0h7v12h-7V6Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                              </svg>
-                            </button>
-                          ) : null}
-                          <button
-                            type="button"
-                            onClick={() => hideCardByKey(cardKey)}
-                            style={iconButtonStyle}
-                            title="Verberg kaart"
-                            aria-label="Verberg kaart"
-                          >
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                              <path d="M4 7h16M10 3h4M7 7l1 13h8l1-13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                            </svg>
+                            </span>
                           </button>
-                        </span>
-                      ) : (
-                        <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                          {cardKey === "vacationServicedesk" ? (
+                        ) : (
+                          <div
+                            style={{ ...cardTitleButtonStyle, cursor: "default", marginBottom: 0 }}
+                          >
+                            <span
+                              style={{ display: "inline-flex", alignItems: "baseline", gap: 6 }}
+                            >
+                              <span style={chartTitleStyle}>{displayTitle}</span>
+                              {aiInsight ? <span style={fixedMetricBadgeStyle}>AI</span> : null}
+                              {showLastWeekBadge ? (
+                                <span style={fixedMetricBadgeStyle}>Periode: laatste week</span>
+                              ) : null}
+                              {showPartialWeekBadge ? (
+                                <span style={fixedMetricBadgeStyle} title={weeklyScopeHint}>
+                                  Lopende week*
+                                </span>
+                              ) : null}
+                            </span>
+                          </div>
+                        )}
+                        {isLayoutEditing ? (
+                          <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
                             <button
                               type="button"
-                              onClick={startVacationCreate}
-                              style={vacationActionButtonStyle}
-                              title="Vakantie toevoegen"
-                              aria-label="Vakantie toevoegen"
+                              onClick={() => toggleCardLock(cardKey)}
+                              style={{
+                                ...iconButtonStyle,
+                                borderColor: isLocked ? "var(--accent)" : "var(--border)",
+                                color: isLocked ? "var(--accent)" : "inherit",
+                              }}
+                              title={isLocked ? "Slot ontgrendelen" : "Slot vergrendelen"}
+                              aria-label={isLocked ? "Slot ontgrendelen" : "Slot vergrendelen"}
                             >
-                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                              <svg
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                aria-hidden="true"
+                              >
+                                {isLocked ? (
+                                  <>
+                                    <path
+                                      d="M8 10V7a4 4 0 1 1 8 0v3"
+                                      stroke="currentColor"
+                                      strokeWidth="1.8"
+                                      strokeLinecap="round"
+                                    />
+                                    <rect
+                                      x="5"
+                                      y="10"
+                                      width="14"
+                                      height="10"
+                                      rx="2"
+                                      stroke="currentColor"
+                                      strokeWidth="1.8"
+                                    />
+                                  </>
+                                ) : (
+                                  <>
+                                    <path
+                                      d="M16 10V7a4 4 0 1 0-8 0"
+                                      stroke="currentColor"
+                                      strokeWidth="1.8"
+                                      strokeLinecap="round"
+                                    />
+                                    <path
+                                      d="M15 10h4v10H5V10h7"
+                                      stroke="currentColor"
+                                      strokeWidth="1.8"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    />
+                                  </>
+                                )}
                               </svg>
                             </button>
+                            {cardSettingCapabilities ? (
+                              <button
+                                type="button"
+                                onPointerDown={(event) => event.stopPropagation()}
+                                onClick={() =>
+                                  setOpenCardSettings((current) =>
+                                    current === cardKey ? "" : cardKey
+                                  )
+                                }
+                                style={{
+                                  ...iconButtonStyle,
+                                  borderColor: cardSettingsOpen ? "var(--accent)" : "var(--border)",
+                                  color: cardSettingsOpen ? "var(--accent)" : "inherit",
+                                }}
+                                title="Kaartinstellingen"
+                                aria-label="Kaartinstellingen"
+                                aria-expanded={cardSettingsOpen}
+                              >
+                                <SettingsGearIcon />
+                              </button>
+                            ) : null}
+                            {row.length <= 4 ? (
+                              <button
+                                type="button"
+                                onClick={() => toggleRowExpandCard(rowIndex, cardKey)}
+                                style={{
+                                  ...iconButtonStyle,
+                                  borderColor: "var(--accent)",
+                                  color: "var(--accent)",
+                                }}
+                                title={
+                                  expandedKey === cardKey ? "Normale breedte" : "Verdubbel breedte"
+                                }
+                                aria-label={
+                                  expandedKey === cardKey ? "Normale breedte" : "Verdubbel breedte"
+                                }
+                              >
+                                <svg
+                                  width="14"
+                                  height="14"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  aria-hidden="true"
+                                >
+                                  <path
+                                    d="M4 6h7v12H4V6Zm9 0h7v12h-7V6Z"
+                                    stroke="currentColor"
+                                    strokeWidth="1.8"
+                                    strokeLinejoin="round"
+                                  />
+                                </svg>
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              onClick={() => hideCardByKey(cardKey)}
+                              style={iconButtonStyle}
+                              title="Verberg kaart"
+                              aria-label="Verberg kaart"
+                            >
+                              <svg
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                aria-hidden="true"
+                              >
+                                <path
+                                  d="M4 7h16M10 3h4M7 7l1 13h8l1-13"
+                                  stroke="currentColor"
+                                  strokeWidth="1.8"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+                              </svg>
+                            </button>
+                          </span>
+                        ) : (
+                          <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                            {cardKey === "vacationServicedesk" ? (
+                              <button
+                                type="button"
+                                onClick={startVacationCreate}
+                                style={vacationActionButtonStyle}
+                                title="Vakantie toevoegen"
+                                aria-label="Vakantie toevoegen"
+                              >
+                                <svg
+                                  width="14"
+                                  height="14"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  aria-hidden="true"
+                                >
+                                  <path
+                                    d="M12 5v14M5 12h14"
+                                    stroke="currentColor"
+                                    strokeWidth="1.8"
+                                    strokeLinecap="round"
+                                  />
+                                </svg>
+                              </button>
+                            ) : null}
+                          </span>
+                        )}
+                      </div>
+                      {isLayoutEditing && cardSettingsOpen && cardSettingCapabilities ? (
+                        <div
+                          role="group"
+                          aria-label={`Instellingen voor ${displayTitle}`}
+                          onPointerDown={(event) => event.stopPropagation()}
+                          style={{
+                            margin: "4px 0 10px",
+                            padding: 10,
+                            border:
+                              "1px solid color-mix(in srgb, var(--accent) 35%, var(--border))",
+                            borderRadius: 10,
+                            background:
+                              "color-mix(in srgb, var(--accent) 6%, var(--surface-muted))",
+                            display: "grid",
+                            gap: 8,
+                          }}
+                        >
+                          <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-main)" }}>
+                            {displayTitle}
+                          </div>
+                          {cardSettingCapabilities.legend ? (
+                            <label
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 8,
+                                fontSize: 13,
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={cardSettings.legend}
+                                onChange={(event) =>
+                                  updateChartSetting(cardKey, "legend", event.target.checked)
+                                }
+                              />
+                              Legenda tonen
+                            </label>
                           ) : null}
-                        </span>
-                      )}
-                    </div>
-                    {isLayoutEditing && cardSettingsOpen && cardSettingCapabilities ? (
+                          {cardSettingCapabilities.total ? (
+                            <label
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 8,
+                                fontSize: 13,
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={cardSettings.total}
+                                onChange={(event) =>
+                                  updateChartSetting(cardKey, "total", event.target.checked)
+                                }
+                              />
+                              Totaal tonen
+                            </label>
+                          ) : null}
+                          {cardSettingCapabilities.movingAverage ? (
+                            <label
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 8,
+                                fontSize: 13,
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={cardSettings.movingAverage}
+                                onChange={(event) =>
+                                  updateChartSetting(cardKey, "movingAverage", event.target.checked)
+                                }
+                              />
+                              Voortschrijdend gemiddelde tonen
+                            </label>
+                          ) : null}
+                        </div>
+                      ) : null}
                       <div
-                        role="group"
-                        aria-label={`Instellingen voor ${displayTitle}`}
-                        onPointerDown={(event) => event.stopPropagation()}
                         style={{
-                          margin: "4px 0 10px",
-                          padding: 10,
-                          border: "1px solid color-mix(in srgb, var(--accent) 35%, var(--border))",
-                          borderRadius: 10,
-                          background: "color-mix(in srgb, var(--accent) 6%, var(--surface-muted))",
-                          display: "grid",
-                          gap: 8,
+                          display: "flex",
+                          flexDirection: "column",
+                          flex: 1,
+                          minHeight: 0,
+                          ...(interactionDisabledStyle || {}),
                         }}
                       >
-                        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-main)" }}>{displayTitle}</div>
-                        {cardSettingCapabilities.legend ? (
-                          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-                            <input
-                              type="checkbox"
-                              checked={cardSettings.legend}
-                              onChange={(event) => updateChartSetting(cardKey, "legend", event.target.checked)}
-                            />
-                            Legenda tonen
-                          </label>
-                        ) : null}
-                        {cardSettingCapabilities.total ? (
-                          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-                            <input
-                              type="checkbox"
-                              checked={cardSettings.total}
-                              onChange={(event) => updateChartSetting(cardKey, "total", event.target.checked)}
-                            />
-                            Totaal tonen
-                          </label>
-                        ) : null}
-                        {cardSettingCapabilities.movingAverage ? (
-                          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-                            <input
-                              type="checkbox"
-                              checked={cardSettings.movingAverage}
-                              onChange={(event) => updateChartSetting(cardKey, "movingAverage", event.target.checked)}
-                            />
-                            Voortschrijdend gemiddelde tonen
-                          </label>
-                        ) : null}
+                        {aiInsight ? renderAiInsightCard(cardKey) : renderCardContent(cardKey)}
                       </div>
-                    ) : null}
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        flex: 1,
-                        minHeight: 0,
-                        ...(interactionDisabledStyle || {}),
-                      }}
-                    >
-                      {aiInsight ? renderAiInsightCard(cardKey) : renderCardContent(cardKey)}
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          );
-        })}
-      </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
       )}
-      {isLayoutEditing ? (
-        <div style={foldNoticeStyle}>{'Layout-modus actief: sleep KPI/cards binnen hun categorie en klik daarna op "Opslaan layout".'}</div>
-      ) : null}
-
       {expandedCard ? (
-        <div role="dialog" aria-modal="true" aria-label={cardTitleByKey(expandedCard)} style={modalOverlayStyle} onClick={() => setExpandedCard("")}>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={cardTitleByKey(expandedCard)}
+          style={modalOverlayStyle}
+          onClick={() => setExpandedCard("")}
+        >
           <div style={modalFrameStyle}>
             <div style={modalCardStyle} onClick={(e) => e.stopPropagation()}>
               <div style={modalHeaderStyle}>
@@ -6586,7 +7859,9 @@ export default function Home() {
                 </button>
               </div>
               <div style={modalBodyStyle}>
-                {aiInsightByCardKey.get(expandedCard) ? renderAiInsightCard(expandedCard, true) : renderCardContent(expandedCard, true)}
+                {aiInsightByCardKey.get(expandedCard)
+                  ? renderAiInsightCard(expandedCard, true)
+                  : renderCardContent(expandedCard, true)}
               </div>
             </div>
           </div>
@@ -6594,7 +7869,12 @@ export default function Home() {
       ) : null}
 
       {hotkeysOpen ? (
-        <div ref={hotkeysPopupRef} role="dialog" aria-label="Hotkeys overzicht" style={hotkeysPanelStyle}>
+        <div
+          ref={hotkeysPopupRef}
+          role="dialog"
+          aria-label="Hotkeys overzicht"
+          style={hotkeysPanelStyle}
+        >
           <div style={modalHeaderStyle}>
             <h2 style={{ margin: 0, fontSize: 20 }}>Hotkeys</h2>
             <button type="button" onClick={() => setHotkeysOpen(false)} style={modalCloseStyle}>
@@ -6614,28 +7894,44 @@ export default function Home() {
               </thead>
               <tbody>
                 <tr>
-                  <td style={hotkeysTdStyle}><span style={hotkeysKeyStyle}>M</span></td>
+                  <td style={hotkeysTdStyle}>
+                    <span style={hotkeysKeyStyle}>M</span>
+                  </td>
                   <td style={hotkeysTdStyle}>Zet de datumselectie op de laatste maand.</td>
                 </tr>
                 <tr>
-                  <td style={hotkeysTdStyle}><span style={hotkeysKeyStyle}>J</span></td>
+                  <td style={hotkeysTdStyle}>
+                    <span style={hotkeysKeyStyle}>J</span>
+                  </td>
                   <td style={hotkeysTdStyle}>Zet de datumselectie op het laatste jaar.</td>
                 </tr>
                 <tr>
-                  <td style={hotkeysTdStyle}><span style={hotkeysKeyStyle}>R</span></td>
+                  <td style={hotkeysTdStyle}>
+                    <span style={hotkeysKeyStyle}>R</span>
+                  </td>
                   <td style={hotkeysTdStyle}>Reset alle filters naar de standaardwaarden.</td>
                 </tr>
                 <tr>
-                  <td style={hotkeysTdStyle}><span style={hotkeysKeyStyle}>F</span></td>
+                  <td style={hotkeysTdStyle}>
+                    <span style={hotkeysKeyStyle}>F</span>
+                  </td>
                   <td style={hotkeysTdStyle}>Open het filterscherm.</td>
                 </tr>
                 <tr>
-                  <td style={hotkeysTdStyle}><span style={hotkeysKeyStyle}>S</span></td>
-                  <td style={hotkeysTdStyle}>Start een synchronisatie (of toont dat sync al loopt).</td>
+                  <td style={hotkeysTdStyle}>
+                    <span style={hotkeysKeyStyle}>S</span>
+                  </td>
+                  <td style={hotkeysTdStyle}>
+                    Start een synchronisatie (of toont dat sync al loopt).
+                  </td>
                 </tr>
                 <tr>
-                  <td style={hotkeysTdStyle}><span style={hotkeysKeyStyle}>Esc</span></td>
-                  <td style={hotkeysTdStyle}>Sluit open panelen zoals deze popup en andere dialogen.</td>
+                  <td style={hotkeysTdStyle}>
+                    <span style={hotkeysKeyStyle}>Esc</span>
+                  </td>
+                  <td style={hotkeysTdStyle}>
+                    Sluit open panelen zoals deze popup en andere dialogen.
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -6671,7 +7967,16 @@ export default function Home() {
                 type="button"
                 onClick={startLocalLayoutEditing}
                 disabled={layoutSaving}
-                style={{ ...filterOpenButtonStyle, height: "auto", minHeight: 66, justifyContent: "flex-start", alignItems: "flex-start", flexDirection: "column", textAlign: "left", padding: "12px 14px" }}
+                style={{
+                  ...filterOpenButtonStyle,
+                  height: "auto",
+                  minHeight: 66,
+                  justifyContent: "flex-start",
+                  alignItems: "flex-start",
+                  flexDirection: "column",
+                  textAlign: "left",
+                  padding: "12px 14px",
+                }}
               >
                 <span style={{ fontWeight: 700 }}>Alleen voor mij</span>
                 <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 400 }}>
@@ -6682,16 +7987,32 @@ export default function Home() {
                 type="button"
                 onClick={startSharedLayoutEditing}
                 disabled={layoutSaving}
-                style={{ ...layoutPrimaryButtonStyle, height: "auto", minHeight: 66, justifyContent: "flex-start", alignItems: "flex-start", flexDirection: "column", textAlign: "left", padding: "12px 14px" }}
+                style={{
+                  ...layoutPrimaryButtonStyle,
+                  height: "auto",
+                  minHeight: 66,
+                  justifyContent: "flex-start",
+                  alignItems: "flex-start",
+                  flexDirection: "column",
+                  textAlign: "left",
+                  padding: "12px 14px",
+                }}
               >
-                <span style={{ fontWeight: 700 }}>{layoutSaving ? "Gedeelde indeling laden…" : "Voor iedereen"}</span>
+                <span style={{ fontWeight: 700 }}>
+                  {layoutSaving ? "Gedeelde indeling laden…" : "Voor iedereen"}
+                </span>
                 <span style={{ fontSize: 12, opacity: 0.86, fontWeight: 400 }}>
                   Bewaar de indeling centraal, zodat andere gebruikers deze ook kunnen gebruiken.
                 </span>
               </button>
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
-              <button type="button" onClick={() => setLayoutChoiceOpen(false)} disabled={layoutSaving} style={modalCloseStyle}>
+              <button
+                type="button"
+                onClick={() => setLayoutChoiceOpen(false)}
+                disabled={layoutSaving}
+                style={modalCloseStyle}
+              >
                 Annuleren
               </button>
             </div>
@@ -6702,7 +8023,10 @@ export default function Home() {
       {isLayoutEditing ? (
         <div
           ref={hiddenOverlayRef}
-          style={{ ...hiddenOverlayStyle, ...(hiddenDropTarget === "overlay" ? hiddenOverlayDropStyle : null) }}
+          style={{
+            ...hiddenOverlayStyle,
+            ...(hiddenDropTarget === "overlay" ? hiddenOverlayDropStyle : null),
+          }}
           onDragOver={(e) => {
             e.preventDefault();
             if (dragStateRef.current?.kind === "kpi" || dragStateRef.current?.kind === "card") {
@@ -6712,14 +8036,64 @@ export default function Home() {
           onDragLeave={() => setHiddenDropTarget((prev) => (prev === "overlay" ? null : prev))}
           onDrop={hideDraggedToOverlay}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 8,
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
             <div>
               <h3 style={hiddenOverlayTitleStyle}>Verborgen kaarten</h3>
               <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
-                {layoutStorageScope === "shared" ? "Je past de indeling voor iedereen aan" : "Je past alleen jouw eigen indeling aan"}
+                {layoutStorageScope === "shared"
+                  ? "Je past de indeling voor iedereen aan"
+                  : "Je past alleen jouw eigen indeling aan"}
+              </div>
+              <div style={{ ...foldNoticeStyle, marginTop: 6 }}>
+                Sleep KPI’s en kaarten binnen hun categorie en sla daarna de indeling op.
               </div>
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <label
+                style={{
+                  ...filterOpenButtonStyle,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 7,
+                }}
+              >
+                <span aria-hidden="true" style={{ fontSize: 13, lineHeight: 1 }}>
+                  {themePreferenceDraft === "dark"
+                    ? "◐"
+                    : themePreferenceDraft === "light"
+                      ? "☀"
+                      : "▣"}
+                </span>
+                <span style={{ fontSize: 11 }}>Weergave</span>
+                <select
+                  value={themePreferenceDraft}
+                  onChange={(event) => setThemePreferenceDraft(event.target.value)}
+                  aria-label="Kies de weergave van het dashboard"
+                  style={{
+                    appearance: "auto",
+                    border: 0,
+                    background: "transparent",
+                    color: "var(--accent)",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    padding: 0,
+                    outline: 0,
+                  }}
+                >
+                  <option value="system">Systeem</option>
+                  <option value="light">Licht</option>
+                  <option value="dark">Donker</option>
+                </select>
+              </label>
               <button type="button" onClick={toggleTvMode} style={filterOpenButtonStyle}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                   <path
@@ -6732,13 +8106,29 @@ export default function Home() {
                 </svg>
                 {tvModeDraft ? "TV-modus uit" : "TV-modus aan"}
               </button>
-              <button type="button" onClick={resetLayoutAndClose} style={filterOpenButtonStyle} disabled={layoutSaving}>
+              <button
+                type="button"
+                onClick={resetLayoutAndClose}
+                style={filterOpenButtonStyle}
+                disabled={layoutSaving}
+              >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  <path
+                    d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
                 </svg>
                 Opnieuw beginnen
               </button>
-              <button type="button" onClick={saveDashboardLayout} style={layoutPrimaryButtonStyle} disabled={!layoutDirty || layoutSaving}>
+              <button
+                type="button"
+                onClick={saveDashboardLayout}
+                style={layoutPrimaryButtonStyle}
+                disabled={!layoutDirty || layoutSaving}
+              >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                   <path
                     d="M5 3h11l3 3v15H5zM8 3v6h8V3M8 21v-7h8v7"
@@ -6750,6 +8140,18 @@ export default function Home() {
                 </svg>
                 {layoutSaving ? "Opslaan…" : "Indeling opslaan"}
               </button>
+              <button type="button" onClick={cancelLayoutEditing} style={filterOpenButtonStyle}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path
+                    d="M18 6L6 18M6 6l12 12"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                Annuleren
+              </button>
             </div>
           </div>
           <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
@@ -6758,7 +8160,10 @@ export default function Home() {
           <div>
             <div style={{ ...labelStyle, marginBottom: 4 }}>KPI kaarten</div>
             <div
-              style={{ ...hiddenPoolStyle, ...(hiddenDropTarget === "kpi" ? hiddenPoolDropStyle : null) }}
+              style={{
+                ...hiddenPoolStyle,
+                ...(hiddenDropTarget === "kpi" ? hiddenPoolDropStyle : null),
+              }}
               onDragOver={(e) => {
                 e.preventDefault();
                 if (dragStateRef.current?.kind === "kpi") setHiddenDropTarget("kpi");
@@ -6772,39 +8177,54 @@ export default function Home() {
               {hiddenDropTarget === "kpi" ? (
                 <div style={hiddenDropCueStyle}>
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path d="M4 7h16M10 3h4M7 7l1 13h8l1-13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    <path
+                      d="M4 7h16M10 3h4M7 7l1 13h8l1-13"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
                   </svg>
                   Loslaten om KPI-kaart te verbergen
                 </div>
               ) : null}
-              {hiddenKpiKeys.length ? hiddenKpiKeys.map((key) => (
-                <span
-                  key={`hidden-kpi-${key}`}
-                  style={hiddenChipStyle}
-                  draggable
-                  onDragStart={() => startDrag("kpi", key, { zone: "hiddenKpi" })}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={() => moveKpiToVisible(key)}
-                >
-                  <span style={dragHandleStyle} aria-hidden>
-                    <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-                      <circle cx="2" cy="2" r="1" />
-                      <circle cx="2" cy="5" r="1" />
-                      <circle cx="2" cy="8" r="1" />
-                      <circle cx="8" cy="2" r="1" />
-                      <circle cx="8" cy="5" r="1" />
-                      <circle cx="8" cy="8" r="1" />
-                    </svg>
+              {hiddenKpiKeys.length ? (
+                hiddenKpiKeys.map((key) => (
+                  <span
+                    key={`hidden-kpi-${key}`}
+                    style={hiddenChipStyle}
+                    draggable
+                    onDragStart={() => startDrag("kpi", key, { zone: "hiddenKpi" })}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={() => moveKpiToVisible(key)}
+                  >
+                    <span style={dragHandleStyle} aria-hidden>
+                      <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                        <circle cx="2" cy="2" r="1" />
+                        <circle cx="2" cy="5" r="1" />
+                        <circle cx="2" cy="8" r="1" />
+                        <circle cx="8" cy="2" r="1" />
+                        <circle cx="8" cy="5" r="1" />
+                        <circle cx="8" cy="8" r="1" />
+                      </svg>
+                    </span>
+                    {kpiTiles[key]?.label || key}
                   </span>
-                  {kpiTiles[key]?.label || key}
+                ))
+              ) : (
+                <span style={{ color: "var(--text-faint)", fontSize: 12 }}>
+                  Geen verborgen KPI-kaarten
                 </span>
-              )) : <span style={{ color: "var(--text-faint)", fontSize: 12 }}>Geen verborgen KPI-kaarten</span>}
+              )}
             </div>
           </div>
           <div>
             <div style={{ ...labelStyle, marginBottom: 4 }}>Overige kaarten</div>
             <div
-              style={{ ...hiddenPoolStyle, ...(hiddenDropTarget === "card" ? hiddenPoolDropStyle : null) }}
+              style={{
+                ...hiddenPoolStyle,
+                ...(hiddenDropTarget === "card" ? hiddenPoolDropStyle : null),
+              }}
               onDragOver={(e) => {
                 e.preventDefault();
                 if (dragStateRef.current?.kind === "card") setHiddenDropTarget("card");
@@ -6818,31 +8238,43 @@ export default function Home() {
               {hiddenDropTarget === "card" ? (
                 <div style={hiddenDropCueStyle}>
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path d="M4 7h16M10 3h4M7 7l1 13h8l1-13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                    <path
+                      d="M4 7h16M10 3h4M7 7l1 13h8l1-13"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
                   </svg>
                   Loslaten om kaart te verbergen
                 </div>
               ) : null}
-              {hiddenCardKeys.length ? hiddenCardKeys.map((key) => (
-                <span
-                  key={`hidden-card-${key}`}
-                  style={hiddenChipStyle}
-                  draggable
-                  onDragStart={() => startDrag("card", key, { zone: "hiddenCard" })}
-                >
-                  <span style={dragHandleStyle} aria-hidden>
-                    <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-                      <circle cx="2" cy="2" r="1" />
-                      <circle cx="2" cy="5" r="1" />
-                      <circle cx="2" cy="8" r="1" />
-                      <circle cx="8" cy="2" r="1" />
-                      <circle cx="8" cy="5" r="1" />
-                      <circle cx="8" cy="8" r="1" />
-                    </svg>
+              {hiddenCardKeys.length ? (
+                hiddenCardKeys.map((key) => (
+                  <span
+                    key={`hidden-card-${key}`}
+                    style={hiddenChipStyle}
+                    draggable
+                    onDragStart={() => startDrag("card", key, { zone: "hiddenCard" })}
+                  >
+                    <span style={dragHandleStyle} aria-hidden>
+                      <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                        <circle cx="2" cy="2" r="1" />
+                        <circle cx="2" cy="5" r="1" />
+                        <circle cx="2" cy="8" r="1" />
+                        <circle cx="8" cy="2" r="1" />
+                        <circle cx="8" cy="5" r="1" />
+                        <circle cx="8" cy="8" r="1" />
+                      </svg>
+                    </span>
+                    {cardTitleByKey(key)}
                   </span>
-                  {cardTitleByKey(key)}
+                ))
+              ) : (
+                <span style={{ color: "var(--text-faint)", fontSize: 12 }}>
+                  Geen verborgen overige kaarten
                 </span>
-              )) : <span style={{ color: "var(--text-faint)", fontSize: 12 }}>Geen verborgen overige kaarten</span>}
+              )}
             </div>
           </div>
         </div>
@@ -6866,7 +8298,13 @@ export default function Home() {
         aria-hidden={!sidePanelOpen}
         role="dialog"
         aria-modal="true"
-        aria-label={sidePanelMode === "alerts" ? "Alerts logboek" : sidePanelMode === "insights" ? "AI inzichtenlog" : "Drilldown"}
+        aria-label={
+          sidePanelMode === "alerts"
+            ? "Alerts logboek"
+            : sidePanelMode === "insights"
+              ? "AI inzichtenlog"
+              : "Drilldown"
+        }
         onClick={(e) => e.stopPropagation()}
         ref={drillPanelRef}
         style={{
@@ -6884,30 +8322,45 @@ export default function Home() {
           flexDirection: "column",
         }}
       >
-        <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border-strong)", display: "flex", gap: 10 }}>
+        <div
+          style={{
+            padding: "16px 20px",
+            borderBottom: "1px solid var(--border-strong)",
+            display: "flex",
+            gap: 10,
+          }}
+        >
           <div style={{ flex: 1 }}>
             {sidePanelMode === "alerts" ? (
               <>
-                <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Alerts</div>
+                <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>
+                  Alerts
+                </div>
                 <div style={{ fontSize: 16 }}>
-                  Alerts logboek — <b>{filteredAlertLogGroups.length}</b> groepen / <b>{alertLogEntries.length}</b> gebeurtenissen
+                  Alerts logboek — <b>{filteredAlertLogGroups.length}</b> groepen /{" "}
+                  <b>{alertLogEntries.length}</b> gebeurtenissen
                 </div>
               </>
             ) : sidePanelMode === "insights" ? (
               <>
-                <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>AI inzichten</div>
+                <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>
+                  AI inzichten
+                </div>
                 <div style={{ fontSize: 16 }}>
                   Inzichtenlog — <b>{insightLogEntries.length}</b> items
                   {selectedInsightId ? (
                     <>
-                      {" "}— focus op <b>#{selectedInsightId}</b>
+                      {" "}
+                      — focus op <b>#{selectedInsightId}</b>
                     </>
                   ) : null}
                 </div>
               </>
             ) : (
               <>
-                <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Drilldown</div>
+                <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>
+                  Drilldown
+                </div>
                 <div style={{ fontSize: 16 }}>
                   {selectedDrillTitle ? (
                     <>
@@ -6916,16 +8369,18 @@ export default function Home() {
                     </>
                   ) : (
                     <>
-                      Week vanaf <b>{fmtDate(selectedWeek)}</b>
-                      {" "}— basis: <b>{selectedDrillBasisLabel}</b>
+                      Week vanaf <b>{fmtDate(selectedWeek)}</b> — basis:{" "}
+                      <b>{selectedDrillBasisLabel}</b>
                       {selectedType ? (
                         <>
-                          {" "}— type: <b style={{ color: typeColor(selectedType) }}>{selectedType}</b>
+                          {" "}
+                          — type: <b style={{ color: typeColor(selectedType) }}>{selectedType}</b>
                         </>
                       ) : null}
                       {selectedOnderwerp ? (
                         <>
-                          {" "}— onderwerp: <b>{selectedOnderwerp}</b>
+                          {" "}
+                          — onderwerp: <b>{selectedOnderwerp}</b>
                         </>
                       ) : null}
                     </>
@@ -6955,9 +8410,7 @@ export default function Home() {
         {sidePanelMode === "alerts" ? (
           <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border)" }}>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <span style={{ color: "var(--text-muted)" }}>
-                Meest recente alerts bovenaan
-              </span>
+              <span style={{ color: "var(--text-muted)" }}>Meest recente alerts bovenaan</span>
               <label style={{ display: "flex", gap: 8, alignItems: "center", marginLeft: 8 }}>
                 <span style={{ color: "var(--text-muted)", fontSize: 13 }}>Soort</span>
                 <select
@@ -6989,7 +8442,8 @@ export default function Home() {
                   border: "1px solid color-mix(in srgb, #b91c1c 40%, var(--border))",
                   borderRadius: 8,
                   padding: "6px 10px",
-                  cursor: clearAlertLogsBusy || !hasClearableAlertEntries ? "not-allowed" : "pointer",
+                  cursor:
+                    clearAlertLogsBusy || !hasClearableAlertEntries ? "not-allowed" : "pointer",
                   display: "inline-flex",
                   alignItems: "center",
                   gap: 6,
@@ -7012,7 +8466,8 @@ export default function Home() {
           <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border)" }}>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <span style={{ color: "var(--text-muted)" }}>
-                Threshold <b>{activeAiThresholdPct}%</b> · live zichtbaar <b>{aiInsightByCardKey.size}</b> · maximaal <b>3</b> actieve AI-cards
+                Threshold <b>{activeAiThresholdPct}%</b> · live zichtbaar{" "}
+                <b>{aiInsightByCardKey.size}</b> · maximaal <b>3</b> actieve AI-cards
               </span>
               <button
                 type="button"
@@ -7021,7 +8476,10 @@ export default function Home() {
                 style={{
                   ...togglePillStyle,
                   marginLeft: "auto",
-                  borderColor: dashboardLayout.showAiCards === false ? "var(--border)" : "color-mix(in srgb, var(--accent) 55%, var(--border))",
+                  borderColor:
+                    dashboardLayout.showAiCards === false
+                      ? "var(--border)"
+                      : "color-mix(in srgb, var(--accent) 55%, var(--border))",
                   background:
                     dashboardLayout.showAiCards === false
                       ? "var(--surface)"
@@ -7049,7 +8507,10 @@ export default function Home() {
                     style={{
                       ...switchThumbStyle,
                       left: 2,
-                      transform: dashboardLayout.showAiCards === false ? "translateX(0)" : "translateX(16px)",
+                      transform:
+                        dashboardLayout.showAiCards === false
+                          ? "translateX(0)"
+                          : "translateX(16px)",
                     }}
                   />
                 </span>
@@ -7137,20 +8598,69 @@ export default function Home() {
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Tijd</th>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Soort</th>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Issue</th>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Laatste info</th>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Aantal</th>
+                      <th
+                        style={{
+                          textAlign: "left",
+                          borderBottom: "1px solid var(--border)",
+                          padding: "8px",
+                        }}
+                      >
+                        Tijd
+                      </th>
+                      <th
+                        style={{
+                          textAlign: "left",
+                          borderBottom: "1px solid var(--border)",
+                          padding: "8px",
+                        }}
+                      >
+                        Soort
+                      </th>
+                      <th
+                        style={{
+                          textAlign: "left",
+                          borderBottom: "1px solid var(--border)",
+                          padding: "8px",
+                        }}
+                      >
+                        Issue
+                      </th>
+                      <th
+                        style={{
+                          textAlign: "left",
+                          borderBottom: "1px solid var(--border)",
+                          padding: "8px",
+                        }}
+                      >
+                        Laatste info
+                      </th>
+                      <th
+                        style={{
+                          textAlign: "left",
+                          borderBottom: "1px solid var(--border)",
+                          padding: "8px",
+                        }}
+                      >
+                        Aantal
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr>
                       <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
-                        {weeklyInsights?.generated_at ? fmtDateTime(weeklyInsights.generated_at) : "—"}
+                        {weeklyInsights?.generated_at
+                          ? fmtDateTime(weeklyInsights.generated_at)
+                          : "—"}
                       </td>
                       <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
-                        <span style={{ ...alertKindPillStyle("LOGBOOK_EVENT"), borderColor: "rgba(37, 99, 235, 0.35)", background: "color-mix(in srgb, #2563eb 12%, var(--surface))", color: "#1d4ed8" }}>
+                        <span
+                          style={{
+                            ...alertKindPillStyle("LOGBOOK_EVENT"),
+                            borderColor: "rgba(37, 99, 235, 0.35)",
+                            background: "color-mix(in srgb, #2563eb 12%, var(--surface))",
+                            color: "#1d4ed8",
+                          }}
+                        >
                           Weekly insights
                         </span>
                       </td>
@@ -7161,8 +8671,16 @@ export default function Home() {
                       <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
                         <button
                           onClick={() => toggleAlertGroup(WEEKLY_INSIGHTS_GROUP_KEY)}
-                          aria-label={expandedAlertGroups[WEEKLY_INSIGHTS_GROUP_KEY] ? "Inklappen" : "Uitklappen"}
-                          title={expandedAlertGroups[WEEKLY_INSIGHTS_GROUP_KEY] ? "Inklappen" : "Uitklappen"}
+                          aria-label={
+                            expandedAlertGroups[WEEKLY_INSIGHTS_GROUP_KEY]
+                              ? "Inklappen"
+                              : "Uitklappen"
+                          }
+                          title={
+                            expandedAlertGroups[WEEKLY_INSIGHTS_GROUP_KEY]
+                              ? "Inklappen"
+                              : "Uitklappen"
+                          }
                           style={{
                             border: "1px solid var(--border)",
                             borderRadius: 6,
@@ -7177,69 +8695,213 @@ export default function Home() {
                     </tr>
                     {expandedAlertGroups[WEEKLY_INSIGHTS_GROUP_KEY] ? (
                       <tr>
-                        <td colSpan={5} style={{ padding: "0 8px 10px 8px", background: "var(--surface-muted)" }}>
-                          <div style={{ padding: "14px 16px", border: "1px solid var(--border)", borderRadius: 8, marginTop: 6, background: "color-mix(in srgb, var(--accent) 4%, var(--surface))" }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+                        <td
+                          colSpan={5}
+                          style={{ padding: "0 8px 10px 8px", background: "var(--surface-muted)" }}
+                        >
+                          <div
+                            style={{
+                              padding: "14px 16px",
+                              border: "1px solid var(--border)",
+                              borderRadius: 8,
+                              marginTop: 6,
+                              background: "color-mix(in srgb, var(--accent) 4%, var(--surface))",
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: "flex",
+                                justifyContent: "space-between",
+                                gap: 12,
+                                alignItems: "flex-start",
+                                flexWrap: "wrap",
+                              }}
+                            >
                               <div>
-                                <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Weekly insights</div>
+                                <div
+                                  style={{
+                                    fontSize: 12,
+                                    color: "var(--text-muted)",
+                                    marginBottom: 4,
+                                  }}
+                                >
+                                  Weekly insights
+                                </div>
                                 <div style={{ fontSize: 18, fontWeight: 700 }}>
                                   {weeklyInsights?.week?.label || "Vorige volledige week"}
                                 </div>
-                                <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 4 }}>
-                                  {weeklyInsights?.scope ? `${weeklyInsights.scope} · ` : ""}gegenereerd {weeklyInsights?.generated_at ? fmtDateTime(weeklyInsights.generated_at) : "nog niet"}
+                                <div
+                                  style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 4 }}
+                                >
+                                  {weeklyInsights?.scope ? `${weeklyInsights.scope} · ` : ""}
+                                  gegenereerd{" "}
+                                  {weeklyInsights?.generated_at
+                                    ? fmtDateTime(weeklyInsights.generated_at)
+                                    : "nog niet"}
                                 </div>
                               </div>
-                              <button type="button" onClick={downloadWeeklyInsightsPdf} disabled={weeklyInsightsDownloadBusy || !weeklyInsights}>
+                              <button
+                                type="button"
+                                onClick={downloadWeeklyInsightsPdf}
+                                disabled={weeklyInsightsDownloadBusy || !weeklyInsights}
+                              >
                                 {weeklyInsightsDownloadBusy ? "PDF maken..." : "Download PDF"}
                               </button>
                             </div>
                             {weeklyInsightsError ? (
-                              <div style={{ marginTop: 12, color: "#991b1b" }}>{weeklyInsightsError}</div>
+                              <div style={{ marginTop: 12, color: "#991b1b" }}>
+                                {weeklyInsightsError}
+                              </div>
                             ) : weeklyInsightsLoading && !weeklyInsights ? (
-                              <div style={{ marginTop: 12, color: "var(--text-muted)" }}>Weekly insights worden geladen…</div>
+                              <div style={{ marginTop: 12, color: "var(--text-muted)" }}>
+                                Weekly insights worden geladen…
+                              </div>
                             ) : weeklyInsights ? (
                               <div style={{ display: "grid", gap: 14, marginTop: 14 }}>
-                                <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
+                                <div
+                                  style={{
+                                    display: "grid",
+                                    gap: 10,
+                                    gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                                  }}
+                                >
                                   {[
-                                    ["Binnengekomen", formatNumberOrDash(weeklyInsights.summary?.incoming_tickets)],
-                                    ["Afgesloten", formatNumberOrDash(weeklyInsights.summary?.closed_tickets)],
-                                    ["Sluitratio", weeklyInsights.summary?.close_rate_pct != null ? `${weeklyInsights.summary.close_rate_pct}%` : "n.v.t."],
-                                    ["Open delta", formatNumberOrDash(weeklyInsights.summary?.open_delta)],
-                                    ["Alert events", formatNumberOrDash(weeklyInsights.alerts?.total_events)],
+                                    [
+                                      "Binnengekomen",
+                                      formatNumberOrDash(weeklyInsights.summary?.incoming_tickets),
+                                    ],
+                                    [
+                                      "Afgesloten",
+                                      formatNumberOrDash(weeklyInsights.summary?.closed_tickets),
+                                    ],
+                                    [
+                                      "Sluitratio",
+                                      weeklyInsights.summary?.close_rate_pct != null
+                                        ? `${weeklyInsights.summary.close_rate_pct}%`
+                                        : "n.v.t.",
+                                    ],
+                                    [
+                                      "Open delta",
+                                      formatNumberOrDash(weeklyInsights.summary?.open_delta),
+                                    ],
+                                    [
+                                      "Alert events",
+                                      formatNumberOrDash(weeklyInsights.alerts?.total_events),
+                                    ],
                                   ].map(([label, value]) => (
-                                    <div key={label} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", background: "var(--surface)" }}>
-                                      <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{label}</div>
-                                      <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>{value}</div>
+                                    <div
+                                      key={label}
+                                      style={{
+                                        border: "1px solid var(--border)",
+                                        borderRadius: 10,
+                                        padding: "10px 12px",
+                                        background: "var(--surface)",
+                                      }}
+                                    >
+                                      <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                                        {label}
+                                      </div>
+                                      <div style={{ fontSize: 18, fontWeight: 700, marginTop: 4 }}>
+                                        {value}
+                                      </div>
                                     </div>
                                   ))}
                                 </div>
-                                <div style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
-                                  <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "12px 14px", background: "var(--surface)" }}>
-                                    <div style={{ fontWeight: 700, marginBottom: 8 }}>Service levels</div>
+                                <div
+                                  style={{
+                                    display: "grid",
+                                    gap: 14,
+                                    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                                  }}
+                                >
+                                  <div
+                                    style={{
+                                      border: "1px solid var(--border)",
+                                      borderRadius: 10,
+                                      padding: "12px 14px",
+                                      background: "var(--surface)",
+                                    }}
+                                  >
+                                    <div style={{ fontWeight: 700, marginBottom: 8 }}>
+                                      Service levels
+                                    </div>
                                     <div style={{ display: "grid", gap: 6, fontSize: 14 }}>
-                                      <div>First response gemiddeld: <b>{formatHoursOrDash(weeklyInsights.service_levels?.first_response_avg_hours)}</b></div>
-                                      <div>First response mediaan: <b>{formatHoursOrDash(weeklyInsights.service_levels?.first_response_p50_hours)}</b></div>
-                                      <div>Resolution gemiddeld: <b>{formatHoursOrDash(weeklyInsights.service_levels?.resolution_avg_hours)}</b></div>
-                                      <div>Resolution mediaan: <b>{formatHoursOrDash(weeklyInsights.service_levels?.resolution_p50_hours)}</b></div>
+                                      <div>
+                                        First response gemiddeld:{" "}
+                                        <b>
+                                          {formatHoursOrDash(
+                                            weeklyInsights.service_levels?.first_response_avg_hours
+                                          )}
+                                        </b>
+                                      </div>
+                                      <div>
+                                        First response mediaan:{" "}
+                                        <b>
+                                          {formatHoursOrDash(
+                                            weeklyInsights.service_levels?.first_response_p50_hours
+                                          )}
+                                        </b>
+                                      </div>
+                                      <div>
+                                        Resolution gemiddeld:{" "}
+                                        <b>
+                                          {formatHoursOrDash(
+                                            weeklyInsights.service_levels?.resolution_avg_hours
+                                          )}
+                                        </b>
+                                      </div>
+                                      <div>
+                                        Resolution mediaan:{" "}
+                                        <b>
+                                          {formatHoursOrDash(
+                                            weeklyInsights.service_levels?.resolution_p50_hours
+                                          )}
+                                        </b>
+                                      </div>
                                     </div>
                                   </div>
-                                  <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "12px 14px", background: "var(--surface)" }}>
-                                    <div style={{ fontWeight: 700, marginBottom: 8 }}>Alerts per soort</div>
-                                    {Array.isArray(weeklyInsights.alerts?.by_kind) && weeklyInsights.alerts.by_kind.length ? (
+                                  <div
+                                    style={{
+                                      border: "1px solid var(--border)",
+                                      borderRadius: 10,
+                                      padding: "12px 14px",
+                                      background: "var(--surface)",
+                                    }}
+                                  >
+                                    <div style={{ fontWeight: 700, marginBottom: 8 }}>
+                                      Alerts per soort
+                                    </div>
+                                    {Array.isArray(weeklyInsights.alerts?.by_kind) &&
+                                    weeklyInsights.alerts.by_kind.length ? (
                                       <div style={{ display: "grid", gap: 6 }}>
                                         {weeklyInsights.alerts.by_kind.map((item) => (
-                                          <div key={item.kind} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                                          <div
+                                            key={item.kind}
+                                            style={{
+                                              display: "flex",
+                                              justifyContent: "space-between",
+                                              gap: 12,
+                                            }}
+                                          >
                                             <span>{alertKindLabel(item.kind)}</span>
                                             <b>{formatNumberOrDash(item.events)}</b>
                                           </div>
                                         ))}
                                       </div>
                                     ) : (
-                                      <div style={{ color: "var(--text-muted)" }}>Geen alerts in deze week.</div>
+                                      <div style={{ color: "var(--text-muted)" }}>
+                                        Geen alerts in deze week.
+                                      </div>
                                     )}
                                   </div>
                                 </div>
-                                <div style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                                <div
+                                  style={{
+                                    display: "grid",
+                                    gap: 14,
+                                    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                                  }}
+                                >
                                   {[
                                     ["Top request types", weeklyInsights.breakdowns?.request_types],
                                     ["Top onderwerpen", weeklyInsights.breakdowns?.onderwerpen],
@@ -7247,12 +8909,29 @@ export default function Home() {
                                     ["Top assignees", weeklyInsights.breakdowns?.assignees],
                                     ["Top organizations", weeklyInsights.breakdowns?.organizations],
                                   ].map(([title, rows]) => (
-                                    <div key={title} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "12px 14px", background: "var(--surface)" }}>
-                                      <div style={{ fontWeight: 700, marginBottom: 8 }}>{title}</div>
+                                    <div
+                                      key={title}
+                                      style={{
+                                        border: "1px solid var(--border)",
+                                        borderRadius: 10,
+                                        padding: "12px 14px",
+                                        background: "var(--surface)",
+                                      }}
+                                    >
+                                      <div style={{ fontWeight: 700, marginBottom: 8 }}>
+                                        {title}
+                                      </div>
                                       {Array.isArray(rows) && rows.length ? (
                                         <div style={{ display: "grid", gap: 6 }}>
                                           {rows.map((row) => (
-                                            <div key={`${title}:${row.name}`} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                                            <div
+                                              key={`${title}:${row.name}`}
+                                              style={{
+                                                display: "flex",
+                                                justifyContent: "space-between",
+                                                gap: 12,
+                                              }}
+                                            >
                                               <span>{row.name}</span>
                                               <b>{formatNumberOrDash(row.tickets)}</b>
                                             </div>
@@ -7277,101 +8956,226 @@ export default function Home() {
                 filteredAlertLogGroups.length ? (
                   <div style={{ overflowX: "auto" }}>
                     <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                    <thead>
-                      <tr>
-                        <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Tijd</th>
-                        <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Soort</th>
-                        <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Issue</th>
-                        <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Laatste info</th>
-                        <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Aantal</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredAlertLogGroups.map((group) => {
-                        const expanded = !!expandedAlertGroups[group.key];
-                        return (
-                          <Fragment key={group.key}>
-                            <tr>
-                              <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
-                                {fmtDateTime(group.latest_detected_at)}
-                              </td>
-                              <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
-                                <span style={alertKindPillStyle(group.kind)}>{alertKindLabel(group.kind)}</span>
-                              </td>
-                              <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
-                                {group.kind === "LOGBOOK_EVENT" ? (
-                                  "—"
-                                ) : (
-                                  <a href={`${JIRA_BASE}/browse/${group.issue_key}`} target="_blank" rel="noreferrer">
-                                    {group.issue_key}
-                                  </a>
-                                )}
-                              </td>
-                              <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
-                                {group.kind === "LOGBOOK_EVENT"
-                                  ? formatAlertLogbookClearMessage(group.latest_detected_at, group.status)
-                                  : (group.latest_meta || "—")}
-                              </td>
-                              <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
-                                {group.count > 1 ? (
-                                  <button
-                                    onClick={() => toggleAlertGroup(group.key)}
-                                    aria-label={expanded ? "Inklappen" : "Uitklappen"}
-                                    title={expanded ? "Inklappen" : "Uitklappen"}
-                                    style={{
-                                      border: "1px solid var(--border)",
-                                      borderRadius: 6,
-                                      background: "var(--surface)",
-                                      padding: "4px 8px",
-                                      cursor: "pointer",
-                                    }}
-                                  >
-                                    {expanded ? "▲" : "▼"} ({group.count}x)
-                                  </button>
-                                ) : (
-                                  ""
-                                )}
-                              </td>
-                            </tr>
-                            {expanded ? (
+                      <thead>
+                        <tr>
+                          <th
+                            style={{
+                              textAlign: "left",
+                              borderBottom: "1px solid var(--border)",
+                              padding: "8px",
+                            }}
+                          >
+                            Tijd
+                          </th>
+                          <th
+                            style={{
+                              textAlign: "left",
+                              borderBottom: "1px solid var(--border)",
+                              padding: "8px",
+                            }}
+                          >
+                            Soort
+                          </th>
+                          <th
+                            style={{
+                              textAlign: "left",
+                              borderBottom: "1px solid var(--border)",
+                              padding: "8px",
+                            }}
+                          >
+                            Issue
+                          </th>
+                          <th
+                            style={{
+                              textAlign: "left",
+                              borderBottom: "1px solid var(--border)",
+                              padding: "8px",
+                            }}
+                          >
+                            Laatste info
+                          </th>
+                          <th
+                            style={{
+                              textAlign: "left",
+                              borderBottom: "1px solid var(--border)",
+                              padding: "8px",
+                            }}
+                          >
+                            Aantal
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredAlertLogGroups.map((group) => {
+                          const expanded = !!expandedAlertGroups[group.key];
+                          return (
+                            <Fragment key={group.key}>
                               <tr>
-                                <td colSpan={5} style={{ padding: "0 8px 10px 8px", background: "var(--surface-muted)" }}>
-                                  <div style={{ padding: "10px 12px", border: "1px solid var(--border)", borderRadius: 8, marginTop: 6 }}>
-                                    <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8 }}>
-                                      Detailhistorie ({group.count} gebeurtenissen)
-                                    </div>
-                                    <div style={{ overflowX: "auto" }}>
-                                      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                                        <thead>
-                                          <tr>
-                                            <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "6px" }}>Tijd</th>
-                                            <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "6px" }}>Info</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody>
-                                          {group.entries.map((entry) => (
-                                            <tr key={entry.id}>
-                                              <td style={{ borderBottom: "1px solid var(--border)", padding: "6px" }}>
-                                                {fmtDateTime(entry.detected_at)}
-                                              </td>
-                                              <td style={{ borderBottom: "1px solid var(--border)", padding: "6px" }}>{entry.meta || "—"}</td>
-                                            </tr>
-                                          ))}
-                                        </tbody>
-                                      </table>
-                                    </div>
-                                  </div>
+                                <td
+                                  style={{
+                                    borderBottom: "1px solid var(--border)",
+                                    padding: "8px",
+                                  }}
+                                >
+                                  {fmtDateTime(group.latest_detected_at)}
+                                </td>
+                                <td
+                                  style={{
+                                    borderBottom: "1px solid var(--border)",
+                                    padding: "8px",
+                                  }}
+                                >
+                                  <span style={alertKindPillStyle(group.kind)}>
+                                    {alertKindLabel(group.kind)}
+                                  </span>
+                                </td>
+                                <td
+                                  style={{
+                                    borderBottom: "1px solid var(--border)",
+                                    padding: "8px",
+                                  }}
+                                >
+                                  {group.kind === "LOGBOOK_EVENT" ? (
+                                    "—"
+                                  ) : (
+                                    <a
+                                      href={`${JIRA_BASE}/browse/${group.issue_key}`}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                    >
+                                      {group.issue_key}
+                                    </a>
+                                  )}
+                                </td>
+                                <td
+                                  style={{
+                                    borderBottom: "1px solid var(--border)",
+                                    padding: "8px",
+                                  }}
+                                >
+                                  {group.kind === "LOGBOOK_EVENT"
+                                    ? formatAlertLogbookClearMessage(
+                                        group.latest_detected_at,
+                                        group.status
+                                      )
+                                    : group.latest_meta || "—"}
+                                </td>
+                                <td
+                                  style={{
+                                    borderBottom: "1px solid var(--border)",
+                                    padding: "8px",
+                                  }}
+                                >
+                                  {group.count > 1 ? (
+                                    <button
+                                      onClick={() => toggleAlertGroup(group.key)}
+                                      aria-label={expanded ? "Inklappen" : "Uitklappen"}
+                                      title={expanded ? "Inklappen" : "Uitklappen"}
+                                      style={{
+                                        border: "1px solid var(--border)",
+                                        borderRadius: 6,
+                                        background: "var(--surface)",
+                                        padding: "4px 8px",
+                                        cursor: "pointer",
+                                      }}
+                                    >
+                                      {expanded ? "▲" : "▼"} ({group.count}x)
+                                    </button>
+                                  ) : (
+                                    ""
+                                  )}
                                 </td>
                               </tr>
-                            ) : null}
-                          </Fragment>
-                        );
-                      })}
-                    </tbody>
+                              {expanded ? (
+                                <tr>
+                                  <td
+                                    colSpan={5}
+                                    style={{
+                                      padding: "0 8px 10px 8px",
+                                      background: "var(--surface-muted)",
+                                    }}
+                                  >
+                                    <div
+                                      style={{
+                                        padding: "10px 12px",
+                                        border: "1px solid var(--border)",
+                                        borderRadius: 8,
+                                        marginTop: 6,
+                                      }}
+                                    >
+                                      <div
+                                        style={{
+                                          fontSize: 12,
+                                          color: "var(--text-muted)",
+                                          marginBottom: 8,
+                                        }}
+                                      >
+                                        Detailhistorie ({group.count} gebeurtenissen)
+                                      </div>
+                                      <div style={{ overflowX: "auto" }}>
+                                        <table
+                                          style={{ width: "100%", borderCollapse: "collapse" }}
+                                        >
+                                          <thead>
+                                            <tr>
+                                              <th
+                                                style={{
+                                                  textAlign: "left",
+                                                  borderBottom: "1px solid var(--border)",
+                                                  padding: "6px",
+                                                }}
+                                              >
+                                                Tijd
+                                              </th>
+                                              <th
+                                                style={{
+                                                  textAlign: "left",
+                                                  borderBottom: "1px solid var(--border)",
+                                                  padding: "6px",
+                                                }}
+                                              >
+                                                Info
+                                              </th>
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {group.entries.map((entry) => (
+                                              <tr key={entry.id}>
+                                                <td
+                                                  style={{
+                                                    borderBottom: "1px solid var(--border)",
+                                                    padding: "6px",
+                                                  }}
+                                                >
+                                                  {fmtDateTime(entry.detected_at)}
+                                                </td>
+                                                <td
+                                                  style={{
+                                                    borderBottom: "1px solid var(--border)",
+                                                    padding: "6px",
+                                                  }}
+                                                >
+                                                  {entry.meta || "—"}
+                                                </td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    </div>
+                                  </td>
+                                </tr>
+                              ) : null}
+                            </Fragment>
+                          );
+                        })}
+                      </tbody>
                     </table>
                   </div>
                 ) : (
-                  <div style={{ color: "var(--text-muted)" }}>Geen alerts gevonden voor deze soort.</div>
+                  <div style={{ color: "var(--text-muted)" }}>
+                    Geen alerts gevonden voor deze soort.
+                  </div>
                 )
               ) : (
                 <div style={{ color: "var(--text-muted)" }}>Nog geen alerts in dit logboek.</div>
@@ -7382,7 +9186,8 @@ export default function Home() {
               <div style={{ display: "grid", gap: 12 }}>
                 {insightLogEntries.map((item) => {
                   const expanded = !!expandedInsightIds[item.id];
-                  const highlighted = selectedInsightId && String(item.id) === String(selectedInsightId);
+                  const highlighted =
+                    selectedInsightId && String(item.id) === String(selectedInsightId);
                   const sourceCurrent = item.source_payload?.current || {};
                   const sourcePrevious = item.source_payload?.previous || {};
                   const sourceLabel = item.source_payload?.label || null;
@@ -7394,20 +9199,38 @@ export default function Home() {
                         border: "1px solid var(--border)",
                         borderRadius: 12,
                         padding: 14,
-                        background: highlighted ? "color-mix(in srgb, var(--accent) 8%, var(--surface))" : "var(--surface)",
+                        background: highlighted
+                          ? "color-mix(in srgb, var(--accent) 8%, var(--surface))"
+                          : "var(--surface)",
                       }}
                     >
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          gap: 12,
+                          alignItems: "flex-start",
+                        }}
+                      >
                         <div style={{ display: "grid", gap: 6 }}>
-                          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: 8,
+                              alignItems: "center",
+                              flexWrap: "wrap",
+                            }}
+                          >
                             <strong>{item.title}</strong>
                             <span style={fixedMetricBadgeStyle}>{Math.round(item.score_pct)}%</span>
                             {item.feedback_status !== "pending" ? (
                               <span
                                 style={{
                                   ...fixedMetricBadgeStyle,
-                                  borderColor: getInsightFeedbackPresentation(item.feedback_status).borderColor,
-                                  background: getInsightFeedbackPresentation(item.feedback_status).background,
+                                  borderColor: getInsightFeedbackPresentation(item.feedback_status)
+                                    .borderColor,
+                                  background: getInsightFeedbackPresentation(item.feedback_status)
+                                    .background,
                                   color: getInsightFeedbackPresentation(item.feedback_status).color,
                                 }}
                               >
@@ -7417,36 +9240,92 @@ export default function Home() {
                           </div>
                           <div style={{ color: "var(--text-muted)" }}>{item.summary}</div>
                           <div style={{ fontSize: 12, color: "var(--text-faint)" }}>
-                            {fmtDateTime(item.detected_at)} · kaart: {cardTitleByKey(item.target_card_key)}
+                            {fmtDateTime(item.detected_at)} · kaart:{" "}
+                            {cardTitleByKey(item.target_card_key)}
                             {item.feedback_reason ? ` · reden: ${item.feedback_reason}` : ""}
                           </div>
                         </div>
-                        <button type="button" onClick={() => toggleInsightLogItem(item.id)} style={filterOpenButtonStyle}>
+                        <button
+                          type="button"
+                          onClick={() => toggleInsightLogItem(item.id)}
+                          style={filterOpenButtonStyle}
+                        >
                           {expanded ? "Verberg brondata" : "Toon brondata"}
                         </button>
                       </div>
                       {expanded ? (
                         <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
                           <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
-                            {sourceLabel ? `${sourceLabel} · ` : ""}afwijking: {item.deviation_pct == null ? "—" : `${pct(item.deviation_pct)} vs vorige periode`}
+                            {sourceLabel ? `${sourceLabel} · ` : ""}afwijking:{" "}
+                            {item.deviation_pct == null
+                              ? "—"
+                              : `${pct(item.deviation_pct)} vs vorige periode`}
                           </div>
                           <div style={{ overflowX: "auto" }}>
                             <table style={{ width: "100%", borderCollapse: "collapse" }}>
                               <thead>
                                 <tr>
-                                  <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Meting</th>
-                                  <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>{periodHeaders.currentLabel}</th>
-                                  <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>{periodHeaders.previousLabel}</th>
+                                  <th
+                                    style={{
+                                      textAlign: "left",
+                                      borderBottom: "1px solid var(--border)",
+                                      padding: "8px",
+                                    }}
+                                  >
+                                    Meting
+                                  </th>
+                                  <th
+                                    style={{
+                                      textAlign: "left",
+                                      borderBottom: "1px solid var(--border)",
+                                      padding: "8px",
+                                    }}
+                                  >
+                                    {periodHeaders.currentLabel}
+                                  </th>
+                                  <th
+                                    style={{
+                                      textAlign: "left",
+                                      borderBottom: "1px solid var(--border)",
+                                      padding: "8px",
+                                    }}
+                                  >
+                                    {periodHeaders.previousLabel}
+                                  </th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {Object.keys({ ...sourceCurrent, ...sourcePrevious })
-                                  .filter((key) => !["week_start", "month_start", "window_months"].includes(key))
+                                  .filter(
+                                    (key) =>
+                                      !["week_start", "month_start", "window_months"].includes(key)
+                                  )
                                   .map((key) => (
                                     <tr key={`${item.id}-${key}`}>
-                                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>{key}</td>
-                                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>{String(sourceCurrent?.[key] ?? "—")}</td>
-                                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>{String(sourcePrevious?.[key] ?? "—")}</td>
+                                      <td
+                                        style={{
+                                          borderBottom: "1px solid var(--border)",
+                                          padding: "8px",
+                                        }}
+                                      >
+                                        {key}
+                                      </td>
+                                      <td
+                                        style={{
+                                          borderBottom: "1px solid var(--border)",
+                                          padding: "8px",
+                                        }}
+                                      >
+                                        {String(sourceCurrent?.[key] ?? "—")}
+                                      </td>
+                                      <td
+                                        style={{
+                                          borderBottom: "1px solid var(--border)",
+                                          padding: "8px",
+                                        }}
+                                      >
+                                        {String(sourcePrevious?.[key] ?? "—")}
+                                      </td>
                                     </tr>
                                   ))}
                               </tbody>
@@ -7459,7 +9338,9 @@ export default function Home() {
                 })}
               </div>
             ) : (
-              <div style={{ color: "var(--text-muted)" }}>Nog geen AI-inzichten in het logboek.</div>
+              <div style={{ color: "var(--text-muted)" }}>
+                Nog geen AI-inzichten in het logboek.
+              </div>
             )
           ) : drillLoading ? (
             <div>Bezig met laden…</div>
@@ -7468,29 +9349,93 @@ export default function Home() {
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
-                    <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Key</th>
-                    <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Type</th>
-                    <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Onderwerp</th>
+                    <th
+                      style={{
+                        textAlign: "left",
+                        borderBottom: "1px solid var(--border)",
+                        padding: "8px",
+                      }}
+                    >
+                      Key
+                    </th>
+                    <th
+                      style={{
+                        textAlign: "left",
+                        borderBottom: "1px solid var(--border)",
+                        padding: "8px",
+                      }}
+                    >
+                      Type
+                    </th>
+                    <th
+                      style={{
+                        textAlign: "left",
+                        borderBottom: "1px solid var(--border)",
+                        padding: "8px",
+                      }}
+                    >
+                      Onderwerp
+                    </th>
                     {showPriority ? (
-                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                      <th
+                        style={{
+                          textAlign: "left",
+                          borderBottom: "1px solid var(--border)",
+                          padding: "8px",
+                        }}
+                      >
                         Priority
                       </th>
                     ) : null}
                     {showAssignee ? (
-                      <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                      <th
+                        style={{
+                          textAlign: "left",
+                          borderBottom: "1px solid var(--border)",
+                          padding: "8px",
+                        }}
+                      >
                         Assignee
                       </th>
                     ) : null}
-                    <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Status</th>
-                    <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Created</th>
-                    <th style={{ textAlign: "left", borderBottom: "1px solid var(--border)", padding: "8px" }}>Resolved</th>
+                    <th
+                      style={{
+                        textAlign: "left",
+                        borderBottom: "1px solid var(--border)",
+                        padding: "8px",
+                      }}
+                    >
+                      Status
+                    </th>
+                    <th
+                      style={{
+                        textAlign: "left",
+                        borderBottom: "1px solid var(--border)",
+                        padding: "8px",
+                      }}
+                    >
+                      Created
+                    </th>
+                    <th
+                      style={{
+                        textAlign: "left",
+                        borderBottom: "1px solid var(--border)",
+                        padding: "8px",
+                      }}
+                    >
+                      Resolved
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {drillIssues.map((x) => (
                     <tr key={x.issue_key}>
                       <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
-                        <a href={`${JIRA_BASE}/browse/${x.issue_key}`} target="_blank" rel="noreferrer">
+                        <a
+                          href={`${JIRA_BASE}/browse/${x.issue_key}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
                           {x.issue_key}
                         </a>
                       </td>
@@ -7503,7 +9448,9 @@ export default function Home() {
                       >
                         {x.request_type || ""}
                       </td>
-                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>{x.onderwerp || ""}</td>
+                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                        {x.onderwerp || ""}
+                      </td>
                       {showPriority ? (
                         <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
                           {x.priority || ""}
@@ -7514,9 +9461,15 @@ export default function Home() {
                           {x.assignee || ""}
                         </td>
                       ) : null}
-                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>{x.status || ""}</td>
-                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>{fmtDate(x.created_at)}</td>
-                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>{fmtDate(x.resolved_at)}</td>
+                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                        {x.status || ""}
+                      </td>
+                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                        {fmtDate(x.created_at)}
+                      </td>
+                      <td style={{ borderBottom: "1px solid var(--border)", padding: "8px" }}>
+                        {fmtDate(x.resolved_at)}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -7527,7 +9480,9 @@ export default function Home() {
               </div>
             </div>
           ) : (
-            <div style={{ color: "var(--text-muted)" }}>Klik op een punt in “Aantal tickets per week” om tickets te zien.</div>
+            <div style={{ color: "var(--text-muted)" }}>
+              Klik op een punt in “Aantal tickets per week” om tickets te zien.
+            </div>
           )}
         </div>
       </div>
@@ -7658,7 +9613,10 @@ export default function Home() {
           color: var(--accent);
         }
         .card-expand-title {
-          transition: transform 160ms ease, color 160ms ease, opacity 160ms ease;
+          transition:
+            transform 160ms ease,
+            color 160ms ease,
+            opacity 160ms ease;
         }
         .card-expand-title:hover {
           transform: translateY(-1px);

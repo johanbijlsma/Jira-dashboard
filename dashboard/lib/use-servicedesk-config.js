@@ -17,9 +17,15 @@ function normalizeServicedeskConfig(data) {
     ai_insight_threshold_pct: Number.isFinite(Number(data?.ai_insight_threshold_pct))
       ? Number(data.ai_insight_threshold_pct)
       : 75,
+    weekly_insights_email_recipients: Array.isArray(data?.weekly_insights_email_recipients)
+      ? data.weekly_insights_email_recipients
+      : [],
+    weekly_insights_email_enabled: Boolean(data?.weekly_insights_email_enabled),
     updated_at: data?.updated_at || null,
     team_member_avatars:
       data?.team_member_avatars && typeof data.team_member_avatars === "object" ? data.team_member_avatars : {},
+    team_member_emails:
+      data?.team_member_emails && typeof data.team_member_emails === "object" ? data.team_member_emails : {},
     saas_releases: {
       last: normalizeReleaseSlot(data?.saas_releases?.last),
       next: normalizeReleaseSlot(data?.saas_releases?.next),
@@ -33,8 +39,11 @@ export function useServicedeskConfig() {
     onderwerpen: [],
     onderwerpen_customized: false,
     ai_insight_threshold_pct: 75,
+    weekly_insights_email_recipients: [],
+    weekly_insights_email_enabled: false,
     updated_at: null,
     team_member_avatars: {},
+    team_member_emails: {},
     saas_releases: {
       last: { base_release_date: null, release_date: null, followup_date: null, cancelled: false, source: "default" },
       next: { base_release_date: null, release_date: null, followup_date: null, cancelled: false, source: "default" },

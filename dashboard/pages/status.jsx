@@ -89,22 +89,25 @@ export default function StatusPage() {
     }
   }, []);
 
-  const triggerSync = useCallback(async (full = false) => {
-    const mode = full ? "full" : "incremental";
-    try {
-      setActionBusy(mode);
-      setActionMessage("");
-      const r = await fetch(`${API}/sync${full ? "/full" : ""}`, { method: "POST" });
-      if (!r.ok) throw new Error(`Sync starten mislukt (${r.status})`);
-      setActionMessage(full ? "Full sync is gestart." : "Sync is gestart.");
-      setActionPulse((v) => v + 1);
-      await fetchStatus();
-    } catch (err) {
-      setActionMessage(err?.message || "Sync starten mislukt.");
-    } finally {
-      setActionBusy("");
-    }
-  }, [fetchStatus]);
+  const triggerSync = useCallback(
+    async (full = false) => {
+      const mode = full ? "full" : "incremental";
+      try {
+        setActionBusy(mode);
+        setActionMessage("");
+        const r = await fetch(`${API}/sync${full ? "/full" : ""}`, { method: "POST" });
+        if (!r.ok) throw new Error(`Sync starten mislukt (${r.status})`);
+        setActionMessage(full ? "Full sync is gestart." : "Sync is gestart.");
+        setActionPulse((v) => v + 1);
+        await fetchStatus();
+      } catch (err) {
+        setActionMessage(err?.message || "Sync starten mislukt.");
+      } finally {
+        setActionBusy("");
+      }
+    },
+    [fetchStatus]
+  );
 
   const triggerDevAlert = useCallback(async () => {
     try {
@@ -124,37 +127,64 @@ export default function StatusPage() {
     }
   }, [fetchStatus, fetchTestAlertState]);
 
-  const clearDevAlert = useCallback(async (issueKey) => {
-    try {
-      setActionBusy("dev-alert-clear");
-      setActionMessage("");
-      const suffix = issueKey ? `?issue_key=${encodeURIComponent(issueKey)}` : "";
-      const r = await fetch(`${API}/dev/alerts/clear${suffix}`, { method: "POST" });
-      if (!r.ok) throw new Error(`Test alert wissen mislukt (${r.status})`);
-      setActionMessage("Test alert is verwijderd.");
-      setActionPulse((v) => v + 1);
-      await fetchStatus();
-      await fetchTestAlertState();
-    } catch (err) {
-      setActionMessage(err?.message || "Test alert wissen mislukt.");
-    } finally {
-      setActionBusy("");
-    }
-  }, [fetchStatus, fetchTestAlertState]);
+  const clearDevAlert = useCallback(
+    async (issueKey) => {
+      try {
+        setActionBusy("dev-alert-clear");
+        setActionMessage("");
+        const suffix = issueKey ? `?issue_key=${encodeURIComponent(issueKey)}` : "";
+        const r = await fetch(`${API}/dev/alerts/clear${suffix}`, { method: "POST" });
+        if (!r.ok) throw new Error(`Test alert wissen mislukt (${r.status})`);
+        setActionMessage("Test alert is verwijderd.");
+        setActionPulse((v) => v + 1);
+        await fetchStatus();
+        await fetchTestAlertState();
+      } catch (err) {
+        setActionMessage(err?.message || "Test alert wissen mislukt.");
+      } finally {
+        setActionBusy("");
+      }
+    },
+    [fetchStatus, fetchTestAlertState]
+  );
 
-  const triggerTokenWarning = useCallback(async (scenario = "renewal") => {
+  const sendWeeklyInsightsTestEmail = useCallback(async () => {
     try {
-      setActionBusy("token-warning");
-      const r = await fetch(`${API}/dev/jira-token-warning/trigger?scenario=${encodeURIComponent(scenario)}`, { method: "POST" });
-      if (!r.ok) throw new Error(`Test tokenwaarschuwing mislukt (${r.status})`);
-      setActionMessage("Testwaarschuwing voor de Jira-token is gezet.");
-      await fetchTokenWarning();
+      setActionBusy("weekly-insights-test-email");
+      setActionMessage("");
+      const r = await fetch(`${API}/dev/weekly-insights/send-test-email`, { method: "POST" });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        throw new Error(data?.detail || `Testmail versturen mislukt (${r.status})`);
+      }
+      setActionMessage(`Testmail is verstuurd naar ${data.recipient || "het testadres"}.`);
+      setActionPulse((v) => v + 1);
     } catch (err) {
-      setActionMessage(err?.message || "Test tokenwaarschuwing mislukt.");
+      setActionMessage(err?.message || "Testmail versturen mislukt.");
     } finally {
       setActionBusy("");
     }
-  }, [fetchTokenWarning]);
+  }, []);
+
+  const triggerTokenWarning = useCallback(
+    async (scenario = "renewal") => {
+      try {
+        setActionBusy("token-warning");
+        const r = await fetch(
+          `${API}/dev/jira-token-warning/trigger?scenario=${encodeURIComponent(scenario)}`,
+          { method: "POST" }
+        );
+        if (!r.ok) throw new Error(`Test tokenwaarschuwing mislukt (${r.status})`);
+        setActionMessage("Testwaarschuwing voor de Jira-token is gezet.");
+        await fetchTokenWarning();
+      } catch (err) {
+        setActionMessage(err?.message || "Test tokenwaarschuwing mislukt.");
+      } finally {
+        setActionBusy("");
+      }
+    },
+    [fetchTokenWarning]
+  );
 
   const clearTokenTest = useCallback(async () => {
     try {
@@ -195,14 +225,17 @@ export default function StatusPage() {
     () =>
       Array.isArray(status?.recent_runs)
         ? status.recent_runs
-        : (Array.isArray(status?.successful_runs)
+        : Array.isArray(status?.successful_runs)
           ? status.successful_runs.map((row) => ({ ...row, success: true, error: null }))
-          : []),
+          : [],
     [status]
   );
   const selectedRun = recentRuns[selectedRunIndex] || recentRuns[0] || null;
   const latestRunHasError = recentRuns.length ? recentRuns[0]?.success === false : false;
-  const faviconHref = useMemo(() => statusFaviconDataUri(Boolean(latestRunHasError)), [latestRunHasError]);
+  const faviconHref = useMemo(
+    () => statusFaviconDataUri(Boolean(latestRunHasError)),
+    [latestRunHasError]
+  );
 
   useEffect(() => {
     if (!recentRuns.length) return;
@@ -329,10 +362,14 @@ export default function StatusPage() {
         <div style={headerStyle}>
           <div>
             <h1 style={titleStyle}>Status</h1>
-            <p style={subtleStyle}>Synchronisatie en operationele status van de dashboard backend</p>
+            <p style={subtleStyle}>
+              Synchronisatie en operationele status van de dashboard backend
+            </p>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <Link href="/" style={backLinkStyle}>Terug naar dashboard</Link>
+            <Link href="/" style={backLinkStyle}>
+              Terug naar dashboard
+            </Link>
             <button
               type="button"
               onClick={() => triggerSync(false)}
@@ -394,7 +431,11 @@ export default function StatusPage() {
           <section style={cardStyle}>
             <p style={cardTitleStyle}>Jira API-token</p>
             <p style={cardValueStyle}>{fmtDate(tokenWarning?.expires_at)}</p>
-            <p style={cardMetaStyle}>{tokenWarning?.renewal_pending ? "Vernieuwd in Jira · wacht op Development" : "Tokenconfiguratie bevestigd"}</p>
+            <p style={cardMetaStyle}>
+              {tokenWarning?.renewal_pending
+                ? "Vernieuwd in Jira · wacht op Development"
+                : "Tokenconfiguratie bevestigd"}
+            </p>
           </section>
         </div>
 
@@ -412,7 +453,8 @@ export default function StatusPage() {
             <p style={cardMetaStyle}>Laatste sync-positie: {fmtDateTime(status?.last_sync)}</p>
             <p style={cardMetaStyle}>Laatste upserts: {num(status?.last_result?.upserts)}</p>
             <p style={cardMetaStyle}>
-              Autosync: {status?.auto_sync?.enabled ? "Aan" : "Uit"} · {num(status?.auto_sync?.incremental_interval_seconds)}s
+              Autosync: {status?.auto_sync?.enabled ? "Aan" : "Uit"} ·{" "}
+              {num(status?.auto_sync?.incremental_interval_seconds)}s
             </p>
           </section>
 
@@ -421,15 +463,23 @@ export default function StatusPage() {
             <p style={cardValueStyle}>{fmtDateTime(status?.last_full_sync?.started_at)}</p>
             <p style={cardMetaStyle}>Einde: {fmtDateTime(status?.last_full_sync?.finished_at)}</p>
             <p style={cardMetaStyle}>Upserts: {num(status?.last_full_sync?.upserts)}</p>
-            <p style={cardMetaStyle}>Trigger: {triggerBadge(status?.last_full_sync?.trigger_type)}</p>
-            <p style={cardMetaStyle}>Set last sync: {fmtDateTime(status?.last_full_sync?.set_last_sync)}</p>
+            <p style={cardMetaStyle}>
+              Trigger: {triggerBadge(status?.last_full_sync?.trigger_type)}
+            </p>
+            <p style={cardMetaStyle}>
+              Set last sync: {fmtDateTime(status?.last_full_sync?.set_last_sync)}
+            </p>
           </section>
 
           <section style={cardStyle}>
             <h2 style={cardTitleStyle}>Geselecteerde sync</h2>
             <p style={cardValueStyle}>
               {selectedRun
-                ? (selectedRun.success ? "✅ Succes" : (selectedRun.error ? "❌ Fout" : "⏳ Bezig"))
+                ? selectedRun.success
+                  ? "✅ Succes"
+                  : selectedRun.error
+                    ? "❌ Fout"
+                    : "⏳ Bezig"
                 : "—"}
             </p>
             <p style={cardMetaStyle}>Start: {fmtDateTime(selectedRun?.started_at)}</p>
@@ -465,14 +515,18 @@ export default function StatusPage() {
                     <tr
                       key={`run-${idx}`}
                       onClick={() => setSelectedRunIndex(idx)}
-                      style={{ cursor: "pointer", background: idx === selectedRunIndex ? "var(--surface-muted)" : "transparent" }}
+                      style={{
+                        cursor: "pointer",
+                        background:
+                          idx === selectedRunIndex ? "var(--surface-muted)" : "transparent",
+                      }}
                     >
                       <td style={tdStyle}>{fmtDateTime(row.started_at)}</td>
                       <td style={tdStyle}>{fmtDateTime(row.finished_at)}</td>
                       <td style={tdStyle}>{row.mode || "—"}</td>
                       <td style={tdStyle}>{triggerBadge(row.trigger_type)}</td>
                       <td style={tdStyle}>
-                        {row.success ? "✅ Succes" : (row.error ? "❌ Fout" : "⏳ Bezig")}
+                        {row.success ? "✅ Succes" : row.error ? "❌ Fout" : "⏳ Bezig"}
                       </td>
                       <td style={tdStyle}>{num(row.upserts)}</td>
                       <td style={tdStyle}>{fmtDateTime(row.set_last_sync)}</td>
@@ -480,23 +534,145 @@ export default function StatusPage() {
                   ))
                 ) : (
                   <tr>
-                    <td style={tdStyle} colSpan={7}>Geen syncs gevonden.</td>
+                    <td style={tdStyle} colSpan={7}>
+                      Geen syncs gevonden.
+                    </td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
         </section>
-      <details style={{ ...cardStyle, borderColor: "color-mix(in srgb, var(--warning) 45%, var(--border))" }}>
-        <summary style={{ cursor: "pointer", fontWeight: 700, color: "var(--text-main)" }}>Testpaneel</summary>
-        <div style={{ display: "grid", gap: 12, marginTop: 14 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}><button type="button" onClick={() => testAlertKeys.length ? clearDevAlert(testAlertKeys[0]) : triggerDevAlert()} style={{ ...buttonStyle, ...(testAlertKeys.length ? { background: "var(--ok)", borderColor: "var(--ok)" } : null) }} disabled={actionBusy === "dev-alert" || actionBusy === "dev-alert-clear"}>{testAlertKeys.length ? "Stop test alert" : "Test alert"}</button><p style={{ ...cardMetaStyle, margin: 0 }}>Simuleer een binnenkomend priority-1-ticket, inclusief een TTFR-SLA-alert van 30 minuten.</p></div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}><button type="button" onClick={() => tokenWarning?.test_scenario === "renewal" ? clearTokenTest() : triggerTokenWarning("renewal")} style={{ ...buttonStyle, ...(tokenWarning?.test_scenario === "renewal" ? { background: "var(--ok)", borderColor: "var(--ok)" } : null) }}>{tokenWarning?.test_scenario === "renewal" ? "Stop test tokenwaarschuwing" : "Test tokenwaarschuwing"}</button><p style={{ ...cardMetaStyle, margin: 0 }}>Simuleer de eerste waarschuwing: de token verloopt binnenkort.</p></div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}><button type="button" onClick={() => tokenWarning?.test_scenario === "expired" ? clearTokenTest() : triggerTokenWarning("expired")} style={{ ...buttonStyle, ...(tokenWarning?.test_scenario === "expired" ? { background: "var(--ok)", borderColor: "var(--ok)" } : null) }}>{tokenWarning?.test_scenario === "expired" ? "Stop test verlopen token" : "Test verlopen token"}</button><p style={{ ...cardMetaStyle, margin: 0 }}>Simuleer dat de token is verlopen en Jira geen nieuwe gegevens meer kan leveren.</p></div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}><button type="button" onClick={() => tokenWarning?.test_scenario === "handoff_expired" ? clearTokenTest() : triggerTokenWarning("handoff_expired")} style={{ ...buttonStyle, ...(tokenWarning?.test_scenario === "handoff_expired" ? { background: "var(--ok)", borderColor: "var(--ok)" } : null) }}>{tokenWarning?.test_scenario === "handoff_expired" ? "Stop test verlopen tijdens overdracht" : "Test verlopen tijdens overdracht"}</button><p style={{ ...cardMetaStyle, margin: 0 }}>Simuleer dat Jira is vernieuwd, maar Development de nieuwe token niet vóór afloop heeft verwerkt.</p></div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}><button type="button" onClick={() => fetch(`${API}/dev/jira-token-warning/reset-pending`, { method: "POST" })} style={buttonStyle}>Herstel token teststatus</button><p style={{ ...cardMetaStyle, margin: 0 }}>Verwijder een achtergebleven teststatus zonder de echte vervaldatum te wijzigen.</p></div>
-        </div>
-      </details>
+        <details
+          style={{
+            ...cardStyle,
+            borderColor: "color-mix(in srgb, var(--warning) 45%, var(--border))",
+          }}
+        >
+          <summary style={{ cursor: "pointer", fontWeight: 700, color: "var(--text-main)" }}>
+            Testpaneel
+          </summary>
+          <div style={{ display: "grid", gap: 12, marginTop: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button
+                type="button"
+                onClick={() =>
+                  testAlertKeys.length ? clearDevAlert(testAlertKeys[0]) : triggerDevAlert()
+                }
+                style={{
+                  ...buttonStyle,
+                  ...(testAlertKeys.length
+                    ? { background: "var(--ok)", borderColor: "var(--ok)" }
+                    : null),
+                }}
+                disabled={actionBusy === "dev-alert" || actionBusy === "dev-alert-clear"}
+              >
+                {testAlertKeys.length ? "Stop test alert" : "Test alert"}
+              </button>
+              <p style={{ ...cardMetaStyle, margin: 0 }}>
+                Simuleer een binnenkomend priority-1-ticket, inclusief een TTFR-SLA-alert van 30
+                minuten.
+              </p>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button
+                type="button"
+                onClick={sendWeeklyInsightsTestEmail}
+                style={buttonStyle}
+                disabled={actionBusy === "weekly-insights-test-email"}
+              >
+                {actionBusy === "weekly-insights-test-email" ? "Versturen…" : "Stuur testmail"}
+              </button>
+              <p style={{ ...cardMetaStyle, margin: 0 }}>
+                Verstuur de meest recente Weekly Insights-PDF naar het test-e-mailadres.
+              </p>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button
+                type="button"
+                onClick={() =>
+                  tokenWarning?.test_scenario === "renewal"
+                    ? clearTokenTest()
+                    : triggerTokenWarning("renewal")
+                }
+                style={{
+                  ...buttonStyle,
+                  ...(tokenWarning?.test_scenario === "renewal"
+                    ? { background: "var(--ok)", borderColor: "var(--ok)" }
+                    : null),
+                }}
+              >
+                {tokenWarning?.test_scenario === "renewal"
+                  ? "Stop test tokenwaarschuwing"
+                  : "Test tokenwaarschuwing"}
+              </button>
+              <p style={{ ...cardMetaStyle, margin: 0 }}>
+                Simuleer de eerste waarschuwing: de token verloopt binnenkort.
+              </p>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button
+                type="button"
+                onClick={() =>
+                  tokenWarning?.test_scenario === "expired"
+                    ? clearTokenTest()
+                    : triggerTokenWarning("expired")
+                }
+                style={{
+                  ...buttonStyle,
+                  ...(tokenWarning?.test_scenario === "expired"
+                    ? { background: "var(--ok)", borderColor: "var(--ok)" }
+                    : null),
+                }}
+              >
+                {tokenWarning?.test_scenario === "expired"
+                  ? "Stop test verlopen token"
+                  : "Test verlopen token"}
+              </button>
+              <p style={{ ...cardMetaStyle, margin: 0 }}>
+                Simuleer dat de token is verlopen en Jira geen nieuwe gegevens meer kan leveren.
+              </p>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button
+                type="button"
+                onClick={() =>
+                  tokenWarning?.test_scenario === "handoff_expired"
+                    ? clearTokenTest()
+                    : triggerTokenWarning("handoff_expired")
+                }
+                style={{
+                  ...buttonStyle,
+                  ...(tokenWarning?.test_scenario === "handoff_expired"
+                    ? { background: "var(--ok)", borderColor: "var(--ok)" }
+                    : null),
+                }}
+              >
+                {tokenWarning?.test_scenario === "handoff_expired"
+                  ? "Stop test verlopen tijdens overdracht"
+                  : "Test verlopen tijdens overdracht"}
+              </button>
+              <p style={{ ...cardMetaStyle, margin: 0 }}>
+                Simuleer dat Jira is vernieuwd, maar Development de nieuwe token niet vóór afloop
+                heeft verwerkt.
+              </p>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button
+                type="button"
+                onClick={() =>
+                  fetch(`${API}/dev/jira-token-warning/reset-pending`, { method: "POST" })
+                }
+                style={buttonStyle}
+              >
+                Herstel token teststatus
+              </button>
+              <p style={{ ...cardMetaStyle, margin: 0 }}>
+                Verwijder een achtergebleven teststatus zonder de echte vervaldatum te wijzigen.
+              </p>
+            </div>
+          </div>
+        </details>
       </div>
 
       <style>{`
