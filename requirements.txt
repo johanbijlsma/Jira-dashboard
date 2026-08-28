@@ -2,5 +2,5 @@ fastapi==0.135.3
 uvicorn[standard]==0.42.0
 python-dotenv==1.2.2
 requests==2.33.1
-psycopg2-binary==2.9.11
+psycopg2-binary==2.9.12
 resend==2.42.0
