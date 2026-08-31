@@ -81,6 +81,10 @@ make dev-api
 make dev-frontend
 ```
 
+Voor een resourcevriendelijke lokale start zonder file-watchers of automatische Jira-sync gebruik
+je `make local-light`. Dit is uitsluitend voor lokaal gebruik; productie gebruikt `prod-api` en
+`prod-frontend`.
+
 Verify local health:
 
 ```bash

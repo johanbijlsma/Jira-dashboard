@@ -103,6 +103,9 @@ const AUTO_SYNC_INTERVAL_MS = Math.max(
   15000,
   (Number(process.env.NEXT_PUBLIC_AUTO_SYNC_INTERVAL_SECONDS) || 120) * 1000
 );
+const MANUAL_SYNC_ONLY = ["1", "true", "yes", "on"].includes(
+  String(process.env.NEXT_PUBLIC_MANUAL_SYNC_ONLY || "").trim().toLowerCase()
+);
 const STALE_SYNC_THRESHOLD_MS = Math.max(3 * AUTO_SYNC_INTERVAL_MS, 5 * 60 * 1000);
 const AUTO_SYNC_RETRY_THROTTLE_MS = Math.max(AUTO_SYNC_INTERVAL_MS, 60 * 1000);
 const AUTO_RESET_IDLE_MS = Math.max(
@@ -1491,10 +1494,12 @@ export default function Home() {
     themePreference,
   ]);
 
+  const refreshAlertLogsAfterLiveAlert = useCallback(
+    async () => refreshAlertLogs(),
+    [refreshAlertLogs]
+  );
   const { liveAlerts, refreshLiveAlerts } = useLiveAlerts({
-    onRefresh: async () => {
-      await refreshAlertLogs();
-    },
+    onRefresh: refreshAlertLogsAfterLiveAlert,
   });
 
   useEffect(() => {
@@ -2017,7 +2022,7 @@ export default function Home() {
   }, [faviconSignal.href, faviconSignal.pulseHref, faviconSignal.shouldPulse]);
 
   useEffect(() => {
-    if (backendAutoSyncEnabled) return undefined;
+    if (MANUAL_SYNC_ONLY || backendAutoSyncEnabled) return undefined;
     const t = setInterval(() => {
       if (syncBusy) return;
       triggerSync({ silent: true }).catch(() => {});
@@ -2026,7 +2031,7 @@ export default function Home() {
   }, [backendAutoSyncEnabled, syncBusy, triggerSync]);
 
   useEffect(() => {
-    if (backendAutoSyncEnabled) return;
+    if (MANUAL_SYNC_ONLY || backendAutoSyncEnabled) return;
     if (!syncStatus || syncBusy) return;
     const lastSyncRaw = syncStatus.last_sync;
     const lastSync = lastSyncRaw ? new Date(lastSyncRaw) : null;

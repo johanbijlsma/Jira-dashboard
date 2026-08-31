@@ -55,6 +55,22 @@ Open:
 - `http://127.0.0.1:8000/status`
 - `http://127.0.0.1:3000`
 
+## Lichte lokale modus
+
+Gebruik dit wanneer je alleen in het dashboard wilt kijken of handmatig wilt synchroniseren:
+
+```bash
+make local-light
+```
+
+De eerste keer bouwt deze opdracht de frontend en start daarna de productie-servers lokaal. Daarna
+wordt dezelfde build hergebruikt. Daardoor zijn Next.js Hot Module Reloading en de Python
+file-watcher uitgeschakeld. Ook worden er geen automatische Jira-syncs, Weekly Insights-generaties
+of Teams-alerts gestart. De backend gebruikt hierbij de standaard `asyncio`-eventloop in plaats van
+`uvloop`, om onnodige idle-CPU-belasting op macOS te voorkomen. Gebruik de statuspagina of `make sync`
+wanneer je gegevens wilt verversen. Na een wijziging aan de frontend vernieuw je de build met
+`make local-light-build`.
+
 ## Safe local mode without Teams alerts
 
 If you want to use the dashboard locally without sending duplicate Teams alerts, use:

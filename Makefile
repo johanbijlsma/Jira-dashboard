@@ -1,6 +1,6 @@
-.PHONY: sync sync-full dev-api dev-api-no-reload dev-frontend dev-frontend-network dev-check \
-	dev-local-no-alerts serve-local \
-	prod-api prod-frontend prod-frontend-network prod-build prod-check db-check \
+.PHONY: sync sync-full dev-api dev-api-no-reload dev-frontend dev-check \
+	dev-local-no-alerts local-light local-light-build serve-local \
+	prod-api prod-frontend prod-build prod-check db-check \
 	install-hooks test-api test-dashboard test semgrep-local
 
 sync:
@@ -19,15 +19,23 @@ dev-frontend:
 	test -x dashboard/node_modules/.bin/next || npm --prefix dashboard ci
 	npm --prefix dashboard run dev -- -H 127.0.0.1 -p 3000
 
-dev-frontend-network:
-	test -x dashboard/node_modules/.bin/next || npm --prefix dashboard ci
-	npm --prefix dashboard run dev -- -H 0.0.0.0 -p 3000
-
 dev-check:
 	curl -sS http://127.0.0.1:8000/status
 
 dev-local-no-alerts:
 	./scripts/dev-local-no-alerts.sh
+
+
+# Resource-friendly local mode: production servers, no file watchers and no automatic Jira sync.
+# Run `make local-light-build` after changing frontend code.
+local-light:
+	test -f dashboard/.next/.local-light-build || $(MAKE) local-light-build
+	./scripts/local-light.sh
+
+local-light-build:
+	test -x dashboard/node_modules/.bin/next || npm --prefix dashboard ci
+	NEXT_PUBLIC_MANUAL_SYNC_ONLY=true npm --prefix dashboard run build
+	touch dashboard/.next/.local-light-build
 
 serve-local: prod-build
 	./scripts/serve-local.sh
@@ -37,9 +45,6 @@ prod-api:
 
 prod-frontend: prod-build
 	npm --prefix dashboard run start -- -H 127.0.0.1 -p 3000
-
-prod-frontend-network: prod-build
-	npm --prefix dashboard run start -- -H 0.0.0.0 -p 3000
 
 prod-build:
 	npm --prefix dashboard ci

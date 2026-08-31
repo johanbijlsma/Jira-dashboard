@@ -516,6 +516,24 @@ describe("dashboard hooks", () => {
     expect(result.current.liveAlerts.time_to_resolution_overdue).toEqual([]);
   });
 
+  it("does not refetch live alerts when the onRefresh callback changes", async () => {
+    global.fetch = createFetchMock({
+      "/alerts/live?": [{ priority1: [] }],
+    });
+    const firstRefresh = vi.fn();
+    const secondRefresh = vi.fn();
+
+    const { rerender } = renderHook(({ onRefresh }) => useLiveAlerts({ onRefresh }), {
+      initialProps: { onRefresh: firstRefresh },
+    });
+
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
+    rerender({ onRefresh: secondRefresh });
+
+    await act(async () => {});
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("loads alert logs, tracks unseen entries, registers polling, and resets the badge", async () => {
     const setIntervalSpy = vi.spyOn(window, "setInterval");
     global.fetch = createFetchMock({
