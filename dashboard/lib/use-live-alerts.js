@@ -32,6 +32,11 @@ export function useLiveAlerts({ onRefresh } = {}) {
   const [liveAlerts, setLiveAlerts] = useState(DEFAULT_LIVE_ALERTS);
   const isPageVisible = usePageVisibility();
   const wasPageVisibleRef = useRef(isPageVisible);
+  const onRefreshRef = useRef(onRefresh);
+
+  useEffect(() => {
+    onRefreshRef.current = onRefresh;
+  }, [onRefresh]);
 
   const refreshLiveAlerts = useCallback(async () => {
     const params = new URLSearchParams();
@@ -39,9 +44,9 @@ export function useLiveAlerts({ onRefresh } = {}) {
     const data = await fetch(`${API}/alerts/live?${params.toString()}`).then((r) => r.json());
     const normalized = normalizeLiveAlerts(data);
     setLiveAlerts(normalized);
-    await onRefresh?.(normalized);
+    await onRefreshRef.current?.(normalized);
     return normalized;
-  }, [onRefresh]);
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
