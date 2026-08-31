@@ -595,6 +595,7 @@ export default function Home() {
   const { syncStatus, refreshSyncStatus } = useSyncStatus();
   const syncBusy = syncLoading || !!syncStatus?.running;
   const backendAutoSyncEnabled = !!syncStatus?.auto_sync?.enabled;
+  const autoSyncDisabled = syncStatus?.auto_sync?.enabled === false;
   const syncStatusInlineText = useMemo(() => {
     if (!syncStatus) return "";
     const base = syncStatus.running
@@ -3714,6 +3715,26 @@ export default function Home() {
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
+  };
+  const autoSyncDisabledAlertStyle = {
+    position: "fixed",
+    left: "50%",
+    bottom: 8,
+    transform: "translateX(-50%)",
+    zIndex: 1000,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 8,
+    maxWidth: "min(760px, calc(100vw - 152px))",
+    padding: "9px 14px",
+    borderRadius: 10,
+    border: "1px solid color-mix(in srgb, var(--danger) 76%, var(--surface))",
+    background: "color-mix(in srgb, var(--danger) 92%, var(--surface))",
+    color: "#fff",
+    boxShadow: "0 8px 20px var(--shadow-strong)",
+    fontSize: 13,
+    fontWeight: 700,
+    lineHeight: 1.35,
   };
   const filterOpenButtonStyle = {
     ...buttonBaseStyle,
@@ -9496,6 +9517,17 @@ export default function Home() {
         <Link href="/status" title="Open statuspagina" style={{ textDecoration: "none" }}>
           <div title={syncStatusInlineText} style={{ ...syncDockStyle, cursor: "pointer" }}>
             {syncStatusInlineText}
+          </div>
+        </Link>
+      ) : null}
+
+      {autoSyncDisabled ? (
+        <Link href="/status" title="Open statuspagina" style={{ textDecoration: "none" }}>
+          <div role="alert" style={{ ...autoSyncDisabledAlertStyle, cursor: "pointer" }}>
+            <span aria-hidden="true">!</span>
+            <span>
+              Auto sync staat uit. Dashboardgegevens verversen alleen na een handmatige sync.
+            </span>
           </div>
         </Link>
       ) : null}
