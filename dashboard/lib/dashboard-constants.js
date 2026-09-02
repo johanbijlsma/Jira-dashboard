@@ -67,29 +67,29 @@ export const MAX_CARDS_PER_ROW = 5;
 export const MAX_KPI_TILES = 8;
 
 export const CHART_CARD_SETTING_CAPABILITIES = {
-  volume: { legend: true, total: true, movingAverage: true },
-  onderwerp: { legend: true, movingAverage: true },
+  volume: { legend: true, total: true, movingAverage: true, currentWeek: true },
+  onderwerp: { legend: true, movingAverage: true, currentWeek: true },
   priority: { legend: true },
   assignee: { legend: true },
   p90: { legend: true },
-  inflowVsClosed: { legend: true },
+  inflowVsClosed: { legend: true, currentWeek: true },
   releaseWorkload: { legend: true },
-  incidentResolution: { legend: true },
-  firstResponseAll: { legend: true },
-  organizationWeekly: { legend: true },
+  incidentResolution: { legend: true, currentWeek: true },
+  firstResponseAll: { legend: true, currentWeek: true },
+  organizationWeekly: { legend: true, currentWeek: true },
 };
 
 export const DEFAULT_CHART_CARD_SETTINGS = {
-  volume: { legend: false, total: true, movingAverage: true },
-  onderwerp: { legend: false, movingAverage: false },
+  volume: { legend: false, total: true, movingAverage: true, currentWeek: true },
+  onderwerp: { legend: false, movingAverage: false, currentWeek: true },
   priority: { legend: false },
   assignee: { legend: false },
   p90: { legend: true },
-  inflowVsClosed: { legend: true },
+  inflowVsClosed: { legend: true, currentWeek: true },
   releaseWorkload: { legend: false },
-  incidentResolution: { legend: true },
-  firstResponseAll: { legend: true },
-  organizationWeekly: { legend: true },
+  incidentResolution: { legend: true, currentWeek: true },
+  firstResponseAll: { legend: true, currentWeek: true },
+  organizationWeekly: { legend: true, currentWeek: true },
 };
 
 export function createDefaultDashboardLayout() {

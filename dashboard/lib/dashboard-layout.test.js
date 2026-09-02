@@ -99,14 +99,20 @@ describe("dashboard-layout", () => {
   it("keeps only supported chart settings", () => {
     const normalized = normalizeDashboardLayout({
       chartSettings: {
-        volume: { legend: true, total: false, movingAverage: false, unexpected: true },
+        volume: {
+          legend: true,
+          total: false,
+          movingAverage: false,
+          currentWeek: false,
+          unexpected: true,
+        },
         priority: { legend: true, total: false },
         missing: { legend: false },
       },
     });
 
     expect(normalized.chartSettings).toEqual({
-      volume: { legend: true, total: false, movingAverage: false },
+      volume: { legend: true, total: false, movingAverage: false, currentWeek: false },
       priority: { legend: true },
     });
   });

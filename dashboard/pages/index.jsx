@@ -104,7 +104,9 @@ const AUTO_SYNC_INTERVAL_MS = Math.max(
   (Number(process.env.NEXT_PUBLIC_AUTO_SYNC_INTERVAL_SECONDS) || 120) * 1000
 );
 const MANUAL_SYNC_ONLY = ["1", "true", "yes", "on"].includes(
-  String(process.env.NEXT_PUBLIC_MANUAL_SYNC_ONLY || "").trim().toLowerCase()
+  String(process.env.NEXT_PUBLIC_MANUAL_SYNC_ONLY || "")
+    .trim()
+    .toLowerCase()
 );
 const STALE_SYNC_THRESHOLD_MS = Math.max(3 * AUTO_SYNC_INTERVAL_MS, 5 * 60 * 1000);
 const AUTO_SYNC_RETRY_THROTTLE_MS = Math.max(AUTO_SYNC_INTERVAL_MS, 60 * 1000);
@@ -299,6 +301,7 @@ function formatNumberOrDash(value) {
 
 const WEEKLY_INSIGHTS_GROUP_KEY = "__weekly_insights__";
 const DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY = "jsm_dashboard_layout_scope_v1";
+const DASHBOARD_SHARED_LAYOUT_SNAPSHOT_STORAGE_KEY = "jsm_dashboard_shared_layout_snapshot_v1";
 const DASHBOARD_THEME_STORAGE_KEY = "jsm_dashboard_theme_preference_v1";
 const THEME_PREFERENCES = new Set(["system", "light", "dark"]);
 
@@ -464,8 +467,11 @@ export default function Home() {
   const [layoutSavedSnapshot, setLayoutSavedSnapshot] = useState("");
   const [isLayoutEditing, setIsLayoutEditing] = useState(false);
   const [layoutChoiceOpen, setLayoutChoiceOpen] = useState(false);
-  const [layoutStorageScope, setLayoutStorageScope] = useState("local");
   const [layoutSaving, setLayoutSaving] = useState(false);
+  const [isPersonalLayout, setIsPersonalLayout] = useState(false);
+  const [sharedLayoutSnapshot, setSharedLayoutSnapshot] = useState("");
+  const [layoutSavedThemePreference, setLayoutSavedThemePreference] = useState("system");
+  const [layoutSavedTvMode, setLayoutSavedTvMode] = useState(false);
   const [openCardSettings, setOpenCardSettings] = useState("");
   const [openLiveKpiSettings, setOpenLiveKpiSettings] = useState(false);
   const [hiddenOverlayHeight, setHiddenOverlayHeight] = useState(0);
@@ -521,15 +527,15 @@ export default function Home() {
   const layoutDirty = useMemo(
     () =>
       layoutSavedSnapshot !== JSON.stringify(dashboardLayout) ||
-      themePreferenceDraft !== themePreference ||
-      tvModeDraft !== isTvMode,
+      themePreferenceDraft !== layoutSavedThemePreference ||
+      tvModeDraft !== layoutSavedTvMode,
     [
-      isTvMode,
       layoutSavedSnapshot,
       dashboardLayout,
-      themePreference,
       themePreferenceDraft,
       tvModeDraft,
+      layoutSavedThemePreference,
+      layoutSavedTvMode,
     ]
   );
 
@@ -935,7 +941,16 @@ export default function Home() {
   }, []);
 
   const toggleTvMode = useCallback(() => {
-    setTvModeDraft((previous) => !previous);
+    setTvModeDraft((previous) => {
+      const next = !previous;
+      setIsTvMode(next);
+      return next;
+    });
+  }, []);
+
+  const previewThemePreference = useCallback((next) => {
+    setThemePreferenceDraft(next);
+    setThemePreference(next);
   }, []);
 
   const applyThemePreference = useCallback((next) => {
@@ -1034,11 +1049,17 @@ export default function Home() {
         });
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
-          throw new Error(err?.detail || `Opslaan van e-mailinstelling mislukt (HTTP ${res.status}).`);
+          throw new Error(
+            err?.detail || `Opslaan van e-mailinstelling mislukt (HTTP ${res.status}).`
+          );
         }
         const updated = await res.json();
         applyServicedeskConfig(updated, normalizedOnderwerpenSelection);
-        flashToast(enabled ? "Automatisch versturen is ingeschakeld." : "Automatisch versturen is uitgeschakeld.");
+        flashToast(
+          enabled
+            ? "Automatisch versturen is ingeschakeld."
+            : "Automatisch versturen is uitgeschakeld."
+        );
       } catch (err) {
         flashToast(err?.message || "Opslaan van e-mailinstelling mislukt.", "error");
       } finally {
@@ -1339,87 +1360,78 @@ export default function Home() {
     ]
   );
 
-  const saveDashboardLayout = useCallback(async () => {
-    const serialized = JSON.stringify(dashboardLayout);
-    setLayoutSaving(true);
-    try {
-      if (layoutStorageScope === "shared") {
-        const response = await fetch(`${API}/config/dashboard-layout`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ layout: dashboardLayout }),
-        });
-        if (!response.ok) {
-          const error = await response.json().catch(() => ({}));
-          throw new Error(error?.detail || "Opslaan voor iedereen is mislukt.");
+  const saveDashboardLayout = useCallback(
+    async (scope) => {
+      const serialized = JSON.stringify(dashboardLayout);
+      setLayoutSaving(true);
+      try {
+        if (scope === "shared") {
+          const response = await fetch(`${API}/config/dashboard-layout`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ layout: dashboardLayout }),
+          });
+          if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error?.detail || "Opslaan voor iedereen is mislukt.");
+          }
+        } else if (typeof window !== "undefined") {
+          window.localStorage.setItem(DASHBOARD_CONFIG_STORAGE_KEY, serialized);
+          window.localStorage.setItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY, "local");
+          window.localStorage.setItem(
+            DASHBOARD_SHARED_LAYOUT_SNAPSHOT_STORAGE_KEY,
+            sharedLayoutSnapshot
+          );
         }
-      } else if (typeof window !== "undefined") {
-        window.localStorage.setItem(DASHBOARD_CONFIG_STORAGE_KEY, serialized);
-        window.localStorage.setItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY, "local");
+        if (scope === "shared" && typeof window !== "undefined") {
+          window.localStorage.removeItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY);
+          window.localStorage.removeItem(DASHBOARD_CONFIG_STORAGE_KEY);
+          window.localStorage.removeItem(DASHBOARD_SHARED_LAYOUT_SNAPSHOT_STORAGE_KEY);
+        }
+        applyThemePreference(themePreferenceDraft);
+        applyTvModePreference(tvModeDraft);
+        setLayoutSavedSnapshot(serialized);
+        setLayoutSavedThemePreference(themePreferenceDraft);
+        setLayoutSavedTvMode(tvModeDraft);
+        if (scope === "shared") setSharedLayoutSnapshot(serialized);
+        setIsPersonalLayout(scope === "local");
+        setIsLayoutEditing(false);
+        setLayoutChoiceOpen(false);
+        setOpenCardSettings("");
+        flashToast(
+          scope === "shared" ? "Indeling opgeslagen voor iedereen" : "Indeling opgeslagen voor jou"
+        );
+      } catch (error) {
+        flashToast(error?.message || "Opslaan van de indeling is mislukt.", "error");
+      } finally {
+        setLayoutSaving(false);
       }
-      if (layoutStorageScope === "shared" && typeof window !== "undefined") {
-        window.localStorage.removeItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY);
-      }
-      applyThemePreference(themePreferenceDraft);
-      applyTvModePreference(tvModeDraft);
-      setLayoutSavedSnapshot(serialized);
-      setIsLayoutEditing(false);
-      setOpenCardSettings("");
-      flashToast(
-        layoutStorageScope === "shared"
-          ? "Indeling opgeslagen voor iedereen"
-          : "Indeling opgeslagen voor jou"
-      );
-    } catch (error) {
-      flashToast(error?.message || "Opslaan van de indeling is mislukt.", "error");
-    } finally {
-      setLayoutSaving(false);
-    }
-  }, [
-    applyThemePreference,
-    applyTvModePreference,
-    dashboardLayout,
-    flashToast,
-    layoutStorageScope,
-    themePreferenceDraft,
-    tvModeDraft,
-  ]);
+    },
+    [
+      applyThemePreference,
+      applyTvModePreference,
+      dashboardLayout,
+      flashToast,
+      sharedLayoutSnapshot,
+      themePreferenceDraft,
+      tvModeDraft,
+    ]
+  );
 
   const startLayoutEditing = useCallback(() => {
     setVacationEditMode(false);
-    setLayoutChoiceOpen(true);
-  }, []);
-
-  const startLocalLayoutEditing = useCallback(() => {
-    setLayoutStorageScope("local");
+    if (typeof window !== "undefined") {
+      setIsPersonalLayout(
+        window.localStorage.getItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY) === "local"
+      );
+    }
     setLayoutSavedSnapshot(JSON.stringify(dashboardLayout));
     setThemePreferenceDraft(themePreference);
     setTvModeDraft(isTvMode);
-    setLayoutChoiceOpen(false);
+    setLayoutSavedThemePreference(themePreference);
+    setLayoutSavedTvMode(isTvMode);
     setIsLayoutEditing(true);
   }, [dashboardLayout, isTvMode, themePreference]);
-
-  const startSharedLayoutEditing = useCallback(async () => {
-    setLayoutSaving(true);
-    try {
-      const response = await fetch(`${API}/config/dashboard-layout`);
-      if (!response.ok) throw new Error("De gedeelde indeling kon niet worden geladen.");
-      const payload = await response.json();
-      const next = payload?.layout ? normalizeDashboardLayout(payload.layout) : dashboardLayout;
-      const serialized = JSON.stringify(next);
-      setDashboardLayout(next);
-      setLayoutSavedSnapshot(serialized);
-      setThemePreferenceDraft(themePreference);
-      setTvModeDraft(isTvMode);
-      setLayoutStorageScope("shared");
-      setLayoutChoiceOpen(false);
-      setIsLayoutEditing(true);
-    } catch (error) {
-      flashToast(error?.message || "De gedeelde indeling kon niet worden geladen.", "error");
-    } finally {
-      setLayoutSaving(false);
-    }
-  }, [dashboardLayout, flashToast, isTvMode, normalizeDashboardLayout, themePreference]);
 
   const cancelLayoutEditing = useCallback(() => {
     try {
@@ -1430,70 +1442,26 @@ export default function Home() {
     } catch {
       setDashboardLayout(normalizeDashboardLayout(createDefaultDashboardLayout()));
     }
-    setThemePreferenceDraft(themePreference);
-    setTvModeDraft(isTvMode);
+    setThemePreference(layoutSavedThemePreference);
+    setThemePreferenceDraft(layoutSavedThemePreference);
+    setIsTvMode(layoutSavedTvMode);
+    setTvModeDraft(layoutSavedTvMode);
     setIsLayoutEditing(false);
     setOpenCardSettings("");
     setCardDropHint(null);
     setKpiDropHint(null);
     dragStateRef.current = null;
-  }, [isTvMode, layoutSavedSnapshot, normalizeDashboardLayout, themePreference]);
-
-  const resetLayoutAndClose = useCallback(async () => {
-    const next = normalizeDashboardLayout(createDefaultDashboardLayout());
-    const serialized = JSON.stringify(next);
-    setDashboardLayout(next);
-    if (layoutStorageScope === "shared") {
-      setLayoutSaving(true);
-      try {
-        const response = await fetch(`${API}/config/dashboard-layout`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ layout: next }),
-        });
-        if (!response.ok) throw new Error("Herstellen voor iedereen is mislukt.");
-      } catch (error) {
-        try {
-          const previous = layoutSavedSnapshot
-            ? JSON.parse(layoutSavedSnapshot)
-            : createDefaultDashboardLayout();
-          setDashboardLayout(normalizeDashboardLayout(previous));
-        } catch {
-          setDashboardLayout(normalizeDashboardLayout(createDefaultDashboardLayout()));
-        }
-        flashToast(error?.message || "Herstellen van de indeling is mislukt.", "error");
-        return;
-      } finally {
-        setLayoutSaving(false);
-      }
-    } else if (typeof window !== "undefined") {
-      window.localStorage.setItem(DASHBOARD_CONFIG_STORAGE_KEY, serialized);
-      window.localStorage.setItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY, "local");
-    }
-    if (layoutStorageScope === "shared" && typeof window !== "undefined") {
-      window.localStorage.removeItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY);
-    }
-    setLayoutSavedSnapshot(serialized);
-    setThemePreferenceDraft(themePreference);
-    setTvModeDraft(isTvMode);
-    setIsLayoutEditing(false);
-    setOpenCardSettings("");
-    setCardDropHint(null);
-    setKpiDropHint(null);
-    dragStateRef.current = null;
-    flashToast(
-      layoutStorageScope === "shared"
-        ? "Indeling voor iedereen hersteld"
-        : "Indeling voor jou hersteld"
-    );
   }, [
-    flashToast,
-    isTvMode,
     layoutSavedSnapshot,
-    layoutStorageScope,
+    layoutSavedThemePreference,
+    layoutSavedTvMode,
     normalizeDashboardLayout,
-    themePreference,
   ]);
+
+  const resetLayoutDraft = useCallback(() => {
+    const next = normalizeDashboardLayout(createDefaultDashboardLayout());
+    setDashboardLayout(next);
+  }, [normalizeDashboardLayout]);
 
   const refreshAlertLogsAfterLiveAlert = useCallback(
     async () => refreshAlertLogs(),
@@ -1904,6 +1872,9 @@ export default function Home() {
       const normalizedStored = normalizeDashboardLayout(JSON.parse(raw));
       setDashboardLayout(normalizedStored);
       setLayoutSavedSnapshot(JSON.stringify(normalizedStored));
+      setIsPersonalLayout(
+        window.localStorage.getItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY) === "local"
+      );
     } catch {
       const normalizedDefault = normalizeDashboardLayout(createDefaultDashboardLayout());
       setDashboardLayout(normalizedDefault);
@@ -1913,8 +1884,6 @@ export default function Home() {
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
-    if (window.localStorage.getItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY) === "local")
-      return undefined;
     let cancelled = false;
     fetch(`${API}/config/dashboard-layout`)
       .then(async (response) => {
@@ -1922,11 +1891,31 @@ export default function Home() {
         return response.json();
       })
       .then((payload) => {
-        if (cancelled || !payload?.layout) return;
-        const normalized = normalizeDashboardLayout(payload.layout);
-        setDashboardLayout(normalized);
-        setLayoutSavedSnapshot(JSON.stringify(normalized));
-        setLayoutStorageScope("shared");
+        if (cancelled) return;
+        const normalized = normalizeDashboardLayout(
+          payload?.layout || createDefaultDashboardLayout()
+        );
+        const sharedSnapshot = JSON.stringify(normalized);
+        setSharedLayoutSnapshot(sharedSnapshot);
+        const localScope =
+          window.localStorage.getItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY) === "local";
+        const localBaseSnapshot = window.localStorage.getItem(
+          DASHBOARD_SHARED_LAYOUT_SNAPSHOT_STORAGE_KEY
+        );
+        if (localScope && localBaseSnapshot && localBaseSnapshot !== sharedSnapshot) {
+          window.localStorage.removeItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY);
+          window.localStorage.removeItem(DASHBOARD_CONFIG_STORAGE_KEY);
+          window.localStorage.removeItem(DASHBOARD_SHARED_LAYOUT_SNAPSHOT_STORAGE_KEY);
+          setDashboardLayout(normalized);
+          setLayoutSavedSnapshot(sharedSnapshot);
+          setIsPersonalLayout(false);
+          return;
+        }
+        if (!localScope) {
+          setDashboardLayout(normalized);
+          setLayoutSavedSnapshot(sharedSnapshot);
+          setIsPersonalLayout(false);
+        }
       })
       .catch(() => {
         // The local/default layout remains usable when the shared layout is unavailable.
@@ -2350,6 +2339,29 @@ export default function Home() {
         "organizationWeekly",
       ]),
     []
+  );
+  const chartShowsCurrentWeek = useCallback(
+    (cardKey) => chartSettingsFor(cardKey).currentWeek !== false,
+    [chartSettingsFor]
+  );
+  const chartWeeks = useCallback(
+    (cardKey) =>
+      !chartShowsCurrentWeek(cardKey) && trailingPartialWeekIndex >= 0 ? weeks.slice(0, -1) : weeks,
+    [chartShowsCurrentWeek, trailingPartialWeekIndex, weeks]
+  );
+  const chartDataWithoutHiddenCurrentWeek = useCallback(
+    (cardKey, chartData) => {
+      if (chartShowsCurrentWeek(cardKey) || trailingPartialWeekIndex < 0) return chartData;
+      return {
+        ...chartData,
+        labels: chartData.labels.slice(0, -1),
+        datasets: chartData.datasets.map((dataset) => ({
+          ...dataset,
+          data: Array.isArray(dataset.data) ? dataset.data.slice(0, -1) : dataset.data,
+        })),
+      };
+    },
+    [chartShowsCurrentWeek, trailingPartialWeekIndex]
   );
   const [slowChartCards, setSlowChartCards] = useState({});
   const slowChartTimersRef = useRef(new Map());
@@ -4913,9 +4925,10 @@ export default function Home() {
 
     if (cardKey === "volume") {
       const settings = chartSettingsFor("volume");
+      const lineChartData = chartDataWithoutHiddenCurrentWeek("volume", lineData);
       const chartData = {
-        ...lineData,
-        datasets: lineData.datasets.filter((dataset) => {
+        ...lineChartData,
+        datasets: lineChartData.datasets.filter((dataset) => {
           if (!settings.total && isTotalLabel(dataset.label)) return false;
           if (
             !settings.movingAverage &&
@@ -4938,7 +4951,7 @@ export default function Home() {
                 onClick: (_evt, elements) => {
                   const el = elements?.[0];
                   if (!el) return;
-                  const weekStart = weeks[el.index];
+                  const weekStart = chartWeeks("volume")[el.index];
                   const typeLabel = chartData.datasets[el.datasetIndex]?.label;
                   if (String(typeLabel || "").startsWith("Voortschrijdend gemiddelde")) return;
                   const effectiveType = requestType
@@ -4978,21 +4991,30 @@ export default function Home() {
 
     if (cardKey === "onderwerp") {
       const settings = chartSettingsFor("onderwerp");
+      const onderwerpWeeks = chartWeeks("onderwerp");
+      const onderwerpSeries = chartShowsCurrentWeek("onderwerp")
+        ? topicTrendSeries
+        : buildTopicTrendSeries({
+            rows: onderwerpVolume,
+            bucketKeys: onderwerpWeeks,
+            selectedTopic: onderwerp,
+            limit: 5,
+          });
       const onderwerpContentStyle = expanded
         ? { display: "flex", flexDirection: "column", flex: 1, minHeight: 0, height: "100%" }
         : { display: "flex", flexDirection: "column", flex: 1, minHeight: 0 };
       return (
         <div style={onderwerpContentStyle}>
           <div style={bodyStyle}>
-            {topicTrendsHasData ? (
+            {onderwerpSeries.some((series) => series.total > 0) ? (
               <TopicTrendsCard
-                topics={topicTrendSeries}
+                topics={onderwerpSeries}
                 selectedTopic={selectedTopicTrend}
                 onSelectTopic={setSelectedTopicTrend}
                 onDetailPointClick={(bucketLabel, topicLabel) =>
                   fetchDrilldown(bucketLabel, requestType, topicLabel)
                 }
-                labels={weeklyLabels(weeksOnderwerp)}
+                labels={weeklyLabels(onderwerpWeeks)}
                 buildChartAxis={buildChartAxis}
                 chartKey={chartRenderKey("onderwerp")}
                 animation={slowChartAnimation("onderwerp")}
@@ -5172,12 +5194,13 @@ export default function Home() {
 
     if (cardKey === "inflowVsClosed") {
       const settings = chartSettingsFor("inflowVsClosed");
+      const chartData = chartDataWithoutHiddenCurrentWeek("inflowVsClosed", inflowVsClosedLineData);
       return (
         <div style={bodyStyle}>
-          {hasDataPoints(inflowVsClosedLineData) ? (
+          {hasDataPoints(chartData) ? (
             <Line
               key={chartRenderKey("inflowVsClosed")}
-              data={inflowVsClosedLineData}
+              data={chartData}
               options={{
                 responsive: true,
                 maintainAspectRatio: false,
@@ -5185,9 +5208,8 @@ export default function Home() {
                 onClick: (_evt, elements) => {
                   const el = elements?.[0];
                   if (!el) return;
-                  const weekStart = weeks[el.index];
-                  const datasetLabel =
-                    inflowVsClosedLineData.datasets?.[el.datasetIndex]?.label || "";
+                  const weekStart = chartWeeks("inflowVsClosed")[el.index];
+                  const datasetLabel = chartData.datasets?.[el.datasetIndex]?.label || "";
                   const isClosed = String(datasetLabel).toLowerCase().includes("afgesloten");
                   fetchDrilldown(weekStart, requestType, onderwerp || "", 0, {
                     dateField: isClosed ? "resolved" : "created",
@@ -5326,12 +5348,16 @@ export default function Home() {
 
     if (cardKey === "incidentResolution") {
       const settings = chartSettingsFor("incidentResolution");
+      const chartData = chartDataWithoutHiddenCurrentWeek(
+        "incidentResolution",
+        incidentResolutionLineData
+      );
       return (
         <div style={bodyStyle}>
-          {hasDataPoints(incidentResolutionLineData) ? (
+          {hasDataPoints(chartData) ? (
             <Line
               key={chartRenderKey("incidentResolution")}
-              data={incidentResolutionLineData}
+              data={chartData}
               options={{
                 responsive: true,
                 maintainAspectRatio: false,
@@ -5371,12 +5397,16 @@ export default function Home() {
 
     if (cardKey === "firstResponseAll") {
       const settings = chartSettingsFor("firstResponseAll");
+      const chartData = chartDataWithoutHiddenCurrentWeek(
+        "firstResponseAll",
+        firstResponseLineData
+      );
       return (
         <div style={bodyStyle}>
-          {hasDataPoints(firstResponseLineData) ? (
+          {hasDataPoints(chartData) ? (
             <Line
               key={chartRenderKey("firstResponseAll")}
-              data={firstResponseLineData}
+              data={chartData}
               options={{
                 responsive: true,
                 maintainAspectRatio: false,
@@ -5405,12 +5435,16 @@ export default function Home() {
 
     if (cardKey === "organizationWeekly") {
       const settings = chartSettingsFor("organizationWeekly");
+      const chartData = chartDataWithoutHiddenCurrentWeek(
+        "organizationWeekly",
+        organizationBarData
+      );
       return (
         <div style={bodyStyle}>
-          {hasDataPoints(organizationBarData) ? (
+          {hasDataPoints(chartData) ? (
             <Bar
               key={chartRenderKey("organizationWeekly")}
-              data={organizationBarData}
+              data={chartData}
               options={{
                 responsive: true,
                 maintainAspectRatio: false,
@@ -6758,7 +6792,9 @@ export default function Home() {
                     }}
                   >
                     <span>
-                      <span style={{ display: "block", fontWeight: 700 }}>Automatisch versturen</span>
+                      <span style={{ display: "block", fontWeight: 700 }}>
+                        Automatisch versturen
+                      </span>
                       <span
                         style={{
                           display: "block",
@@ -6788,8 +6824,9 @@ export default function Home() {
                       lineHeight: 1.5,
                     }}
                   >
-                    De PDF wordt na de wekelijkse generatie als bijlage verstuurd wanneer automatisch
-                    versturen is ingeschakeld. Het testadres kun je naar wens verwijderen.
+                    De PDF wordt na de wekelijkse generatie als bijlage verstuurd wanneer
+                    automatisch versturen is ingeschakeld. Het testadres kun je naar wens
+                    verwijderen.
                   </div>
                   {Object.keys(servicedeskConfig?.team_member_emails || {}).length ? (
                     <div
@@ -7455,7 +7492,10 @@ export default function Home() {
                   const isLocked = lockedCardKeys.includes(cardKey);
                   const displayTitle = aiInsight ? aiInsight.title : cardTitleByKey(cardKey);
                   const showPartialWeekBadge =
-                    !aiInsight && Boolean(weeklyScopeHint) && weeklyPartialCardKeys.has(cardKey);
+                    !aiInsight &&
+                    chartShowsCurrentWeek(cardKey) &&
+                    Boolean(weeklyScopeHint) &&
+                    weeklyPartialCardKeys.has(cardKey);
                   const showLastWeekBadge = !aiInsight && cardKey === "topOnderwerpen";
                   const canExpandCard = expandableCardKeys.has(cardKey);
                   const configuredCapabilities = aiInsight
@@ -7844,6 +7884,25 @@ export default function Home() {
                               Voortschrijdend gemiddelde tonen
                             </label>
                           ) : null}
+                          {cardSettingCapabilities.currentWeek ? (
+                            <label
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 8,
+                                fontSize: 13,
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={cardSettings.currentWeek}
+                                onChange={(event) =>
+                                  updateChartSetting(cardKey, "currentWeek", event.target.checked)
+                                }
+                              />
+                              Lopende week tonen
+                            </label>
+                          ) : null}
                         </div>
                       ) : null}
                       <div
@@ -7986,12 +8045,12 @@ export default function Home() {
           >
             <h2 style={{ margin: 0, fontSize: 20 }}>Indeling aanpassen</h2>
             <p style={{ margin: "8px 0 18px", color: "var(--text-muted)", lineHeight: 1.5 }}>
-              Voor wie wil je deze dashboardindeling aanpassen?
+              Kies waar je deze aangepaste indeling wilt opslaan.
             </p>
             <div style={{ display: "grid", gap: 10 }}>
               <button
                 type="button"
-                onClick={startLocalLayoutEditing}
+                onClick={() => saveDashboardLayout("local")}
                 disabled={layoutSaving}
                 style={{
                   ...filterOpenButtonStyle,
@@ -8002,16 +8061,23 @@ export default function Home() {
                   flexDirection: "column",
                   textAlign: "left",
                   padding: "12px 14px",
+                  width: "100%",
+                  boxSizing: "border-box",
+                  whiteSpace: "normal",
                 }}
               >
                 <span style={{ fontWeight: 700 }}>Alleen voor mij</span>
-                <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 400 }}>
-                  Bewaar de indeling alleen op dit apparaat en in deze browser.
+                <span
+                  style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 400, minWidth: 0 }}
+                >
+                  Bewaar deze indeling alleen voor jou. Als iemand later een indeling voor iedereen
+                  opslaat, wordt jouw persoonlijke indeling vervangen wanneer je het dashboard
+                  opnieuw opent.
                 </span>
               </button>
               <button
                 type="button"
-                onClick={startSharedLayoutEditing}
+                onClick={() => saveDashboardLayout("shared")}
                 disabled={layoutSaving}
                 style={{
                   ...layoutPrimaryButtonStyle,
@@ -8022,13 +8088,17 @@ export default function Home() {
                   flexDirection: "column",
                   textAlign: "left",
                   padding: "12px 14px",
+                  width: "100%",
+                  boxSizing: "border-box",
+                  whiteSpace: "normal",
                 }}
               >
                 <span style={{ fontWeight: 700 }}>
-                  {layoutSaving ? "Gedeelde indeling laden…" : "Voor iedereen"}
+                  {layoutSaving ? "Opslaan…" : "Voor iedereen"}
                 </span>
-                <span style={{ fontSize: 12, opacity: 0.86, fontWeight: 400 }}>
-                  Bewaar de indeling centraal, zodat andere gebruikers deze ook kunnen gebruiken.
+                <span style={{ fontSize: 12, opacity: 0.86, fontWeight: 400, minWidth: 0 }}>
+                  Bewaar deze indeling als de standaard voor iedereen. Hiermee worden persoonlijke
+                  indelingen vervangen wanneer gebruikers het dashboard opnieuw openen.
                 </span>
               </button>
             </div>
@@ -8073,11 +8143,23 @@ export default function Home() {
           >
             <div>
               <h3 style={hiddenOverlayTitleStyle}>Verborgen kaarten</h3>
-              <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
-                {layoutStorageScope === "shared"
-                  ? "Je past de indeling voor iedereen aan"
-                  : "Je past alleen jouw eigen indeling aan"}
-              </div>
+              {isPersonalLayout ? (
+                <div
+                  style={{
+                    marginTop: 6,
+                    fontSize: 15,
+                    fontWeight: 700,
+                    color: "var(--accent)",
+                  }}
+                >
+                  Je past je persoonlijke lay-out aan
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
+                  Je bekijkt een concept. Kies bij opslaan of het alleen voor jou of voor iedereen
+                  is.
+                </div>
+              )}
               <div style={{ ...foldNoticeStyle, marginTop: 6 }}>
                 Sleep KPI’s en kaarten binnen hun categorie en sla daarna de indeling op.
               </div>
@@ -8101,7 +8183,7 @@ export default function Home() {
                 <span style={{ fontSize: 11 }}>Weergave</span>
                 <select
                   value={themePreferenceDraft}
-                  onChange={(event) => setThemePreferenceDraft(event.target.value)}
+                  onChange={(event) => previewThemePreference(event.target.value)}
                   aria-label="Kies de weergave van het dashboard"
                   style={{
                     appearance: "auto",
@@ -8134,7 +8216,7 @@ export default function Home() {
               </button>
               <button
                 type="button"
-                onClick={resetLayoutAndClose}
+                onClick={resetLayoutDraft}
                 style={filterOpenButtonStyle}
                 disabled={layoutSaving}
               >
@@ -8151,7 +8233,7 @@ export default function Home() {
               </button>
               <button
                 type="button"
-                onClick={saveDashboardLayout}
+                onClick={() => setLayoutChoiceOpen(true)}
                 style={layoutPrimaryButtonStyle}
                 disabled={!layoutDirty || layoutSaving}
               >
