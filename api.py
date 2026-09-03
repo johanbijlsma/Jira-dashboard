@@ -1165,6 +1165,7 @@ def ensure_schema():  # pragma: no cover
               alert_logs_cleared_at_all timestamptz,
               servicedesk_onderwerpen_customized boolean not null default false,
               shared_layout jsonb,
+              default_layout jsonb,
               jira_token_expires_at date,
               jira_token_fingerprint text,
               jira_token_renewal_pending boolean not null default false,
@@ -1338,6 +1339,7 @@ def ensure_schema():  # pragma: no cover
         cur.execute("alter table dashboard_config add column if not exists alert_logs_cleared_at_all timestamptz;")
         cur.execute("alter table dashboard_config add column if not exists servicedesk_onderwerpen_customized boolean not null default false;")
         cur.execute("alter table dashboard_config add column if not exists shared_layout jsonb;")
+        cur.execute("alter table dashboard_config add column if not exists default_layout jsonb;")
         cur.execute("alter table dashboard_config add column if not exists updated_at timestamptz not null default now();")
         cur.execute("alter table ai_insights_log add column if not exists insight_key text;")
         cur.execute("alter table ai_insights_log add column if not exists scope_key text not null default '';")
@@ -1511,6 +1513,7 @@ class SaasReleaseConfigPayload(BaseModel):
 
 class DashboardLayoutPayload(BaseModel):
     layout: Dict[str, Any]
+    default_layout: Optional[Dict[str, Any]] = None
 
 
 class InsightFeedbackPayload(BaseModel):
@@ -4107,9 +4110,12 @@ def get_shared_dashboard_layout():
     ensure_schema()
     with conn() as c, c.cursor() as cur:
         cur.execute("insert into dashboard_config(id) values (1) on conflict (id) do nothing;")
-        cur.execute("select shared_layout from dashboard_config where id = 1;")
-        row = cur.fetchone() or (None,)
-    return {"layout": row[0] if row else None}
+        cur.execute("select shared_layout, default_layout from dashboard_config where id = 1;")
+        row = cur.fetchone() or (None, None)
+    return {
+        "layout": row[0] if row else None,
+        "default_layout": row[1] if row and len(row) > 1 else None,
+    }
 
 
 @app.put("/config/dashboard-layout")
@@ -4118,19 +4124,33 @@ def update_shared_dashboard_layout(payload: DashboardLayoutPayload):
     ensure_schema()
     if not isinstance(payload.layout, dict):
         raise HTTPException(status_code=400, detail="De dashboardindeling is ongeldig.")
+    if payload.default_layout is not None and not isinstance(payload.default_layout, dict):
+        raise HTTPException(status_code=400, detail="De standaardindeling is ongeldig.")
     with conn() as c, c.cursor() as cur:
         cur.execute("insert into dashboard_config(id) values (1) on conflict (id) do nothing;")
-        cur.execute(
-            """
-            update dashboard_config
-            set shared_layout = %s,
-                updated_at = now()
-            where id = 1;
-            """,
-            (Json(payload.layout),),
-        )
+        if payload.default_layout is None:
+            cur.execute(
+                """
+                update dashboard_config
+                set shared_layout = %s,
+                    updated_at = now()
+                where id = 1;
+                """,
+                (Json(payload.layout),),
+            )
+        else:
+            cur.execute(
+                """
+                update dashboard_config
+                set shared_layout = %s,
+                    default_layout = %s,
+                    updated_at = now()
+                where id = 1;
+                """,
+                (Json(payload.layout), Json(payload.default_layout)),
+            )
         c.commit()
-    return {"layout": payload.layout}
+    return {"layout": payload.layout, "default_layout": payload.default_layout}
 
 
 @app.put("/config/saas-releases")

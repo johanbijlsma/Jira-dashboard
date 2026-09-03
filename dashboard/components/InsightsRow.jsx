@@ -1,4 +1,5 @@
 // @ts-check
+import { Trash2 } from "lucide-react";
 
 /**
  * @typedef {{
@@ -94,10 +95,17 @@ export default function InsightsRow({
                       background: "var(--surface)",
                       color: "var(--text-muted)",
                       cursor: "pointer",
+                      width: 28,
+                      height: 28,
+                      padding: 0,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
                     }}
                     title="Verberg trendkaart"
+                    aria-label="Verberg trendkaart"
                   >
-                    ×
+                    <Trash2 size={14} aria-hidden="true" />
                   </button>
                 ) : (
                   <span

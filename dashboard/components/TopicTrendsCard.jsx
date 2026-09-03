@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Line } from "react-chartjs-2";
+import { ArrowDown, ArrowRight, ArrowUp } from "lucide-react";
 import EmptyChartState from "./EmptyChartState";
 import { buildMovingAverage } from "../lib/topic-trends";
 import { num } from "../lib/dashboard-utils";
@@ -42,7 +43,9 @@ function TopicSparkline({ topic, selected, expanded, onSelect }) {
   const [hovered, setHovered] = useState(false);
   const rowStyle = {
     width: "100%",
-    border: selected ? "1px solid color-mix(in srgb, var(--accent) 60%, var(--border))" : "1px solid transparent",
+    border: selected
+      ? "1px solid color-mix(in srgb, var(--accent) 60%, var(--border))"
+      : "1px solid transparent",
     borderRadius: 12,
     background: selected
       ? "color-mix(in srgb, var(--accent) 10%, var(--surface))"
@@ -72,7 +75,15 @@ function TopicSparkline({ topic, selected, expanded, onSelect }) {
       aria-pressed={selected}
     >
       <span style={{ minWidth: 0 }}>
-        <span style={{ display: "block", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <span
+          style={{
+            display: "block",
+            fontWeight: 600,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
           {topic.topic}
         </span>
       </span>
@@ -108,7 +119,13 @@ function TopicSparkline({ topic, selected, expanded, onSelect }) {
         }}
         title={`Laatste 2 periodes: ${num(topic.recentTotal)}. Vorige 2 periodes: ${num(topic.previousTotal)}.`}
       >
-        <strong>{trend.symbol}</strong>
+        {trend.symbol === "↑" ? (
+          <ArrowUp size={15} aria-hidden="true" />
+        ) : trend.symbol === "↓" ? (
+          <ArrowDown size={15} aria-hidden="true" />
+        ) : (
+          <ArrowRight size={15} aria-hidden="true" />
+        )}
         <span>{trend.text}</span>
       </span>
     </button>
@@ -129,38 +146,41 @@ function TopicDetailChart({
 }) {
   const values = topic.buckets.map((bucket) => bucket.count);
   const movingAverage = useMemo(() => buildMovingAverage(values, 3), [values]);
-  const data = useMemo(() => ({
-    labels,
-    datasets: [
-      {
-        label: topic.topic,
-        data: values,
-        tension: 0.25,
-        borderColor: topic.color,
-        backgroundColor: topic.color,
-        pointRadius: 0,
-        pointHoverRadius: 4,
-        pointHitRadius: 10,
-        fill: false,
-      },
-      ...(showMovingAverage
-        ? [
-            {
-              label: `3-periode gemiddelde`,
-              data: movingAverage,
-              tension: 0.3,
-              borderColor: "#64748b",
-              backgroundColor: "#64748b",
-              borderDash: [5, 4],
-              pointRadius: 0,
-              pointHoverRadius: 0,
-              pointHitRadius: 0,
-              fill: false,
-            },
-          ]
-        : []),
-    ],
-  }), [labels, movingAverage, showMovingAverage, topic.color, topic.topic, values]);
+  const data = useMemo(
+    () => ({
+      labels,
+      datasets: [
+        {
+          label: topic.topic,
+          data: values,
+          tension: 0.25,
+          borderColor: topic.color,
+          backgroundColor: topic.color,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          pointHitRadius: 10,
+          fill: false,
+        },
+        ...(showMovingAverage
+          ? [
+              {
+                label: `3-periode gemiddelde`,
+                data: movingAverage,
+                tension: 0.3,
+                borderColor: "#64748b",
+                backgroundColor: "#64748b",
+                borderDash: [5, 4],
+                pointRadius: 0,
+                pointHoverRadius: 0,
+                pointHitRadius: 0,
+                fill: false,
+              },
+            ]
+          : []),
+      ],
+    }),
+    [labels, movingAverage, showMovingAverage, topic.color, topic.topic, values]
+  );
 
   return (
     <div
@@ -178,8 +198,18 @@ function TopicDetailChart({
     >
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Geselecteerd onderwerp</div>
-          <div style={{ fontSize: 18, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>
+            Geselecteerd onderwerp
+          </div>
+          <div
+            style={{
+              fontSize: 18,
+              fontWeight: 700,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
             {topic.topic}
           </div>
           <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 4 }}>
@@ -284,12 +314,22 @@ export default function TopicTrendsCard({
           }}
         >
           <div style={{ padding: "4px 4px 8px" }}>
-            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Top-5 onderwerpen</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>
+              Top-5 onderwerpen
+            </div>
             <div style={{ fontSize: 13, color: "var(--text-muted)" }}>
               Gesorteerd op totaal aantal tickets binnen de huidige periode.
             </div>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, overflow: "auto", paddingRight: 2 }}>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+              overflow: "auto",
+              paddingRight: 2,
+            }}
+          >
             {topics.map((topic) => (
               <TopicSparkline
                 key={topic.topic}
@@ -309,10 +349,10 @@ export default function TopicTrendsCard({
             chartKey={chartKey}
             animation={animation}
             releaseCadencePlugin={releaseCadencePlugin}
-                markChartReady={markChartReady}
-                onPointClick={onDetailPointClick}
-                showLegend={showLegend}
-                showMovingAverage={showMovingAverage}
+            markChartReady={markChartReady}
+            onPointClick={onDetailPointClick}
+            showLegend={showLegend}
+            showMovingAverage={showMovingAverage}
           />
           {renderOverlay()}
         </div>

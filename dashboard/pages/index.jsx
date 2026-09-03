@@ -46,6 +46,44 @@ import {
 } from "chart.js";
 import { Bar, Line } from "react-chartjs-2";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowDown,
+  ArrowRight,
+  ArrowUp,
+  Bell,
+  Building2,
+  CalendarDays,
+  ChevronRight,
+  Columns2,
+  Filter,
+  Flag,
+  GripVertical,
+  Lock,
+  LockKeyholeOpen,
+  Mail,
+  Maximize2,
+  Monitor,
+  Moon,
+  Palmtree,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Rocket,
+  Save,
+  Settings,
+  Siren,
+  Sparkles,
+  SlidersHorizontal,
+  Sun,
+  Tags,
+  ThumbsDown,
+  ThumbsUp,
+  Trash2,
+  Tv,
+  UserRound,
+  Users,
+  X,
+} from "lucide-react";
 import { buildUpcomingWarningText, businessDaysUntil } from "../lib/vacation-banner";
 import {
   hideCardLayout,
@@ -104,7 +142,9 @@ const AUTO_SYNC_INTERVAL_MS = Math.max(
   (Number(process.env.NEXT_PUBLIC_AUTO_SYNC_INTERVAL_SECONDS) || 120) * 1000
 );
 const MANUAL_SYNC_ONLY = ["1", "true", "yes", "on"].includes(
-  String(process.env.NEXT_PUBLIC_MANUAL_SYNC_ONLY || "").trim().toLowerCase()
+  String(process.env.NEXT_PUBLIC_MANUAL_SYNC_ONLY || "")
+    .trim()
+    .toLowerCase()
 );
 const STALE_SYNC_THRESHOLD_MS = Math.max(3 * AUTO_SYNC_INTERVAL_MS, 5 * 60 * 1000);
 const AUTO_SYNC_RETRY_THROTTLE_MS = Math.max(AUTO_SYNC_INTERVAL_MS, 60 * 1000);
@@ -154,14 +194,6 @@ function releaseSlotStatusMeta(slot, label) {
     };
   }
   return null;
-}
-
-function alertFaviconDataUri(color, ring = false) {
-  const ringSvg = ring
-    ? `<circle cx='32' cy='32' r='26' fill='none' stroke='${color}' stroke-width='6' opacity='0.95'/>`
-    : `<circle cx='32' cy='32' r='26' fill='${color}' opacity='0.95'/>`;
-  const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='12' fill='#0f172a'/>${ringSvg}</svg>`;
-  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
 function alertKindLabel(kind) {
@@ -299,21 +331,49 @@ function formatNumberOrDash(value) {
 
 const WEEKLY_INSIGHTS_GROUP_KEY = "__weekly_insights__";
 const DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY = "jsm_dashboard_layout_scope_v1";
+const DASHBOARD_SHARED_LAYOUT_SNAPSHOT_STORAGE_KEY = "jsm_dashboard_shared_layout_snapshot_v1";
 const DASHBOARD_THEME_STORAGE_KEY = "jsm_dashboard_theme_preference_v1";
 const THEME_PREFERENCES = new Set(["system", "light", "dark"]);
 
 function SettingsGearIcon({ size = 14 }) {
+  return <Settings size={size} aria-hidden="true" />;
+}
+
+function UiIcon({ name, size = 16 }) {
+  const icons = {
+    "alert-light": Siren,
+    calendar: CalendarDays,
+    "thumb-down": ThumbsDown,
+    "thumb-up": ThumbsUp,
+    vacation: Palmtree,
+    sun: Sun,
+    moon: Moon,
+    monitor: Monitor,
+  };
+  const Icon = icons[name] || Monitor;
+  return <Icon size={size} aria-hidden="true" />;
+}
+
+function TrendArrow({ symbol, size = 16 }) {
+  const Icon = symbol === "↑" ? ArrowUp : symbol === "↓" ? ArrowDown : ArrowRight;
+  return <Icon size={size} strokeWidth={2.25} aria-hidden="true" />;
+}
+
+function FilterFieldLabel({ Icon, children }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M10.3 3.8h3.4l.6 2.3c.5.2 1 .5 1.5.8l2.2-.7 1.7 2.9-1.6 1.6c.1.5.1 1.1 0 1.6l1.6 1.6-1.7 2.9-2.2-.7c-.5.4-1 .6-1.5.8l-.6 2.3h-3.4l-.6-2.3c-.5-.2-1-.5-1.5-.8l-2.2.7-1.7-2.9 1.6-1.6a6.8 6.8 0 0 1 0-1.6L4.6 9.1l1.7-2.9 2.2.7c.5-.4 1-.6 1.5-.8l.3-2.3Z"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <circle cx="12" cy="12" r="2.6" stroke="currentColor" strokeWidth="1.8" />
-    </svg>
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+        fontSize: 13,
+        fontWeight: 600,
+        color: "var(--text-subtle)",
+      }}
+    >
+      <Icon size={19} strokeWidth={2} aria-hidden="true" />
+      {children}
+    </span>
   );
 }
 
@@ -447,6 +507,9 @@ export default function Home() {
   const [dashboardSettingsOpen, setDashboardSettingsOpen] = useState(false);
   const [showStartupSkeleton, setShowStartupSkeleton] = useState(true);
   const [dashboardLayout, setDashboardLayout] = useState(createDefaultDashboardLayout);
+  const [defaultDashboardLayout, setDefaultDashboardLayout] = useState(
+    createDefaultDashboardLayout
+  );
   const [aiInsightThresholdDraft, setAiInsightThresholdDraft] = useState(75);
   const [weeklyInsightsEmailDraft, setWeeklyInsightsEmailDraft] = useState([]);
   const [weeklyInsightsEmailInput, setWeeklyInsightsEmailInput] = useState("");
@@ -464,8 +527,17 @@ export default function Home() {
   const [layoutSavedSnapshot, setLayoutSavedSnapshot] = useState("");
   const [isLayoutEditing, setIsLayoutEditing] = useState(false);
   const [layoutChoiceOpen, setLayoutChoiceOpen] = useState(false);
-  const [layoutStorageScope, setLayoutStorageScope] = useState("local");
   const [layoutSaving, setLayoutSaving] = useState(false);
+  const [saveLayoutAsNewDefault, setSaveLayoutAsNewDefault] = useState(false);
+  const [layoutMasterSettings, setLayoutMasterSettings] = useState({
+    legend: false,
+    currentWeek: true,
+    showAiCards: true,
+  });
+  const [isPersonalLayout, setIsPersonalLayout] = useState(false);
+  const [sharedLayoutSnapshot, setSharedLayoutSnapshot] = useState("");
+  const [layoutSavedThemePreference, setLayoutSavedThemePreference] = useState("system");
+  const [layoutSavedTvMode, setLayoutSavedTvMode] = useState(false);
   const [openCardSettings, setOpenCardSettings] = useState("");
   const [openLiveKpiSettings, setOpenLiveKpiSettings] = useState(false);
   const [hiddenOverlayHeight, setHiddenOverlayHeight] = useState(0);
@@ -521,15 +593,17 @@ export default function Home() {
   const layoutDirty = useMemo(
     () =>
       layoutSavedSnapshot !== JSON.stringify(dashboardLayout) ||
-      themePreferenceDraft !== themePreference ||
-      tvModeDraft !== isTvMode,
+      themePreferenceDraft !== layoutSavedThemePreference ||
+      tvModeDraft !== layoutSavedTvMode ||
+      saveLayoutAsNewDefault,
     [
-      isTvMode,
       layoutSavedSnapshot,
       dashboardLayout,
-      themePreference,
       themePreferenceDraft,
       tvModeDraft,
+      layoutSavedThemePreference,
+      layoutSavedTvMode,
+      saveLayoutAsNewDefault,
     ]
   );
 
@@ -553,6 +627,43 @@ export default function Home() {
       },
     }));
   }, []);
+
+  const chartMasterSwitchEnabled = useCallback(
+    (settingKey, layout = dashboardLayout) => {
+      const chartKeys = Object.entries(CHART_CARD_SETTING_CAPABILITIES)
+        .filter(([, capabilities]) => capabilities[settingKey])
+        .map(([cardKey]) => cardKey);
+      return (
+        chartKeys.length > 0 &&
+        chartKeys.every(
+          (cardKey) =>
+            ({
+              ...(DEFAULT_CHART_CARD_SETTINGS[cardKey] || {}),
+              ...(layout.chartSettings?.[cardKey] || {}),
+            })[settingKey]
+        )
+      );
+    },
+    [dashboardLayout]
+  );
+
+  const updateChartMasterSwitch = useCallback((settingKey, value) => {
+    setLayoutMasterSettings((previous) => ({ ...previous, [settingKey]: Boolean(value) }));
+    setDashboardLayout((previous) => {
+      const chartSettings = { ...(previous.chartSettings || {}) };
+      Object.entries(CHART_CARD_SETTING_CAPABILITIES).forEach(([cardKey, capabilities]) => {
+        if (!capabilities[settingKey]) return;
+        chartSettings[cardKey] = {
+          ...(chartSettings[cardKey] || {}),
+          [settingKey]: Boolean(value),
+        };
+      });
+      return { ...previous, chartSettings };
+    });
+  }, []);
+
+  const legendsShown = layoutMasterSettings.legend;
+  const currentWeekShown = layoutMasterSettings.currentWeek;
 
   const liveKpiSettings = useMemo(
     () => ({ ...DEFAULT_LIVE_KPI_SETTINGS, ...(dashboardLayout.liveKpiSettings || {}) }),
@@ -935,7 +1046,16 @@ export default function Home() {
   }, []);
 
   const toggleTvMode = useCallback(() => {
-    setTvModeDraft((previous) => !previous);
+    setTvModeDraft((previous) => {
+      const next = !previous;
+      setIsTvMode(next);
+      return next;
+    });
+  }, []);
+
+  const previewThemePreference = useCallback((next) => {
+    setThemePreferenceDraft(next);
+    setThemePreference(next);
   }, []);
 
   const applyThemePreference = useCallback((next) => {
@@ -1034,11 +1154,17 @@ export default function Home() {
         });
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
-          throw new Error(err?.detail || `Opslaan van e-mailinstelling mislukt (HTTP ${res.status}).`);
+          throw new Error(
+            err?.detail || `Opslaan van e-mailinstelling mislukt (HTTP ${res.status}).`
+          );
         }
         const updated = await res.json();
         applyServicedeskConfig(updated, normalizedOnderwerpenSelection);
-        flashToast(enabled ? "Automatisch versturen is ingeschakeld." : "Automatisch versturen is uitgeschakeld.");
+        flashToast(
+          enabled
+            ? "Automatisch versturen is ingeschakeld."
+            : "Automatisch versturen is uitgeschakeld."
+        );
       } catch (err) {
         flashToast(err?.message || "Opslaan van e-mailinstelling mislukt.", "error");
       } finally {
@@ -1339,87 +1465,93 @@ export default function Home() {
     ]
   );
 
-  const saveDashboardLayout = useCallback(async () => {
-    const serialized = JSON.stringify(dashboardLayout);
-    setLayoutSaving(true);
-    try {
-      if (layoutStorageScope === "shared") {
-        const response = await fetch(`${API}/config/dashboard-layout`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ layout: dashboardLayout }),
-        });
-        if (!response.ok) {
-          const error = await response.json().catch(() => ({}));
-          throw new Error(error?.detail || "Opslaan voor iedereen is mislukt.");
+  const saveDashboardLayout = useCallback(
+    async (scope) => {
+      const serialized = JSON.stringify(dashboardLayout);
+      setLayoutSaving(true);
+      try {
+        if (scope === "shared") {
+          const response = await fetch(`${API}/config/dashboard-layout`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              layout: dashboardLayout,
+              ...(saveLayoutAsNewDefault ? { default_layout: dashboardLayout } : {}),
+            }),
+          });
+          if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error?.detail || "Opslaan voor iedereen is mislukt.");
+          }
+        } else if (typeof window !== "undefined") {
+          window.localStorage.setItem(DASHBOARD_CONFIG_STORAGE_KEY, serialized);
+          window.localStorage.setItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY, "local");
+          window.localStorage.setItem(
+            DASHBOARD_SHARED_LAYOUT_SNAPSHOT_STORAGE_KEY,
+            sharedLayoutSnapshot
+          );
         }
-      } else if (typeof window !== "undefined") {
-        window.localStorage.setItem(DASHBOARD_CONFIG_STORAGE_KEY, serialized);
-        window.localStorage.setItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY, "local");
+        if (scope === "shared" && typeof window !== "undefined") {
+          window.localStorage.removeItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY);
+          window.localStorage.removeItem(DASHBOARD_CONFIG_STORAGE_KEY);
+          window.localStorage.removeItem(DASHBOARD_SHARED_LAYOUT_SNAPSHOT_STORAGE_KEY);
+        }
+        applyThemePreference(themePreferenceDraft);
+        applyTvModePreference(tvModeDraft);
+        setLayoutSavedSnapshot(serialized);
+        setLayoutSavedThemePreference(themePreferenceDraft);
+        setLayoutSavedTvMode(tvModeDraft);
+        if (scope === "shared") setSharedLayoutSnapshot(serialized);
+        if (scope === "shared" && saveLayoutAsNewDefault) {
+          setDefaultDashboardLayout(normalizeDashboardLayout(dashboardLayout));
+        }
+        setIsPersonalLayout(scope === "local");
+        setIsLayoutEditing(false);
+        setLayoutChoiceOpen(false);
+        setSaveLayoutAsNewDefault(false);
+        setOpenCardSettings("");
+        flashToast(
+          scope === "shared" ? "Indeling opgeslagen voor iedereen" : "Indeling opgeslagen voor jou"
+        );
+      } catch (error) {
+        flashToast(error?.message || "Opslaan van de indeling is mislukt.", "error");
+      } finally {
+        setLayoutSaving(false);
       }
-      if (layoutStorageScope === "shared" && typeof window !== "undefined") {
-        window.localStorage.removeItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY);
-      }
-      applyThemePreference(themePreferenceDraft);
-      applyTvModePreference(tvModeDraft);
-      setLayoutSavedSnapshot(serialized);
-      setIsLayoutEditing(false);
-      setOpenCardSettings("");
-      flashToast(
-        layoutStorageScope === "shared"
-          ? "Indeling opgeslagen voor iedereen"
-          : "Indeling opgeslagen voor jou"
-      );
-    } catch (error) {
-      flashToast(error?.message || "Opslaan van de indeling is mislukt.", "error");
-    } finally {
-      setLayoutSaving(false);
-    }
-  }, [
-    applyThemePreference,
-    applyTvModePreference,
-    dashboardLayout,
-    flashToast,
-    layoutStorageScope,
-    themePreferenceDraft,
-    tvModeDraft,
-  ]);
+    },
+    [
+      applyThemePreference,
+      applyTvModePreference,
+      dashboardLayout,
+      flashToast,
+      normalizeDashboardLayout,
+      saveLayoutAsNewDefault,
+      sharedLayoutSnapshot,
+      themePreferenceDraft,
+      tvModeDraft,
+    ]
+  );
 
   const startLayoutEditing = useCallback(() => {
     setVacationEditMode(false);
-    setLayoutChoiceOpen(true);
-  }, []);
-
-  const startLocalLayoutEditing = useCallback(() => {
-    setLayoutStorageScope("local");
+    if (typeof window !== "undefined") {
+      setIsPersonalLayout(
+        window.localStorage.getItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY) === "local"
+      );
+    }
     setLayoutSavedSnapshot(JSON.stringify(dashboardLayout));
     setThemePreferenceDraft(themePreference);
     setTvModeDraft(isTvMode);
-    setLayoutChoiceOpen(false);
+    setLayoutSavedThemePreference(themePreference);
+    setLayoutSavedTvMode(isTvMode);
+    setSaveLayoutAsNewDefault(false);
+    setLayoutMasterSettings({
+      legend: chartMasterSwitchEnabled("legend"),
+      currentWeek: chartMasterSwitchEnabled("currentWeek"),
+      showAiCards: dashboardLayout.showAiCards !== false,
+    });
     setIsLayoutEditing(true);
-  }, [dashboardLayout, isTvMode, themePreference]);
-
-  const startSharedLayoutEditing = useCallback(async () => {
-    setLayoutSaving(true);
-    try {
-      const response = await fetch(`${API}/config/dashboard-layout`);
-      if (!response.ok) throw new Error("De gedeelde indeling kon niet worden geladen.");
-      const payload = await response.json();
-      const next = payload?.layout ? normalizeDashboardLayout(payload.layout) : dashboardLayout;
-      const serialized = JSON.stringify(next);
-      setDashboardLayout(next);
-      setLayoutSavedSnapshot(serialized);
-      setThemePreferenceDraft(themePreference);
-      setTvModeDraft(isTvMode);
-      setLayoutStorageScope("shared");
-      setLayoutChoiceOpen(false);
-      setIsLayoutEditing(true);
-    } catch (error) {
-      flashToast(error?.message || "De gedeelde indeling kon niet worden geladen.", "error");
-    } finally {
-      setLayoutSaving(false);
-    }
-  }, [dashboardLayout, flashToast, isTvMode, normalizeDashboardLayout, themePreference]);
+  }, [chartMasterSwitchEnabled, dashboardLayout, isTvMode, themePreference]);
 
   const cancelLayoutEditing = useCallback(() => {
     try {
@@ -1430,70 +1562,32 @@ export default function Home() {
     } catch {
       setDashboardLayout(normalizeDashboardLayout(createDefaultDashboardLayout()));
     }
-    setThemePreferenceDraft(themePreference);
-    setTvModeDraft(isTvMode);
+    setThemePreference(layoutSavedThemePreference);
+    setThemePreferenceDraft(layoutSavedThemePreference);
+    setIsTvMode(layoutSavedTvMode);
+    setTvModeDraft(layoutSavedTvMode);
     setIsLayoutEditing(false);
+    setSaveLayoutAsNewDefault(false);
     setOpenCardSettings("");
     setCardDropHint(null);
     setKpiDropHint(null);
     dragStateRef.current = null;
-  }, [isTvMode, layoutSavedSnapshot, normalizeDashboardLayout, themePreference]);
-
-  const resetLayoutAndClose = useCallback(async () => {
-    const next = normalizeDashboardLayout(createDefaultDashboardLayout());
-    const serialized = JSON.stringify(next);
-    setDashboardLayout(next);
-    if (layoutStorageScope === "shared") {
-      setLayoutSaving(true);
-      try {
-        const response = await fetch(`${API}/config/dashboard-layout`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ layout: next }),
-        });
-        if (!response.ok) throw new Error("Herstellen voor iedereen is mislukt.");
-      } catch (error) {
-        try {
-          const previous = layoutSavedSnapshot
-            ? JSON.parse(layoutSavedSnapshot)
-            : createDefaultDashboardLayout();
-          setDashboardLayout(normalizeDashboardLayout(previous));
-        } catch {
-          setDashboardLayout(normalizeDashboardLayout(createDefaultDashboardLayout()));
-        }
-        flashToast(error?.message || "Herstellen van de indeling is mislukt.", "error");
-        return;
-      } finally {
-        setLayoutSaving(false);
-      }
-    } else if (typeof window !== "undefined") {
-      window.localStorage.setItem(DASHBOARD_CONFIG_STORAGE_KEY, serialized);
-      window.localStorage.setItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY, "local");
-    }
-    if (layoutStorageScope === "shared" && typeof window !== "undefined") {
-      window.localStorage.removeItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY);
-    }
-    setLayoutSavedSnapshot(serialized);
-    setThemePreferenceDraft(themePreference);
-    setTvModeDraft(isTvMode);
-    setIsLayoutEditing(false);
-    setOpenCardSettings("");
-    setCardDropHint(null);
-    setKpiDropHint(null);
-    dragStateRef.current = null;
-    flashToast(
-      layoutStorageScope === "shared"
-        ? "Indeling voor iedereen hersteld"
-        : "Indeling voor jou hersteld"
-    );
   }, [
-    flashToast,
-    isTvMode,
     layoutSavedSnapshot,
-    layoutStorageScope,
+    layoutSavedThemePreference,
+    layoutSavedTvMode,
     normalizeDashboardLayout,
-    themePreference,
   ]);
+
+  const resetLayoutDraft = useCallback(() => {
+    const next = normalizeDashboardLayout(defaultDashboardLayout);
+    setDashboardLayout(next);
+    setLayoutMasterSettings({
+      legend: chartMasterSwitchEnabled("legend", next),
+      currentWeek: chartMasterSwitchEnabled("currentWeek", next),
+      showAiCards: next.showAiCards !== false,
+    });
+  }, [chartMasterSwitchEnabled, defaultDashboardLayout, normalizeDashboardLayout]);
 
   const refreshAlertLogsAfterLiveAlert = useCallback(
     async () => refreshAlertLogs(),
@@ -1661,6 +1755,39 @@ export default function Home() {
     setVacationStartUi("");
     setVacationEndUi("");
   }, [servicedeskTeamMembers]);
+
+  const resetDashboardToDefault = useCallback(() => {
+    if (isLayoutEditing) cancelLayoutEditing();
+    setLayoutChoiceOpen(false);
+    setFiltersOpen(false);
+    setDashboardSettingsOpen(false);
+    setHotkeysOpen(false);
+    setExpandedCard("");
+    setOpenCardSettings("");
+    setOpenLiveKpiSettings(false);
+    cancelTeamConfig();
+    cancelOnderwerpConfig();
+    cancelAiInsightConfig();
+    cancelReleaseConfig("last");
+    cancelReleaseConfig("next");
+    if (vacationEditMode) cancelVacationEdit();
+    closeSidePanel();
+    setSelectedInsightId("");
+    setInsightUrl("");
+    resetFilters(false);
+  }, [
+    cancelAiInsightConfig,
+    cancelLayoutEditing,
+    cancelOnderwerpConfig,
+    cancelReleaseConfig,
+    cancelTeamConfig,
+    cancelVacationEdit,
+    closeSidePanel,
+    isLayoutEditing,
+    resetFilters,
+    setInsightUrl,
+    vacationEditMode,
+  ]);
 
   const applyVacationStartDate = useCallback(
     (nextStartDate) => {
@@ -1904,6 +2031,9 @@ export default function Home() {
       const normalizedStored = normalizeDashboardLayout(JSON.parse(raw));
       setDashboardLayout(normalizedStored);
       setLayoutSavedSnapshot(JSON.stringify(normalizedStored));
+      setIsPersonalLayout(
+        window.localStorage.getItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY) === "local"
+      );
     } catch {
       const normalizedDefault = normalizeDashboardLayout(createDefaultDashboardLayout());
       setDashboardLayout(normalizedDefault);
@@ -1913,8 +2043,6 @@ export default function Home() {
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
-    if (window.localStorage.getItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY) === "local")
-      return undefined;
     let cancelled = false;
     fetch(`${API}/config/dashboard-layout`)
       .then(async (response) => {
@@ -1922,11 +2050,33 @@ export default function Home() {
         return response.json();
       })
       .then((payload) => {
-        if (cancelled || !payload?.layout) return;
-        const normalized = normalizeDashboardLayout(payload.layout);
-        setDashboardLayout(normalized);
-        setLayoutSavedSnapshot(JSON.stringify(normalized));
-        setLayoutStorageScope("shared");
+        if (cancelled) return;
+        const normalizedDefault = normalizeDashboardLayout(
+          payload?.default_layout || createDefaultDashboardLayout()
+        );
+        setDefaultDashboardLayout(normalizedDefault);
+        const normalized = normalizeDashboardLayout(payload?.layout || normalizedDefault);
+        const sharedSnapshot = JSON.stringify(normalized);
+        setSharedLayoutSnapshot(sharedSnapshot);
+        const localScope =
+          window.localStorage.getItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY) === "local";
+        const localBaseSnapshot = window.localStorage.getItem(
+          DASHBOARD_SHARED_LAYOUT_SNAPSHOT_STORAGE_KEY
+        );
+        if (localScope && localBaseSnapshot && localBaseSnapshot !== sharedSnapshot) {
+          window.localStorage.removeItem(DASHBOARD_LAYOUT_SCOPE_STORAGE_KEY);
+          window.localStorage.removeItem(DASHBOARD_CONFIG_STORAGE_KEY);
+          window.localStorage.removeItem(DASHBOARD_SHARED_LAYOUT_SNAPSHOT_STORAGE_KEY);
+          setDashboardLayout(normalized);
+          setLayoutSavedSnapshot(sharedSnapshot);
+          setIsPersonalLayout(false);
+          return;
+        }
+        if (!localScope) {
+          setDashboardLayout(normalized);
+          setLayoutSavedSnapshot(sharedSnapshot);
+          setIsPersonalLayout(false);
+        }
       })
       .catch(() => {
         // The local/default layout remains usable when the shared layout is unavailable.
@@ -1962,65 +2112,6 @@ export default function Home() {
     setSelectedInsightId("");
     setInsightUrl("");
   }, [selectedInsightId, setInsightUrl, sidePanelMode]);
-
-  const faviconSignal = useMemo(() => {
-    const hasP1 = Array.isArray(liveAlerts?.priority1) && liveAlerts.priority1.length > 0;
-    const hasSlaWarning =
-      Array.isArray(liveAlerts?.first_response_due_warning) &&
-      liveAlerts.first_response_due_warning.length > 0;
-    const hasSlaCritical =
-      Array.isArray(liveAlerts?.first_response_due_critical) &&
-      liveAlerts.first_response_due_critical.length > 0;
-    const hasOverdue =
-      Array.isArray(liveAlerts?.first_response_overdue) &&
-      liveAlerts.first_response_overdue.length > 0;
-    const hasTtrCritical =
-      Array.isArray(liveAlerts?.time_to_resolution_critical) &&
-      liveAlerts.time_to_resolution_critical.length > 0;
-    const hasSla = hasSlaWarning || hasSlaCritical || hasOverdue;
-    const showTtrSignal = hasTtrCritical && !ttrAlertsCollapsed;
-    if (!hasP1 && !hasSla && !showTtrSignal) {
-      return {
-        href: "/favicon.ico",
-        pulseHref: "/favicon.ico",
-        shouldPulse: false,
-      };
-    }
-    const color =
-      hasP1 || hasSlaCritical || hasOverdue
-        ? "#dc2626"
-        : showTtrSignal && hasTtrCritical
-          ? "#2563eb"
-          : "#f59e0b";
-    return {
-      href: alertFaviconDataUri(color, false),
-      pulseHref: alertFaviconDataUri(color, true),
-      shouldPulse: true,
-    };
-  }, [liveAlerts, ttrAlertsCollapsed]);
-
-  useEffect(() => {
-    if (typeof document === "undefined") return undefined;
-    let faviconLink = document.querySelector("link[rel='icon']");
-    if (!faviconLink) {
-      faviconLink = document.createElement("link");
-      faviconLink.setAttribute("rel", "icon");
-      document.head.appendChild(faviconLink);
-    }
-    faviconLink.setAttribute("href", faviconSignal.href);
-    if (!faviconSignal.shouldPulse) return undefined;
-
-    let pulsed = false;
-    const t = window.setInterval(() => {
-      pulsed = !pulsed;
-      faviconLink.setAttribute("href", pulsed ? faviconSignal.pulseHref : faviconSignal.href);
-    }, 1400);
-
-    return () => {
-      window.clearInterval(t);
-      faviconLink.setAttribute("href", faviconSignal.href);
-    };
-  }, [faviconSignal.href, faviconSignal.pulseHref, faviconSignal.shouldPulse]);
 
   useEffect(() => {
     if (MANUAL_SYNC_ONLY || backendAutoSyncEnabled) return undefined;
@@ -2062,27 +2153,20 @@ export default function Home() {
     const scheduleTimer = () => {
       clearTimer();
       autoResetTimerRef.current = window.setTimeout(() => {
-        if (filtersAreDefault) {
-          scheduleTimer();
-          return;
-        }
-        if (
+        const hadTemporaryState =
+          !filtersAreDefault ||
           vacationEditMode ||
           isLayoutEditing ||
+          layoutChoiceOpen ||
           hotkeysOpen ||
           sidePanelOpen ||
           filtersOpen ||
-          dashboardSettingsOpen
-        ) {
-          scheduleTimer();
-          return;
+          dashboardSettingsOpen ||
+          Boolean(expandedCard);
+        resetDashboardToDefault();
+        if (hadTemporaryState) {
+          flashToast("Auto-reset: terug naar standaardweergave", "success");
         }
-        if (isTextEntryTarget(document.activeElement)) {
-          scheduleTimer();
-          return;
-        }
-        resetFilters(false);
-        flashToast("Auto-reset: terug naar standaardweergave", "success");
         scheduleTimer();
       }, AUTO_RESET_IDLE_MS);
     };
@@ -2109,7 +2193,9 @@ export default function Home() {
     sidePanelOpen,
     filtersOpen,
     dashboardSettingsOpen,
-    resetFilters,
+    expandedCard,
+    layoutChoiceOpen,
+    resetDashboardToDefault,
     flashToast,
   ]);
 
@@ -2350,6 +2436,29 @@ export default function Home() {
         "organizationWeekly",
       ]),
     []
+  );
+  const chartShowsCurrentWeek = useCallback(
+    (cardKey) => chartSettingsFor(cardKey).currentWeek !== false,
+    [chartSettingsFor]
+  );
+  const chartWeeks = useCallback(
+    (cardKey) =>
+      !chartShowsCurrentWeek(cardKey) && trailingPartialWeekIndex >= 0 ? weeks.slice(0, -1) : weeks,
+    [chartShowsCurrentWeek, trailingPartialWeekIndex, weeks]
+  );
+  const chartDataWithoutHiddenCurrentWeek = useCallback(
+    (cardKey, chartData) => {
+      if (chartShowsCurrentWeek(cardKey) || trailingPartialWeekIndex < 0) return chartData;
+      return {
+        ...chartData,
+        labels: chartData.labels.slice(0, -1),
+        datasets: chartData.datasets.map((dataset) => ({
+          ...dataset,
+          data: Array.isArray(dataset.data) ? dataset.data.slice(0, -1) : dataset.data,
+        })),
+      };
+    },
+    [chartShowsCurrentWeek, trailingPartialWeekIndex]
   );
   const [slowChartCards, setSlowChartCards] = useState({});
   const slowChartTimersRef = useRef(new Map());
@@ -3097,7 +3206,7 @@ export default function Home() {
         memberName,
         avatarUrl: avatarMap[memberName] || "",
         text,
-        emoji: "🏖️",
+        icon: "vacation",
       });
     });
 
@@ -3126,7 +3235,7 @@ export default function Home() {
           memberName,
           avatarUrl: avatarMap[memberName] || "",
           text: buildUpcomingWarningText(memberName, startDate, endDate),
-          emoji: "🚨",
+          icon: "alert-light",
         });
       });
 
@@ -3170,45 +3279,6 @@ export default function Home() {
     }, 0);
     return () => clearTimeout(t);
   }, [vacationBanner, vacationBannerItems.length]);
-
-  const vacationBannerStyle = useMemo(() => {
-    if (vacationBanner?.kind === "warning") {
-      return {
-        gridColumn: 2,
-        marginBottom: 0,
-        border: "1px solid color-mix(in srgb, #f59e0b 50%, var(--border))",
-        borderRadius: 10,
-        background: "color-mix(in srgb, #f59e0b 12%, var(--surface))",
-        color: "var(--text-main)",
-        padding: "8px 14px",
-        fontSize: 14,
-        fontWeight: 700,
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 10,
-        justifySelf: "center",
-        marginLeft: "auto",
-        marginRight: "auto",
-      };
-    }
-    return {
-      gridColumn: 2,
-      marginBottom: 0,
-      border: "1px solid color-mix(in srgb, var(--ok) 45%, var(--border))",
-      borderRadius: 10,
-      background: "color-mix(in srgb, var(--ok) 14%, var(--surface))",
-      color: "var(--text-main)",
-      padding: "8px 14px",
-      fontSize: 14,
-      fontWeight: 700,
-      display: "inline-flex",
-      alignItems: "center",
-      gap: 10,
-      justifySelf: "center",
-      marginLeft: "auto",
-      marginRight: "auto",
-    };
-  }, [vacationBanner]);
 
   useEffect(() => {
     if (!servicedeskTeamMembers.length) return;
@@ -3295,15 +3365,37 @@ export default function Home() {
     borderRadius: 10,
     background: "var(--surface-muted)",
   };
-  const filterGridStyle = {
+  const filterSectionStyle = {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
-    gap: 10,
-    alignItems: "end",
+    gap: 14,
+    padding: "18px 20px",
+    border: "1px solid var(--border)",
+    borderRadius: 12,
+    background: "var(--surface)",
   };
-  const filterModalGridStyle = {
-    ...filterGridStyle,
+  const filterSectionHeaderStyle = {
+    display: "grid",
+    gap: 3,
+  };
+  const filterSectionTitleStyle = {
+    color: "var(--text-main)",
+    fontSize: 14,
+    fontWeight: 750,
+  };
+  const filterSectionDescriptionStyle = {
+    color: "var(--text-muted)",
+    fontSize: 12,
+    lineHeight: 1.4,
+  };
+  const filterPeriodGridStyle = {
+    display: "grid",
     gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+    gap: 18,
+  };
+  const filterCharacteristicsGridStyle = {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+    gap: "18px 22px",
   };
   const configSectionStyle = {
     marginTop: 14,
@@ -3323,6 +3415,9 @@ export default function Home() {
     fontWeight: 700,
     color: "var(--text-main)",
     outline: "none",
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
   };
   const configListStyle = {
     marginTop: 8,
@@ -3342,9 +3437,9 @@ export default function Home() {
     isActive
       ? {
           ...fieldStyle,
-          padding: 10,
-          margin: -10,
+          padding: 12,
           borderRadius: 10,
+          border: `1px solid color-mix(in srgb, ${filterAccentColor} 42%, var(--border))`,
           background: `color-mix(in srgb, ${filterAccentColor} 14%, var(--surface))`,
         }
       : fieldStyle;
@@ -3736,6 +3831,17 @@ export default function Home() {
     fontWeight: 700,
     lineHeight: 1.35,
   };
+  const vacationAlertStyle = {
+    ...autoSyncDisabledAlertStyle,
+    border:
+      vacationBanner?.kind === "warning"
+        ? "1px solid color-mix(in srgb, #d97706 76%, var(--surface))"
+        : "1px solid color-mix(in srgb, var(--ok) 76%, var(--surface))",
+    background:
+      vacationBanner?.kind === "warning"
+        ? "color-mix(in srgb, #d97706 92%, var(--surface))"
+        : "color-mix(in srgb, var(--ok) 92%, var(--surface))",
+  };
   const filterOpenButtonStyle = {
     ...buttonBaseStyle,
     borderColor: "var(--accent)",
@@ -4058,6 +4164,26 @@ export default function Home() {
     transition: "transform 160ms ease",
     boxShadow: "0 1px 3px color-mix(in srgb, #000 22%, transparent)",
   };
+  const layoutMasterSwitchStyle = (enabled, emphasized = false) => ({
+    ...togglePillStyle,
+    height: 32,
+    padding: "0 10px",
+    fontSize: 12,
+    borderColor: enabled ? "color-mix(in srgb, var(--accent) 55%, var(--border))" : "var(--border)",
+    background: enabled ? "color-mix(in srgb, var(--accent) 9%, var(--surface))" : "var(--surface)",
+    ...(emphasized ? { fontWeight: 750 } : null),
+  });
+  const layoutMasterSwitchTrackStyle = (enabled) => ({
+    ...switchTrackStyle,
+    width: 32,
+    height: 20,
+    background: enabled
+      ? "color-mix(in srgb, var(--accent) 72%, var(--surface))"
+      : "color-mix(in srgb, var(--text-faint) 24%, var(--surface-muted))",
+    border: enabled
+      ? "1px solid color-mix(in srgb, var(--accent) 72%, var(--border))"
+      : "1px solid var(--border)",
+  });
   const hiddenPoolStyle = {
     minHeight: 64,
     border: "1px dashed var(--border)",
@@ -4493,7 +4619,7 @@ export default function Home() {
                     gap: 6,
                   }}
                 >
-                  <span>{trend.symbol}</span>
+                  <TrendArrow symbol={trend.symbol} size={expanded ? 28 : 22} />
                   <span>{trend.text}</span>
                 </span>
               </div>
@@ -4620,7 +4746,7 @@ export default function Home() {
               title="Relevant"
               aria-label="Relevant"
             >
-              👍
+              <UiIcon name="thumb-up" />
             </button>
             <button
               type="button"
@@ -4646,7 +4772,7 @@ export default function Home() {
               title="Niet relevant"
               aria-label="Niet relevant"
             >
-              👎
+              <UiIcon name="thumb-down" />
             </button>
           </div>
           <button
@@ -4755,7 +4881,10 @@ export default function Home() {
                       onClick={() => setTopOnderwerpSort("tickets")}
                       title="Sorteer op tickets (laatste volledige week)"
                     >
-                      Tickets {topOnderwerpSort === "tickets" ? "↓" : ""}
+                      Tickets{" "}
+                      {topOnderwerpSort === "tickets" ? (
+                        <ArrowDown size={13} aria-hidden="true" />
+                      ) : null}
                     </th>
                     <th
                       style={{
@@ -4767,7 +4896,10 @@ export default function Home() {
                       onClick={() => setTopOnderwerpSort("wow")}
                       title="Sorteer op WoW"
                     >
-                      Δ WoW {topOnderwerpSort === "wow" ? "↓" : ""}
+                      Δ WoW{" "}
+                      {topOnderwerpSort === "wow" ? (
+                        <ArrowDown size={13} aria-hidden="true" />
+                      ) : null}
                     </th>
                   </tr>
                 </thead>
@@ -4779,7 +4911,9 @@ export default function Home() {
                         <td style={topListTdStyle}>{row.label}</td>
                         <td style={{ ...topListTdStyle, textAlign: "right" }}>{num(row.last)}</td>
                         <td style={{ ...topListTdStyle, textAlign: "right", color: trend.color }}>
-                          {trend.symbol} {trend.text}
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+                            <TrendArrow symbol={trend.symbol} size={14} /> {trend.text}
+                          </span>
                         </td>
                       </tr>
                     );
@@ -4913,9 +5047,10 @@ export default function Home() {
 
     if (cardKey === "volume") {
       const settings = chartSettingsFor("volume");
+      const lineChartData = chartDataWithoutHiddenCurrentWeek("volume", lineData);
       const chartData = {
-        ...lineData,
-        datasets: lineData.datasets.filter((dataset) => {
+        ...lineChartData,
+        datasets: lineChartData.datasets.filter((dataset) => {
           if (!settings.total && isTotalLabel(dataset.label)) return false;
           if (
             !settings.movingAverage &&
@@ -4938,7 +5073,7 @@ export default function Home() {
                 onClick: (_evt, elements) => {
                   const el = elements?.[0];
                   if (!el) return;
-                  const weekStart = weeks[el.index];
+                  const weekStart = chartWeeks("volume")[el.index];
                   const typeLabel = chartData.datasets[el.datasetIndex]?.label;
                   if (String(typeLabel || "").startsWith("Voortschrijdend gemiddelde")) return;
                   const effectiveType = requestType
@@ -4978,21 +5113,30 @@ export default function Home() {
 
     if (cardKey === "onderwerp") {
       const settings = chartSettingsFor("onderwerp");
+      const onderwerpWeeks = chartWeeks("onderwerp");
+      const onderwerpSeries = chartShowsCurrentWeek("onderwerp")
+        ? topicTrendSeries
+        : buildTopicTrendSeries({
+            rows: onderwerpVolume,
+            bucketKeys: onderwerpWeeks,
+            selectedTopic: onderwerp,
+            limit: 5,
+          });
       const onderwerpContentStyle = expanded
         ? { display: "flex", flexDirection: "column", flex: 1, minHeight: 0, height: "100%" }
         : { display: "flex", flexDirection: "column", flex: 1, minHeight: 0 };
       return (
         <div style={onderwerpContentStyle}>
           <div style={bodyStyle}>
-            {topicTrendsHasData ? (
+            {onderwerpSeries.some((series) => series.total > 0) ? (
               <TopicTrendsCard
-                topics={topicTrendSeries}
+                topics={onderwerpSeries}
                 selectedTopic={selectedTopicTrend}
                 onSelectTopic={setSelectedTopicTrend}
                 onDetailPointClick={(bucketLabel, topicLabel) =>
                   fetchDrilldown(bucketLabel, requestType, topicLabel)
                 }
-                labels={weeklyLabels(weeksOnderwerp)}
+                labels={weeklyLabels(onderwerpWeeks)}
                 buildChartAxis={buildChartAxis}
                 chartKey={chartRenderKey("onderwerp")}
                 animation={slowChartAnimation("onderwerp")}
@@ -5172,12 +5316,13 @@ export default function Home() {
 
     if (cardKey === "inflowVsClosed") {
       const settings = chartSettingsFor("inflowVsClosed");
+      const chartData = chartDataWithoutHiddenCurrentWeek("inflowVsClosed", inflowVsClosedLineData);
       return (
         <div style={bodyStyle}>
-          {hasDataPoints(inflowVsClosedLineData) ? (
+          {hasDataPoints(chartData) ? (
             <Line
               key={chartRenderKey("inflowVsClosed")}
-              data={inflowVsClosedLineData}
+              data={chartData}
               options={{
                 responsive: true,
                 maintainAspectRatio: false,
@@ -5185,9 +5330,8 @@ export default function Home() {
                 onClick: (_evt, elements) => {
                   const el = elements?.[0];
                   if (!el) return;
-                  const weekStart = weeks[el.index];
-                  const datasetLabel =
-                    inflowVsClosedLineData.datasets?.[el.datasetIndex]?.label || "";
+                  const weekStart = chartWeeks("inflowVsClosed")[el.index];
+                  const datasetLabel = chartData.datasets?.[el.datasetIndex]?.label || "";
                   const isClosed = String(datasetLabel).toLowerCase().includes("afgesloten");
                   fetchDrilldown(weekStart, requestType, onderwerp || "", 0, {
                     dateField: isClosed ? "resolved" : "created",
@@ -5326,12 +5470,16 @@ export default function Home() {
 
     if (cardKey === "incidentResolution") {
       const settings = chartSettingsFor("incidentResolution");
+      const chartData = chartDataWithoutHiddenCurrentWeek(
+        "incidentResolution",
+        incidentResolutionLineData
+      );
       return (
         <div style={bodyStyle}>
-          {hasDataPoints(incidentResolutionLineData) ? (
+          {hasDataPoints(chartData) ? (
             <Line
               key={chartRenderKey("incidentResolution")}
-              data={incidentResolutionLineData}
+              data={chartData}
               options={{
                 responsive: true,
                 maintainAspectRatio: false,
@@ -5371,12 +5519,16 @@ export default function Home() {
 
     if (cardKey === "firstResponseAll") {
       const settings = chartSettingsFor("firstResponseAll");
+      const chartData = chartDataWithoutHiddenCurrentWeek(
+        "firstResponseAll",
+        firstResponseLineData
+      );
       return (
         <div style={bodyStyle}>
-          {hasDataPoints(firstResponseLineData) ? (
+          {hasDataPoints(chartData) ? (
             <Line
               key={chartRenderKey("firstResponseAll")}
-              data={firstResponseLineData}
+              data={chartData}
               options={{
                 responsive: true,
                 maintainAspectRatio: false,
@@ -5405,12 +5557,16 @@ export default function Home() {
 
     if (cardKey === "organizationWeekly") {
       const settings = chartSettingsFor("organizationWeekly");
+      const chartData = chartDataWithoutHiddenCurrentWeek(
+        "organizationWeekly",
+        organizationBarData
+      );
       return (
         <div style={bodyStyle}>
-          {hasDataPoints(organizationBarData) ? (
+          {hasDataPoints(chartData) ? (
             <Bar
               key={chartRenderKey("organizationWeekly")}
-              data={organizationBarData}
+              data={chartData}
               options={{
                 responsive: true,
                 maintainAspectRatio: false,
@@ -5502,7 +5658,7 @@ export default function Home() {
                       aria-label="Open kalender"
                       style={buttonBaseStyle}
                     >
-                      📅
+                      <UiIcon name="calendar" />
                     </button>
                     <input
                       ref={vacationStartNativeRef}
@@ -5564,7 +5720,7 @@ export default function Home() {
                       aria-label="Open kalender"
                       style={buttonBaseStyle}
                     >
-                      📅
+                      <UiIcon name="calendar" />
                     </button>
                     <input
                       ref={vacationEndNativeRef}
@@ -5688,26 +5844,7 @@ export default function Home() {
                             aria-label="Aanpassen"
                             disabled={vacationSaving}
                           >
-                            <svg
-                              width="14"
-                              height="14"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              aria-hidden="true"
-                            >
-                              <path
-                                d="M4 20h4l10-10-4-4L4 16v4Z"
-                                stroke="currentColor"
-                                strokeWidth="1.8"
-                                strokeLinejoin="round"
-                              />
-                              <path
-                                d="m12 6 4 4"
-                                stroke="currentColor"
-                                strokeWidth="1.8"
-                                strokeLinecap="round"
-                              />
-                            </svg>
+                            <Pencil size={14} aria-hidden="true" />
                           </button>
                           <button
                             type="button"
@@ -5721,21 +5858,7 @@ export default function Home() {
                             aria-label="Verwijderen"
                             disabled={vacationSaving}
                           >
-                            <svg
-                              width="14"
-                              height="14"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              aria-hidden="true"
-                            >
-                              <path
-                                d="M4 7h16M10 3h4M7 7l1 13h8l1-13"
-                                stroke="currentColor"
-                                strokeWidth="1.8"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                              />
-                            </svg>
+                            <Trash2 size={14} aria-hidden="true" />
                           </button>
                         </div>
                       </li>
@@ -5801,8 +5924,14 @@ export default function Home() {
                     </span>
                     <span>
                       <strong style={{ fontSize: 20 }}>{num(kpiStats.currentWeekReceived)}</strong>{" "}
-                      <span style={{ color: receivedTrend.color, fontSize: 20 }}>
-                        {receivedTrend.symbol}
+                      <span
+                        style={{
+                          color: receivedTrend.color,
+                          display: "inline-flex",
+                          verticalAlign: "middle",
+                        }}
+                      >
+                        <TrendArrow symbol={receivedTrend.symbol} size={20} />
                       </span>
                     </span>
                   </span>
@@ -5819,8 +5948,14 @@ export default function Home() {
                     </span>
                     <span>
                       <strong style={{ fontSize: 20 }}>{num(kpiStats.currentWeekClosed)}</strong>{" "}
-                      <span style={{ color: closedTrend.color, fontSize: 20 }}>
-                        {closedTrend.symbol}
+                      <span
+                        style={{
+                          color: closedTrend.color,
+                          display: "inline-flex",
+                          verticalAlign: "middle",
+                        }}
+                      >
+                        <TrendArrow symbol={closedTrend.symbol} size={20} />
                       </span>
                     </span>
                   </span>
@@ -5942,9 +6077,14 @@ export default function Home() {
       releaseWednesdayWorkload: {
         label: "Workload werkdag na release",
         value:
-          kpiStats.releaseWednesdayTrendText === "—"
-            ? "—"
-            : `${kpiStats.releaseWednesdayTrendSymbol} ${kpiStats.releaseWednesdayTrendText}`.trim(),
+          kpiStats.releaseWednesdayTrendText === "—" ? (
+            "—"
+          ) : (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <TrendArrow symbol={kpiStats.releaseWednesdayTrendSymbol} size={20} />
+              {kpiStats.releaseWednesdayTrendText}
+            </span>
+          ),
         sub: `Laatste release: ${kpiStats.releaseWednesdayLatestReleaseLabel} · ${num(kpiStats.releaseWednesdayLatestTickets)} tickets`,
         subSecondary: releaseStatusNote
           ? releaseStatusNote
@@ -6171,7 +6311,6 @@ export default function Home() {
     <div style={pageStyle}>
       <Head>
         <title>Dashboard Servicedesk Twentecs</title>
-        <link rel="icon" href={faviconSignal.href} />
       </Head>
       <JiraTokenExpiryWarning />
       <Toast message={syncMessage} kind={syncMessageKind} onClose={() => setSyncMessage("")} />
@@ -6195,36 +6334,6 @@ export default function Home() {
       </button>
       <div style={headerRowStyle}>
         <h1 style={titleStyle}>Dashboard Servicedesk Twentecs</h1>
-        {vacationBanner ? (
-          <div style={vacationBannerStyle}>
-            <VacationAvatar
-              name={vacationBanner.memberName}
-              avatarUrl={vacationBanner.avatarUrl}
-              style={{ width: 30, height: 30, fontSize: 11 }}
-            />
-            <span>{vacationBanner.text}</span>
-            <span aria-hidden>{vacationBanner.emoji}</span>
-            {vacationBannerItems.length > 1 ? (
-              <span style={{ display: "inline-flex", gap: 4, marginLeft: 4, alignItems: "center" }}>
-                {vacationBannerItems.map((item, idx) => (
-                  <span
-                    key={`banner-dot-${item.key}`}
-                    aria-hidden
-                    style={{
-                      width: 6,
-                      height: 6,
-                      borderRadius: 999,
-                      background:
-                        idx === vacationBannerIndex % vacationBannerItems.length
-                          ? "var(--text-main)"
-                          : "color-mix(in srgb, var(--text-muted) 48%, transparent)",
-                    }}
-                  />
-                ))}
-              </span>
-            ) : null}
-          </div>
-        ) : null}
         <div style={headerActionsStyle}>
           {activeFilterItems.length ? (
             <>
@@ -6300,15 +6409,7 @@ export default function Home() {
               title="Alerts logboek openen"
               aria-label="Alerts logboek openen"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path
-                  d="M12 3a5 5 0 0 0-5 5v3.5L5 14v1h14v-1l-2-2.5V8a5 5 0 0 0-5-5zM10 18a2 2 0 0 0 4 0"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
+              <Bell size={14} aria-hidden="true" />
               {hasNewAlertLogEntry ? (
                 <span
                   aria-hidden="true"
@@ -6327,15 +6428,7 @@ export default function Home() {
             </button>
             {!isLayoutEditing ? (
               <button type="button" onClick={startLayoutEditing} style={filterOpenButtonStyle}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path
-                    d="M3 17.25V21h3.75L19.81 7.94l-3.75-3.75L3 17.25zM14.06 5.94l3.75 3.75"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
+                <Pencil size={14} aria-hidden="true" />
                 Layout aanpassen
               </button>
             ) : null}
@@ -6344,15 +6437,7 @@ export default function Home() {
               onClick={() => setFiltersOpen(true)}
               style={{ ...filterOpenButtonStyle, order: 2 }}
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path
-                  d="M4 6h16l-6 7v5l-4 2v-7L4 6z"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
+              <Filter size={14} aria-hidden="true" />
               Filters openen
             </button>
             <button
@@ -6383,7 +6468,14 @@ export default function Home() {
             aria-label={filtersOpen ? "Filters" : "Dashboard instellingen"}
           >
             <div style={filterModalHeaderStyle}>
-              <strong>{filtersOpen ? "Filters" : "Dashboard instellingen"}</strong>
+              <strong style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                {filtersOpen ? (
+                  <Filter size={18} aria-hidden="true" />
+                ) : (
+                  <Settings size={18} aria-hidden="true" />
+                )}
+                {filtersOpen ? "Filters" : "Dashboard instellingen"}
+              </strong>
               <button
                 type="button"
                 onClick={() => {
@@ -6392,12 +6484,13 @@ export default function Home() {
                 }}
                 style={buttonBaseStyle}
               >
+                <X size={14} aria-hidden="true" />
                 Sluiten
               </button>
             </div>
             {filtersOpen ? (
-              <div style={{ ...filterPanelStyle, padding: 20, marginBottom: 0 }}>
-                <div style={{ display: "grid", gap: 8, marginBottom: 18, maxWidth: 760 }}>
+              <div style={{ ...filterPanelStyle, padding: 28, marginBottom: 0 }}>
+                <div style={{ display: "grid", gap: 8, marginBottom: 24, maxWidth: 720 }}>
                   <strong>Analyseer historische ticketgegevens</strong>
                   <span style={{ color: "var(--text-muted)", lineHeight: 1.5 }}>
                     Verfijn de periode en kenmerken om patronen in eerdere tickets te onderzoeken.
@@ -6410,293 +6503,310 @@ export default function Home() {
                     </div>
                   ) : null}
                 </div>
-                <div style={filterModalGridStyle}>
-                  <label
-                    style={filterFieldStyle(
-                      activeFilterItems.some((item) => item.startsWith("Periode:"))
-                    )}
-                  >
-                    <span style={labelStyle}>Van</span>
-                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                      <input
-                        ref={dateFromTextRef}
-                        type="text"
-                        inputMode="numeric"
-                        placeholder="dd/mm/jjjj"
-                        value={dateFromUi}
-                        onChange={(e) => setDateFromUi(e.target.value)}
-                        onBlur={() => {
-                          const iso = parseNlDateToIso(dateFromUi);
-                          if (iso) {
-                            setDateFrom(iso);
-                          } else {
-                            setSyncMessage("Ongeldige datum (Van). Gebruik dd/mm/jjjj.");
-                            setSyncMessageKind("error");
-                            setTimeout(() => setSyncMessage(""), 6000);
-                            setDateFromUi(fmtDate(dateFrom));
-                          }
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.currentTarget.blur();
-                          }
-                        }}
-                        style={inputBaseStyle}
-                      />
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const el = dateFromNativeRef.current;
-                          if (!el) return;
-                          // Prefer the native picker when supported
-                          if (typeof el.showPicker === "function") el.showPicker();
-                          else {
-                            el.focus();
-                            el.click();
-                          }
-                        }}
-                        title="Open kalender"
-                        aria-label="Open kalender"
-                        style={buttonBaseStyle}
-                      >
-                        📅
-                      </button>
-
-                      <input
-                        ref={dateFromNativeRef}
-                        type="date"
-                        value={dateFrom}
-                        onChange={(e) => {
-                          const iso = e.target.value;
-                          setDateFrom(iso);
-                          setDateFromUi(fmtDate(iso));
-                        }}
-                        style={{
-                          position: "absolute",
-                          opacity: 0,
-                          pointerEvents: "none",
-                          width: 0,
-                          height: 0,
-                        }}
-                        tabIndex={-1}
-                        aria-hidden="true"
-                      />
-                    </div>
-                  </label>
-
-                  <label
-                    style={filterFieldStyle(
-                      activeFilterItems.some((item) => item.startsWith("Periode:"))
-                    )}
-                  >
-                    <span style={labelStyle}>Tot</span>
-                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        placeholder="dd/mm/jjjj"
-                        value={dateToUi}
-                        onChange={(e) => setDateToUi(e.target.value)}
-                        onBlur={() => {
-                          const iso = parseNlDateToIso(dateToUi);
-                          if (iso) {
-                            setDateTo(iso);
-                          } else {
-                            setSyncMessage("Ongeldige datum (Tot). Gebruik dd/mm/jjjj.");
-                            setSyncMessageKind("error");
-                            setTimeout(() => setSyncMessage(""), 6000);
-                            setDateToUi(fmtDate(dateTo));
-                          }
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.currentTarget.blur();
-                          }
-                        }}
-                        style={inputBaseStyle}
-                      />
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const el = dateToNativeRef.current;
-                          if (!el) return;
-                          if (typeof el.showPicker === "function") el.showPicker();
-                          else {
-                            el.focus();
-                            el.click();
-                          }
-                        }}
-                        title="Open kalender"
-                        aria-label="Open kalender"
-                        style={buttonBaseStyle}
-                      >
-                        📅
-                      </button>
-
-                      <input
-                        ref={dateToNativeRef}
-                        type="date"
-                        value={dateTo}
-                        onChange={(e) => {
-                          const iso = e.target.value;
-                          setDateTo(iso);
-                          setDateToUi(fmtDate(iso));
-                        }}
-                        style={{
-                          position: "absolute",
-                          opacity: 0,
-                          pointerEvents: "none",
-                          width: 0,
-                          height: 0,
-                        }}
-                        tabIndex={-1}
-                        aria-hidden="true"
-                      />
-                    </div>
-                  </label>
-
-                  <label style={filterFieldStyle(Boolean(requestType))}>
-                    <span style={labelStyle}>Request type</span>
-                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                      <span
-                        aria-hidden
-                        style={{
-                          width: 10,
-                          height: 10,
-                          borderRadius: 999,
-                          background: typeColor(requestType),
-                          display: "inline-block",
-                          border: "1px solid var(--indicator-border)",
-                        }}
-                      />
-                      <select
-                        value={requestType}
-                        onChange={(e) => {
-                          setRequestType(e.target.value);
-                          e.target.blur();
-                        }}
-                        style={inputBaseStyle}
-                      >
-                        <option value="">(alle)</option>
-                        {meta.request_types.map((rt) => (
-                          <option key={rt} value={rt}>
-                            {rt}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </label>
-
-                  <label style={filterFieldStyle(Boolean(onderwerp))}>
-                    <span style={labelStyle}>Onderwerp</span>
-                    <select
-                      value={onderwerp}
-                      onChange={(e) => {
-                        setOnderwerp(e.target.value);
-                        e.target.blur();
-                      }}
-                      style={inputBaseStyle}
-                    >
-                      <option value="">(alle)</option>
-                      {onderwerpFilterOpties.map((o) => (
-                        <option key={o} value={o}>
-                          {o}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label style={filterFieldStyle(Boolean(priority))}>
-                    <span style={labelStyle}>Prioriteit</span>
-                    <select
-                      value={priority}
-                      onChange={(e) => {
-                        setPriority(e.target.value);
-                        e.target.blur();
-                      }}
-                      style={inputBaseStyle}
-                    >
-                      <option value="">(alle)</option>
-                      {meta.priorities.map((p) => (
-                        <option key={p} value={p}>
-                          {p}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label style={filterFieldStyle(Boolean(assignee))}>
-                    <span style={labelStyle}>Assignee</span>
-                    <select
-                      value={assignee}
-                      onChange={(e) => {
-                        setAssignee(e.target.value);
-                        e.target.blur();
-                      }}
-                      style={inputBaseStyle}
-                    >
-                      <option value="">(alle)</option>
-                      {meta.assignees.map((a) => (
-                        <option key={a} value={a}>
-                          {a}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label style={filterFieldStyle(Boolean(organization))}>
-                    <span style={labelStyle}>Partner</span>
-                    <select
-                      value={organization}
-                      onChange={(e) => {
-                        setOrganization(e.target.value);
-                        e.target.blur();
-                      }}
-                      style={inputBaseStyle}
-                    >
-                      <option value="">(alle)</option>
-                      {meta.organizations.map((o) => (
-                        <option key={o} value={o}>
-                          {o}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label
-                    style={filterFieldStyle(servicedeskOnly !== DEFAULT_SERVICEDESK_ONLY)}
-                    title="Sluit uit: Koppelingen, datadump, Rest-endpoints, migratie, SSO-koppeling"
-                  >
-                    <span style={labelStyle}>Scope</span>
-                    <div
-                      style={{ display: "flex", flexDirection: "column", gap: 4, padding: "4px" }}
-                    >
-                      <label
-                        style={{ display: "flex", gap: 8, alignItems: "center", minHeight: 28 }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={servicedeskOnly}
-                          onChange={(e) => setServicedeskOnly(e.target.checked)}
-                        />
-                        <span>Alleen servicedesk</span>
-                      </label>
-                      <span style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.4 }}>
-                        Voor tickettellingen wordt servicedesk bepaald door de geselecteerde
-                        onderwerpen.
+                <div style={{ display: "grid", gap: 18 }}>
+                  <section style={filterSectionStyle}>
+                    <div style={filterSectionHeaderStyle}>
+                      <span style={filterSectionTitleStyle}>Periode</span>
+                      <span style={filterSectionDescriptionStyle}>
+                        Kies het tijdvak voor de analyse.
                       </span>
                     </div>
-                  </label>
+                    <div style={filterPeriodGridStyle}>
+                      <label
+                        style={filterFieldStyle(
+                          activeFilterItems.some((item) => item.startsWith("Periode:"))
+                        )}
+                      >
+                        <FilterFieldLabel Icon={CalendarDays}>Van</FilterFieldLabel>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <input
+                            ref={dateFromTextRef}
+                            type="text"
+                            inputMode="numeric"
+                            placeholder="dd/mm/jjjj"
+                            value={dateFromUi}
+                            onChange={(e) => setDateFromUi(e.target.value)}
+                            onBlur={() => {
+                              const iso = parseNlDateToIso(dateFromUi);
+                              if (iso) {
+                                setDateFrom(iso);
+                              } else {
+                                setSyncMessage("Ongeldige datum (Van). Gebruik dd/mm/jjjj.");
+                                setSyncMessageKind("error");
+                                setTimeout(() => setSyncMessage(""), 6000);
+                                setDateFromUi(fmtDate(dateFrom));
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.currentTarget.blur();
+                              }
+                            }}
+                            style={inputBaseStyle}
+                          />
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const el = dateFromNativeRef.current;
+                              if (!el) return;
+                              // Prefer the native picker when supported
+                              if (typeof el.showPicker === "function") el.showPicker();
+                              else {
+                                el.focus();
+                                el.click();
+                              }
+                            }}
+                            title="Open kalender"
+                            aria-label="Open kalender"
+                            style={buttonBaseStyle}
+                          >
+                            <UiIcon name="calendar" />
+                          </button>
+
+                          <input
+                            ref={dateFromNativeRef}
+                            type="date"
+                            value={dateFrom}
+                            onChange={(e) => {
+                              const iso = e.target.value;
+                              setDateFrom(iso);
+                              setDateFromUi(fmtDate(iso));
+                            }}
+                            style={{
+                              position: "absolute",
+                              opacity: 0,
+                              pointerEvents: "none",
+                              width: 0,
+                              height: 0,
+                            }}
+                            tabIndex={-1}
+                            aria-hidden="true"
+                          />
+                        </div>
+                      </label>
+
+                      <label
+                        style={filterFieldStyle(
+                          activeFilterItems.some((item) => item.startsWith("Periode:"))
+                        )}
+                      >
+                        <FilterFieldLabel Icon={CalendarDays}>Tot</FilterFieldLabel>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            placeholder="dd/mm/jjjj"
+                            value={dateToUi}
+                            onChange={(e) => setDateToUi(e.target.value)}
+                            onBlur={() => {
+                              const iso = parseNlDateToIso(dateToUi);
+                              if (iso) {
+                                setDateTo(iso);
+                              } else {
+                                setSyncMessage("Ongeldige datum (Tot). Gebruik dd/mm/jjjj.");
+                                setSyncMessageKind("error");
+                                setTimeout(() => setSyncMessage(""), 6000);
+                                setDateToUi(fmtDate(dateTo));
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.currentTarget.blur();
+                              }
+                            }}
+                            style={inputBaseStyle}
+                          />
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const el = dateToNativeRef.current;
+                              if (!el) return;
+                              if (typeof el.showPicker === "function") el.showPicker();
+                              else {
+                                el.focus();
+                                el.click();
+                              }
+                            }}
+                            title="Open kalender"
+                            aria-label="Open kalender"
+                            style={buttonBaseStyle}
+                          >
+                            <UiIcon name="calendar" />
+                          </button>
+
+                          <input
+                            ref={dateToNativeRef}
+                            type="date"
+                            value={dateTo}
+                            onChange={(e) => {
+                              const iso = e.target.value;
+                              setDateTo(iso);
+                              setDateToUi(fmtDate(iso));
+                            }}
+                            style={{
+                              position: "absolute",
+                              opacity: 0,
+                              pointerEvents: "none",
+                              width: 0,
+                              height: 0,
+                            }}
+                            tabIndex={-1}
+                            aria-hidden="true"
+                          />
+                        </div>
+                      </label>
+                    </div>
+                  </section>
+                  <section style={filterSectionStyle}>
+                    <div style={filterSectionHeaderStyle}>
+                      <span style={filterSectionTitleStyle}>Ticketkenmerken</span>
+                      <span style={filterSectionDescriptionStyle}>
+                        Verfijn de tickets op type, onderwerp, prioriteit of eigenaar.
+                      </span>
+                    </div>
+                    <div style={filterCharacteristicsGridStyle}>
+                      <label style={filterFieldStyle(Boolean(requestType))}>
+                        <FilterFieldLabel Icon={Filter}>Request type</FilterFieldLabel>
+                        <select
+                          value={requestType}
+                          onChange={(e) => {
+                            setRequestType(e.target.value);
+                            e.target.blur();
+                          }}
+                          style={inputBaseStyle}
+                        >
+                          <option value="">(alle)</option>
+                          {meta.request_types.map((rt) => (
+                            <option key={rt} value={rt}>
+                              {rt}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label style={filterFieldStyle(Boolean(onderwerp))}>
+                        <FilterFieldLabel Icon={Tags}>Onderwerp</FilterFieldLabel>
+                        <select
+                          value={onderwerp}
+                          onChange={(e) => {
+                            setOnderwerp(e.target.value);
+                            e.target.blur();
+                          }}
+                          style={inputBaseStyle}
+                        >
+                          <option value="">(alle)</option>
+                          {onderwerpFilterOpties.map((o) => (
+                            <option key={o} value={o}>
+                              {o}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label style={filterFieldStyle(Boolean(priority))}>
+                        <FilterFieldLabel Icon={Flag}>Prioriteit</FilterFieldLabel>
+                        <select
+                          value={priority}
+                          onChange={(e) => {
+                            setPriority(e.target.value);
+                            e.target.blur();
+                          }}
+                          style={inputBaseStyle}
+                        >
+                          <option value="">(alle)</option>
+                          {meta.priorities.map((p) => (
+                            <option key={p} value={p}>
+                              {p}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label style={filterFieldStyle(Boolean(assignee))}>
+                        <FilterFieldLabel Icon={UserRound}>Assignee</FilterFieldLabel>
+                        <select
+                          value={assignee}
+                          onChange={(e) => {
+                            setAssignee(e.target.value);
+                            e.target.blur();
+                          }}
+                          style={inputBaseStyle}
+                        >
+                          <option value="">(alle)</option>
+                          {meta.assignees.map((a) => (
+                            <option key={a} value={a}>
+                              {a}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label style={filterFieldStyle(Boolean(organization))}>
+                        <FilterFieldLabel Icon={Building2}>Partner</FilterFieldLabel>
+                        <select
+                          value={organization}
+                          onChange={(e) => {
+                            setOrganization(e.target.value);
+                            e.target.blur();
+                          }}
+                          style={inputBaseStyle}
+                        >
+                          <option value="">(alle)</option>
+                          {meta.organizations.map((o) => (
+                            <option key={o} value={o}>
+                              {o}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  </section>
+                  <section style={filterSectionStyle}>
+                    <div style={filterSectionHeaderStyle}>
+                      <span style={filterSectionTitleStyle}>Scope</span>
+                      <span style={filterSectionDescriptionStyle}>
+                        Bepaal welke tickets in de analyse meetellen.
+                      </span>
+                    </div>
+                    <label
+                      style={filterFieldStyle(servicedeskOnly !== DEFAULT_SERVICEDESK_ONLY)}
+                      title="Sluit uit: Koppelingen, datadump, Rest-endpoints, migratie, SSO-koppeling"
+                    >
+                      <FilterFieldLabel Icon={SlidersHorizontal}>Scope</FilterFieldLabel>
+                      <div
+                        style={{ display: "flex", flexDirection: "column", gap: 4, padding: "4px" }}
+                      >
+                        <label
+                          style={{ display: "flex", gap: 8, alignItems: "center", minHeight: 28 }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={servicedeskOnly}
+                            onChange={(e) => setServicedeskOnly(e.target.checked)}
+                          />
+                          <span>Alleen servicedesk</span>
+                        </label>
+                        <span style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.4 }}>
+                          Voor tickettellingen wordt servicedesk bepaald door de geselecteerde
+                          onderwerpen.
+                        </span>
+                      </div>
+                    </label>
+                  </section>
                 </div>
               </div>
             ) : null}
 
             {dashboardSettingsOpen ? (
               <div style={{ ...configSectionStyle, marginTop: 0, borderTop: 0, padding: 20 }}>
-                <details style={configDetailsStyle}>
-                  <summary style={configSummaryStyle}>Servicedesk teamleden</summary>
+                <details className="dashboard-settings-details" style={configDetailsStyle}>
+                  <summary style={configSummaryStyle}>
+                    <Users size={17} aria-hidden="true" />
+                    Servicedesk teamleden
+                    <ChevronRight className="settings-chevron" size={17} aria-hidden="true" />
+                  </summary>
                   <div
                     style={{
                       marginTop: 8,
@@ -6743,8 +6853,12 @@ export default function Home() {
                   </div>
                 </details>
 
-                <details style={configDetailsStyle}>
-                  <summary style={configSummaryStyle}>Weekly insights e-mail</summary>
+                <details className="dashboard-settings-details" style={configDetailsStyle}>
+                  <summary style={configSummaryStyle}>
+                    <Mail size={17} aria-hidden="true" />
+                    Weekly insights e-mail
+                    <ChevronRight className="settings-chevron" size={17} aria-hidden="true" />
+                  </summary>
                   <label
                     style={{
                       display: "flex",
@@ -6758,7 +6872,9 @@ export default function Home() {
                     }}
                   >
                     <span>
-                      <span style={{ display: "block", fontWeight: 700 }}>Automatisch versturen</span>
+                      <span style={{ display: "block", fontWeight: 700 }}>
+                        Automatisch versturen
+                      </span>
                       <span
                         style={{
                           display: "block",
@@ -6788,8 +6904,9 @@ export default function Home() {
                       lineHeight: 1.5,
                     }}
                   >
-                    De PDF wordt na de wekelijkse generatie als bijlage verstuurd wanneer automatisch
-                    versturen is ingeschakeld. Het testadres kun je naar wens verwijderen.
+                    De PDF wordt na de wekelijkse generatie als bijlage verstuurd wanneer
+                    automatisch versturen is ingeschakeld. Het testadres kun je naar wens
+                    verwijderen.
                   </div>
                   {Object.keys(servicedeskConfig?.team_member_emails || {}).length ? (
                     <div
@@ -6885,8 +7002,12 @@ export default function Home() {
                   </div>
                 </details>
 
-                <details style={configDetailsStyle}>
-                  <summary style={configSummaryStyle}>Servicedesk onderwerpen</summary>
+                <details className="dashboard-settings-details" style={configDetailsStyle}>
+                  <summary style={configSummaryStyle}>
+                    <Tags size={17} aria-hidden="true" />
+                    Servicedesk onderwerpen
+                    <ChevronRight className="settings-chevron" size={17} aria-hidden="true" />
+                  </summary>
                   <div
                     style={{
                       marginTop: 8,
@@ -6937,29 +7058,19 @@ export default function Home() {
                         disabled={onderwerpConfigSaving}
                         style={filterOpenButtonStyle}
                       >
-                        <svg
-                          width="14"
-                          height="14"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          aria-hidden="true"
-                        >
-                          <path
-                            d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6"
-                            stroke="currentColor"
-                            strokeWidth="1.8"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                        </svg>
+                        <RotateCcw size={14} aria-hidden="true" />
                         Opnieuw beginnen
                       </button>
                     ) : null}
                   </div>
                 </details>
 
-                <details style={configDetailsStyle}>
-                  <summary style={configSummaryStyle}>SaaS Releases</summary>
+                <details className="dashboard-settings-details" style={configDetailsStyle}>
+                  <summary style={configSummaryStyle}>
+                    <Rocket size={17} aria-hidden="true" />
+                    SaaS Releases
+                    <ChevronRight className="settings-chevron" size={17} aria-hidden="true" />
+                  </summary>
                   <div
                     style={{
                       marginTop: 8,
@@ -7107,8 +7218,12 @@ export default function Home() {
                   </div>
                 </details>
 
-                <details style={configDetailsStyle}>
-                  <summary style={configSummaryStyle}>AI inzichten</summary>
+                <details className="dashboard-settings-details" style={configDetailsStyle}>
+                  <summary style={{ ...configSummaryStyle, color: "var(--accent)" }}>
+                    <Sparkles size={17} aria-hidden="true" />
+                    AI inzichten
+                    <ChevronRight className="settings-chevron" size={17} aria-hidden="true" />
+                  </summary>
                   <div style={{ display: "grid", gap: 10 }}>
                     <label style={fieldStyle}>
                       <span style={labelStyle}>Threshold (%)</span>
@@ -7237,14 +7352,7 @@ export default function Home() {
                           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                             {isLayoutEditing ? (
                               <span style={dragHandleStyle} aria-hidden>
-                                <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-                                  <circle cx="2" cy="2" r="1" />
-                                  <circle cx="2" cy="5" r="1" />
-                                  <circle cx="2" cy="8" r="1" />
-                                  <circle cx="8" cy="2" r="1" />
-                                  <circle cx="8" cy="5" r="1" />
-                                  <circle cx="8" cy="8" r="1" />
-                                </svg>
+                                <GripVertical size={12} />
                               </span>
                             ) : null}
                             <div style={{ ...kpiLabelStyle, marginBottom: 0 }}>{tile.label}</div>
@@ -7280,21 +7388,7 @@ export default function Home() {
                               title="Verberg kaart"
                               aria-label="Verberg kaart"
                             >
-                              <svg
-                                width="14"
-                                height="14"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                aria-hidden="true"
-                              >
-                                <path
-                                  d="M4 7h16M10 3h4M7 7l1 13h8l1-13"
-                                  stroke="currentColor"
-                                  strokeWidth="1.8"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                />
-                              </svg>
+                              <Trash2 size={14} aria-hidden="true" />
                             </button>
                           ) : null}
                         </div>
@@ -7455,7 +7549,10 @@ export default function Home() {
                   const isLocked = lockedCardKeys.includes(cardKey);
                   const displayTitle = aiInsight ? aiInsight.title : cardTitleByKey(cardKey);
                   const showPartialWeekBadge =
-                    !aiInsight && Boolean(weeklyScopeHint) && weeklyPartialCardKeys.has(cardKey);
+                    !aiInsight &&
+                    chartShowsCurrentWeek(cardKey) &&
+                    Boolean(weeklyScopeHint) &&
+                    weeklyPartialCardKeys.has(cardKey);
                   const showLastWeekBadge = !aiInsight && cardKey === "topOnderwerpen";
                   const canExpandCard = expandableCardKeys.has(cardKey);
                   const configuredCapabilities = aiInsight
@@ -7526,14 +7623,7 @@ export default function Home() {
                               style={{ display: "inline-flex", alignItems: "baseline", gap: 6 }}
                             >
                               <span style={dragHandleStyle} aria-hidden>
-                                <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-                                  <circle cx="2" cy="2" r="1" />
-                                  <circle cx="2" cy="5" r="1" />
-                                  <circle cx="2" cy="8" r="1" />
-                                  <circle cx="8" cy="2" r="1" />
-                                  <circle cx="8" cy="5" r="1" />
-                                  <circle cx="8" cy="8" r="1" />
-                                </svg>
+                                <GripVertical size={12} />
                               </span>
                               <span style={chartTitleStyle}>
                                 {aiInsight ? aiInsight.title : cardTitleByKey(cardKey)}
@@ -7573,15 +7663,7 @@ export default function Home() {
                               ) : null}
                             </span>
                             <span style={cardTitleHintStyle} aria-hidden="true">
-                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
-                                <path
-                                  d="M4 10V4h6M20 14v6h-6M14 4h6v6M10 20H4v-6"
-                                  stroke="currentColor"
-                                  strokeWidth="1.8"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                />
-                              </svg>
+                              <Maximize2 size={12} />
                             </span>
                           </button>
                         ) : (
@@ -7617,49 +7699,11 @@ export default function Home() {
                               title={isLocked ? "Slot ontgrendelen" : "Slot vergrendelen"}
                               aria-label={isLocked ? "Slot ontgrendelen" : "Slot vergrendelen"}
                             >
-                              <svg
-                                width="14"
-                                height="14"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                aria-hidden="true"
-                              >
-                                {isLocked ? (
-                                  <>
-                                    <path
-                                      d="M8 10V7a4 4 0 1 1 8 0v3"
-                                      stroke="currentColor"
-                                      strokeWidth="1.8"
-                                      strokeLinecap="round"
-                                    />
-                                    <rect
-                                      x="5"
-                                      y="10"
-                                      width="14"
-                                      height="10"
-                                      rx="2"
-                                      stroke="currentColor"
-                                      strokeWidth="1.8"
-                                    />
-                                  </>
-                                ) : (
-                                  <>
-                                    <path
-                                      d="M16 10V7a4 4 0 1 0-8 0"
-                                      stroke="currentColor"
-                                      strokeWidth="1.8"
-                                      strokeLinecap="round"
-                                    />
-                                    <path
-                                      d="M15 10h4v10H5V10h7"
-                                      stroke="currentColor"
-                                      strokeWidth="1.8"
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                    />
-                                  </>
-                                )}
-                              </svg>
+                              {isLocked ? (
+                                <Lock size={14} aria-hidden="true" />
+                              ) : (
+                                <LockKeyholeOpen size={14} aria-hidden="true" />
+                              )}
                             </button>
                             {cardSettingCapabilities ? (
                               <button
@@ -7698,20 +7742,7 @@ export default function Home() {
                                   expandedKey === cardKey ? "Normale breedte" : "Verdubbel breedte"
                                 }
                               >
-                                <svg
-                                  width="14"
-                                  height="14"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  aria-hidden="true"
-                                >
-                                  <path
-                                    d="M4 6h7v12H4V6Zm9 0h7v12h-7V6Z"
-                                    stroke="currentColor"
-                                    strokeWidth="1.8"
-                                    strokeLinejoin="round"
-                                  />
-                                </svg>
+                                <Columns2 size={14} aria-hidden="true" />
                               </button>
                             ) : null}
                             <button
@@ -7721,21 +7752,7 @@ export default function Home() {
                               title="Verberg kaart"
                               aria-label="Verberg kaart"
                             >
-                              <svg
-                                width="14"
-                                height="14"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                aria-hidden="true"
-                              >
-                                <path
-                                  d="M4 7h16M10 3h4M7 7l1 13h8l1-13"
-                                  stroke="currentColor"
-                                  strokeWidth="1.8"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                />
-                              </svg>
+                              <Trash2 size={14} aria-hidden="true" />
                             </button>
                           </span>
                         ) : (
@@ -7748,20 +7765,7 @@ export default function Home() {
                                 title="Vakantie toevoegen"
                                 aria-label="Vakantie toevoegen"
                               >
-                                <svg
-                                  width="14"
-                                  height="14"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  aria-hidden="true"
-                                >
-                                  <path
-                                    d="M12 5v14M5 12h14"
-                                    stroke="currentColor"
-                                    strokeWidth="1.8"
-                                    strokeLinecap="round"
-                                  />
-                                </svg>
+                                <Plus size={14} aria-hidden="true" />
                               </button>
                             ) : null}
                           </span>
@@ -7842,6 +7846,25 @@ export default function Home() {
                                 }
                               />
                               Voortschrijdend gemiddelde tonen
+                            </label>
+                          ) : null}
+                          {cardSettingCapabilities.currentWeek ? (
+                            <label
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 8,
+                                fontSize: 13,
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={cardSettings.currentWeek}
+                                onChange={(event) =>
+                                  updateChartSetting(cardKey, "currentWeek", event.target.checked)
+                                }
+                              />
+                              Lopende week tonen
                             </label>
                           ) : null}
                         </div>
@@ -7986,12 +8009,12 @@ export default function Home() {
           >
             <h2 style={{ margin: 0, fontSize: 20 }}>Indeling aanpassen</h2>
             <p style={{ margin: "8px 0 18px", color: "var(--text-muted)", lineHeight: 1.5 }}>
-              Voor wie wil je deze dashboardindeling aanpassen?
+              Kies waar je deze aangepaste indeling wilt opslaan.
             </p>
             <div style={{ display: "grid", gap: 10 }}>
               <button
                 type="button"
-                onClick={startLocalLayoutEditing}
+                onClick={() => saveDashboardLayout("local")}
                 disabled={layoutSaving}
                 style={{
                   ...filterOpenButtonStyle,
@@ -8002,16 +8025,26 @@ export default function Home() {
                   flexDirection: "column",
                   textAlign: "left",
                   padding: "12px 14px",
+                  width: "100%",
+                  boxSizing: "border-box",
+                  whiteSpace: "normal",
                 }}
               >
                 <span style={{ fontWeight: 700 }}>Alleen voor mij</span>
-                <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 400 }}>
-                  Bewaar de indeling alleen op dit apparaat en in deze browser.
+                <span
+                  style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 400, minWidth: 0 }}
+                >
+                  Bewaar deze indeling alleen voor jou. Als iemand later een indeling voor iedereen
+                  opslaat, wordt jouw persoonlijke indeling vervangen wanneer je het dashboard
+                  opnieuw opent.
+                  {saveLayoutAsNewDefault
+                    ? " De optie ‘Lay-out opslaan als nieuwe standaard’ heeft bij een persoonlijke indeling geen effect."
+                    : ""}
                 </span>
               </button>
               <button
                 type="button"
-                onClick={startSharedLayoutEditing}
+                onClick={() => saveDashboardLayout("shared")}
                 disabled={layoutSaving}
                 style={{
                   ...layoutPrimaryButtonStyle,
@@ -8022,13 +8055,22 @@ export default function Home() {
                   flexDirection: "column",
                   textAlign: "left",
                   padding: "12px 14px",
+                  width: "100%",
+                  boxSizing: "border-box",
+                  whiteSpace: "normal",
                 }}
               >
                 <span style={{ fontWeight: 700 }}>
-                  {layoutSaving ? "Gedeelde indeling laden…" : "Voor iedereen"}
+                  {layoutSaving
+                    ? "Opslaan…"
+                    : saveLayoutAsNewDefault
+                      ? "Voor iedereen - Nieuwe standaard"
+                      : "Voor iedereen"}
                 </span>
-                <span style={{ fontSize: 12, opacity: 0.86, fontWeight: 400 }}>
-                  Bewaar de indeling centraal, zodat andere gebruikers deze ook kunnen gebruiken.
+                <span style={{ fontSize: 12, opacity: 0.86, fontWeight: 400, minWidth: 0 }}>
+                  {saveLayoutAsNewDefault
+                    ? "Bewaar deze indeling als de nieuwe standaard. ‘Opnieuw beginnen’ herstelt deze indeling."
+                    : "Bewaar deze indeling voor iedereen. Hiermee worden persoonlijke indelingen vervangen wanneer gebruikers het dashboard opnieuw openen."}
                 </span>
               </button>
             </div>
@@ -8073,111 +8115,192 @@ export default function Home() {
           >
             <div>
               <h3 style={hiddenOverlayTitleStyle}>Verborgen kaarten</h3>
-              <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
-                {layoutStorageScope === "shared"
-                  ? "Je past de indeling voor iedereen aan"
-                  : "Je past alleen jouw eigen indeling aan"}
-              </div>
+              {isPersonalLayout ? (
+                <div
+                  style={{
+                    marginTop: 6,
+                    fontSize: 15,
+                    fontWeight: 700,
+                    color: "var(--accent)",
+                  }}
+                >
+                  Je past je persoonlijke lay-out aan
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
+                  Je bekijkt een concept. Kies bij opslaan of het alleen voor jou of voor iedereen
+                  is.
+                </div>
+              )}
               <div style={{ ...foldNoticeStyle, marginTop: 6 }}>
                 Sleep KPI’s en kaarten binnen hun categorie en sla daarna de indeling op.
               </div>
             </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <label
-                style={{
-                  ...filterOpenButtonStyle,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 7,
-                }}
-              >
-                <span aria-hidden="true" style={{ fontSize: 13, lineHeight: 1 }}>
-                  {themePreferenceDraft === "dark"
-                    ? "◐"
-                    : themePreferenceDraft === "light"
-                      ? "☀"
-                      : "▣"}
-                </span>
-                <span style={{ fontSize: 11 }}>Weergave</span>
-                <select
-                  value={themePreferenceDraft}
-                  onChange={(event) => setThemePreferenceDraft(event.target.value)}
-                  aria-label="Kies de weergave van het dashboard"
+            <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <label
                   style={{
-                    appearance: "auto",
-                    border: 0,
-                    background: "transparent",
-                    color: "var(--accent)",
-                    fontSize: 11,
-                    fontWeight: 700,
-                    cursor: "pointer",
-                    padding: 0,
-                    outline: 0,
+                    ...filterOpenButtonStyle,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 7,
                   }}
                 >
-                  <option value="system">Systeem</option>
-                  <option value="light">Licht</option>
-                  <option value="dark">Donker</option>
-                </select>
-              </label>
-              <button type="button" onClick={toggleTvMode} style={filterOpenButtonStyle}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path
-                    d="M3 5h18v12H3zM8 19h8"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
+                  <UiIcon
+                    name={
+                      themePreferenceDraft === "dark"
+                        ? "moon"
+                        : themePreferenceDraft === "light"
+                          ? "sun"
+                          : "monitor"
+                    }
+                    size={14}
                   />
-                </svg>
-                {tvModeDraft ? "TV-modus uit" : "TV-modus aan"}
-              </button>
-              <button
-                type="button"
-                onClick={resetLayoutAndClose}
-                style={filterOpenButtonStyle}
-                disabled={layoutSaving}
+                  <span style={{ fontSize: 11 }}>Weergave</span>
+                  <select
+                    value={themePreferenceDraft}
+                    onChange={(event) => previewThemePreference(event.target.value)}
+                    aria-label="Kies de weergave van het dashboard"
+                    style={{
+                      appearance: "auto",
+                      border: 0,
+                      background: "transparent",
+                      color: "var(--accent)",
+                      fontSize: 11,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      padding: 0,
+                      outline: 0,
+                    }}
+                  >
+                    <option value="system">Systeem</option>
+                    <option value="light">Licht</option>
+                    <option value="dark">Donker</option>
+                  </select>
+                </label>
+                <button type="button" onClick={toggleTvMode} style={filterOpenButtonStyle}>
+                  <Tv size={14} aria-hidden="true" />
+                  {tvModeDraft ? "TV-modus uit" : "TV-modus aan"}
+                </button>
+                <button
+                  type="button"
+                  onClick={resetLayoutDraft}
+                  style={filterOpenButtonStyle}
+                  disabled={layoutSaving}
+                >
+                  <RotateCcw size={14} aria-hidden="true" />
+                  Opnieuw beginnen
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLayoutChoiceOpen(true)}
+                  style={layoutPrimaryButtonStyle}
+                  disabled={!layoutDirty || layoutSaving}
+                >
+                  <Save size={14} aria-hidden="true" />
+                  {layoutSaving ? "Opslaan…" : "Indeling opslaan"}
+                </button>
+                <button type="button" onClick={cancelLayoutEditing} style={filterOpenButtonStyle}>
+                  <X size={14} aria-hidden="true" />
+                  Annuleren
+                </button>
+              </div>
+              <div
+                role="group"
+                aria-label="Algemene lay-outinstellingen"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px 14px",
+                  flexWrap: "wrap",
+                  justifyContent: "flex-end",
+                  padding: "8px 10px",
+                  border: "1px solid var(--border)",
+                  borderRadius: 9,
+                  background: "var(--surface-muted)",
+                  boxShadow: "inset 0 1px 0 color-mix(in srgb, white 45%, transparent)",
+                }}
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path
-                    d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-                Opnieuw beginnen
-              </button>
-              <button
-                type="button"
-                onClick={saveDashboardLayout}
-                style={layoutPrimaryButtonStyle}
-                disabled={!layoutDirty || layoutSaving}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path
-                    d="M5 3h11l3 3v15H5zM8 3v6h8V3M8 21v-7h8v7"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-                {layoutSaving ? "Opslaan…" : "Indeling opslaan"}
-              </button>
-              <button type="button" onClick={cancelLayoutEditing} style={filterOpenButtonStyle}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path
-                    d="M18 6L6 18M6 6l12 12"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-                Annuleren
-              </button>
+                <span style={{ fontSize: 11, fontWeight: 750, color: "var(--text-muted)" }}>
+                  Algemene weergave
+                </span>
+                <button
+                  type="button"
+                  aria-pressed={legendsShown}
+                  onClick={() => updateChartMasterSwitch("legend", !legendsShown)}
+                  style={layoutMasterSwitchStyle(legendsShown)}
+                >
+                  Legenda’s tonen
+                  <span aria-hidden="true" style={layoutMasterSwitchTrackStyle(legendsShown)}>
+                    <span
+                      style={{
+                        ...switchThumbStyle,
+                        transform: legendsShown ? "translateX(12px)" : "translateX(0)",
+                      }}
+                    />
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={currentWeekShown}
+                  onClick={() => updateChartMasterSwitch("currentWeek", !currentWeekShown)}
+                  style={layoutMasterSwitchStyle(currentWeekShown)}
+                >
+                  Lopende week tonen
+                  <span aria-hidden="true" style={layoutMasterSwitchTrackStyle(currentWeekShown)}>
+                    <span
+                      style={{
+                        ...switchThumbStyle,
+                        transform: currentWeekShown ? "translateX(12px)" : "translateX(0)",
+                      }}
+                    />
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={layoutMasterSettings.showAiCards}
+                  onClick={() => {
+                    const showAiCards = !layoutMasterSettings.showAiCards;
+                    setLayoutMasterSettings((previous) => ({ ...previous, showAiCards }));
+                    setDashboardLayout((previous) => ({ ...previous, showAiCards }));
+                  }}
+                  style={layoutMasterSwitchStyle(layoutMasterSettings.showAiCards)}
+                >
+                  AI-cards tonen
+                  <span
+                    aria-hidden="true"
+                    style={layoutMasterSwitchTrackStyle(layoutMasterSettings.showAiCards)}
+                  >
+                    <span
+                      style={{
+                        ...switchThumbStyle,
+                        transform: layoutMasterSettings.showAiCards
+                          ? "translateX(12px)"
+                          : "translateX(0)",
+                      }}
+                    />
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={saveLayoutAsNewDefault}
+                  onClick={() => setSaveLayoutAsNewDefault((previous) => !previous)}
+                  style={layoutMasterSwitchStyle(saveLayoutAsNewDefault, true)}
+                >
+                  Nieuwe standaard
+                  <span
+                    aria-hidden="true"
+                    style={layoutMasterSwitchTrackStyle(saveLayoutAsNewDefault)}
+                  >
+                    <span
+                      style={{
+                        ...switchThumbStyle,
+                        transform: saveLayoutAsNewDefault ? "translateX(12px)" : "translateX(0)",
+                      }}
+                    />
+                  </span>
+                </button>
+              </div>
             </div>
           </div>
           <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
@@ -8202,15 +8325,7 @@ export default function Home() {
             >
               {hiddenDropTarget === "kpi" ? (
                 <div style={hiddenDropCueStyle}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path
-                      d="M4 7h16M10 3h4M7 7l1 13h8l1-13"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
+                  <Trash2 size={16} aria-hidden="true" />
                   Loslaten om KPI-kaart te verbergen
                 </div>
               ) : null}
@@ -8225,14 +8340,7 @@ export default function Home() {
                     onDrop={() => moveKpiToVisible(key)}
                   >
                     <span style={dragHandleStyle} aria-hidden>
-                      <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-                        <circle cx="2" cy="2" r="1" />
-                        <circle cx="2" cy="5" r="1" />
-                        <circle cx="2" cy="8" r="1" />
-                        <circle cx="8" cy="2" r="1" />
-                        <circle cx="8" cy="5" r="1" />
-                        <circle cx="8" cy="8" r="1" />
-                      </svg>
+                      <GripVertical size={12} />
                     </span>
                     {kpiTiles[key]?.label || key}
                   </span>
@@ -8263,15 +8371,7 @@ export default function Home() {
             >
               {hiddenDropTarget === "card" ? (
                 <div style={hiddenDropCueStyle}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path
-                      d="M4 7h16M10 3h4M7 7l1 13h8l1-13"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
+                  <Trash2 size={16} aria-hidden="true" />
                   Loslaten om kaart te verbergen
                 </div>
               ) : null}
@@ -8284,14 +8384,7 @@ export default function Home() {
                     onDragStart={() => startDrag("card", key, { zone: "hiddenCard" })}
                   >
                     <span style={dragHandleStyle} aria-hidden>
-                      <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
-                        <circle cx="2" cy="2" r="1" />
-                        <circle cx="2" cy="5" r="1" />
-                        <circle cx="2" cy="8" r="1" />
-                        <circle cx="8" cy="2" r="1" />
-                        <circle cx="8" cy="5" r="1" />
-                        <circle cx="8" cy="8" r="1" />
-                      </svg>
+                      <GripVertical size={12} />
                     </span>
                     {cardTitleByKey(key)}
                   </span>
@@ -8475,15 +8568,7 @@ export default function Home() {
                   gap: 6,
                 }}
               >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path
-                    d="M4 7h16M9 7V5h6v2m-8 0l1 12h8l1-12M10 11v5m4-5v5"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
+                <Trash2 size={12} aria-hidden="true" />
                 {clearAlertLogsBusy ? "Legen..." : "Logboek legen"}
               </button>
             </div>
@@ -9532,7 +9617,51 @@ export default function Home() {
         </Link>
       ) : null}
 
+      {vacationBanner ? (
+        <div role="status" style={{ ...vacationAlertStyle, bottom: autoSyncDisabled ? 58 : 8 }}>
+          <VacationAvatar
+            name={vacationBanner.memberName}
+            avatarUrl={vacationBanner.avatarUrl}
+            style={{ width: 28, height: 28, fontSize: 10 }}
+          />
+          <UiIcon name={vacationBanner.icon} size={20} />
+          <span>{vacationBanner.text}</span>
+          {vacationBannerItems.length > 1 ? (
+            <span style={{ display: "inline-flex", gap: 4, marginLeft: 2, alignItems: "center" }}>
+              {vacationBannerItems.map((item, idx) => (
+                <span
+                  key={`banner-dot-${item.key}`}
+                  aria-hidden
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: 999,
+                    background:
+                      idx === vacationBannerIndex % vacationBannerItems.length
+                        ? "#fff"
+                        : "rgba(255,255,255,0.45)",
+                  }}
+                />
+              ))}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
       <style jsx global>{`
+        .dashboard-settings-details > summary {
+          list-style: none;
+        }
+        .dashboard-settings-details > summary::-webkit-details-marker {
+          display: none;
+        }
+        .dashboard-settings-details .settings-chevron {
+          margin-left: auto;
+          transition: transform 160ms ease;
+        }
+        .dashboard-settings-details[open] .settings-chevron {
+          transform: rotate(90deg);
+        }
         :root {
           color-scheme: light dark;
           --brand-red: #ab1f23;
