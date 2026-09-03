@@ -3,18 +3,20 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import StatusPage from "../pages/status";
 
 let mockPageVisible = true;
+const { mockRouterReplace } = vi.hoisted(() => ({ mockRouterReplace: vi.fn() }));
 
 vi.mock("../lib/use-page-visibility", () => ({
   usePageVisibility: () => mockPageVisible,
 }));
 
 vi.mock("next/router", () => ({
-  useRouter: () => ({ replace: vi.fn() }),
+  useRouter: () => ({ replace: mockRouterReplace }),
 }));
 
 describe("Status page", () => {
   beforeEach(() => {
     mockPageVisible = true;
+    mockRouterReplace.mockReset();
     global.fetch = vi.fn();
   });
 
@@ -43,6 +45,22 @@ describe("Status page", () => {
       ).toBeInTheDocument()
     );
     expect(global.fetch).toHaveBeenCalledWith("/api/status");
+  });
+
+  it("returns to the dashboard after the idle timeout", async () => {
+    global.fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ running: false, successful_runs: [] }),
+    });
+    const timeoutSpy = vi.spyOn(window, "setTimeout");
+
+    render(<StatusPage />);
+    fireEvent.pointerDown(window);
+    const idleTimeout = timeoutSpy.mock.calls.find(([, delay]) => delay === 120000);
+    expect(idleTimeout).toBeDefined();
+    idleTimeout[0]();
+
+    expect(mockRouterReplace).toHaveBeenCalledWith("/");
   });
 
   it("starts incremental sync from button and shows feedback", async () => {
