@@ -185,7 +185,7 @@ def test_shared_dashboard_layout_endpoints_read_and_write_layout(monkeypatch):
     response = client.get("/config/dashboard-layout")
 
     assert response.status_code == 200
-    assert response.json() == {"layout": layout}
+    assert response.json() == {"layout": layout, "default_layout": None}
     assert "select shared_layout" in _query_text(read_cursor.executed[-1][0]).lower()
 
     write_cursor = _CursorStub()
@@ -193,10 +193,22 @@ def test_shared_dashboard_layout_endpoints_read_and_write_layout(monkeypatch):
     response = client.put("/config/dashboard-layout", json={"layout": layout})
 
     assert response.status_code == 200
-    assert response.json() == {"layout": layout}
+    assert response.json() == {"layout": layout, "default_layout": None}
     update_query, update_params = write_cursor.executed[-1]
     assert "set shared_layout = %s" in _query_text(update_query).lower()
     assert update_params[0].adapted == layout
+
+    default_cursor = _CursorStub()
+    _patch_conn(monkeypatch, default_cursor)
+    response = client.put(
+        "/config/dashboard-layout", json={"layout": layout, "default_layout": layout}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"layout": layout, "default_layout": layout}
+    update_query, update_params = default_cursor.executed[-1]
+    assert "default_layout = %s" in _query_text(update_query).lower()
+    assert update_params[1].adapted == layout
 
 
 def test_update_saas_release_config_persists_override_and_refreshes(monkeypatch):

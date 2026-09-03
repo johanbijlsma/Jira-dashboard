@@ -8,6 +8,10 @@ vi.mock("../lib/use-page-visibility", () => ({
   usePageVisibility: () => mockPageVisible,
 }));
 
+vi.mock("next/router", () => ({
+  useRouter: () => ({ replace: vi.fn() }),
+}));
+
 describe("Status page", () => {
   beforeEach(() => {
     mockPageVisible = true;
@@ -191,11 +195,11 @@ describe("Status page", () => {
 
     render(<StatusPage />);
 
-    await waitFor(() => expect(screen.getByText("⚙️ Automatisch")).toBeInTheDocument());
-    expect(screen.getByText("👤 Handmatig")).toBeInTheDocument();
-    expect(screen.getAllByText("✅ Succes").length).toBeGreaterThan(0);
+    await waitFor(() => expect(screen.getByText("Automatisch")).toBeInTheDocument());
+    expect(screen.getByText("Handmatig")).toBeInTheDocument();
+    expect(screen.getAllByText("Succes").length).toBeGreaterThan(0);
 
-    fireEvent.click(screen.getByText("❌ Fout"));
+    fireEvent.click(screen.getByText("Fout"));
 
     await waitFor(() => expect(screen.getByText("Foutmelding: Queue timeout")).toBeInTheDocument());
     expect(screen.getByText("Type: —")).toBeInTheDocument();
@@ -229,7 +233,7 @@ describe("Status page", () => {
 
     await waitFor(() => expect(screen.getByText("Type: full")).toBeInTheDocument());
     expect(screen.getByText("Foutmelding: Geen")).toBeInTheDocument();
-    expect(screen.getAllByText("✅ Succes").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Succes").length).toBeGreaterThan(0);
   });
 
   it("clears the first available dev alert and refreshes the state", async () => {
@@ -350,11 +354,20 @@ describe("Status page", () => {
   it("shows the API error when sending the Weekly Insights test email fails", async () => {
     global.fetch.mockImplementation((url) => {
       if (url === "/api/dev/weekly-insights/send-test-email") {
-        return Promise.resolve({ ok: false, status: 503, json: async () => ({ detail: "email_not_configured" }) });
+        return Promise.resolve({
+          ok: false,
+          status: 503,
+          json: async () => ({ detail: "email_not_configured" }),
+        });
       }
-      if (url === "/api/dev/alerts/test-state") return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
-      if (url === "/api/config/jira-token-warning") return Promise.resolve({ ok: true, json: async () => ({}) });
-      return Promise.resolve({ ok: true, json: async () => ({ running: false, successful_runs: [] }) });
+      if (url === "/api/dev/alerts/test-state")
+        return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
+      if (url === "/api/config/jira-token-warning")
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ running: false, successful_runs: [] }),
+      });
     });
 
     render(<StatusPage />);
@@ -374,19 +387,27 @@ describe("Status page", () => {
       if (url === "/api/config/jira-token-warning") {
         return Promise.resolve({ ok: true, json: async () => ({ test_scenario: "renewal" }) });
       }
-      if (url === "/api/dev/alerts/test-state") return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
-      return Promise.resolve({ ok: true, json: async () => ({ running: false, successful_runs: [] }) });
+      if (url === "/api/dev/alerts/test-state")
+        return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ running: false, successful_runs: [] }),
+      });
     });
 
     render(<StatusPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Stop test tokenwaarschuwing" }));
     await waitFor(() =>
-      expect(global.fetch).toHaveBeenCalledWith("/api/dev/jira-token-warning/clear", { method: "POST" })
+      expect(global.fetch).toHaveBeenCalledWith("/api/dev/jira-token-warning/clear", {
+        method: "POST",
+      })
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Herstel token teststatus" }));
     await waitFor(() =>
-      expect(global.fetch).toHaveBeenCalledWith("/api/dev/jira-token-warning/reset-pending", { method: "POST" })
+      expect(global.fetch).toHaveBeenCalledWith("/api/dev/jira-token-warning/reset-pending", {
+        method: "POST",
+      })
     );
   });
 
@@ -398,15 +419,21 @@ describe("Status page", () => {
       if (url === "/api/config/jira-token-warning") {
         return Promise.resolve({ ok: true, json: async () => ({ test_scenario: "expired" }) });
       }
-      if (url === "/api/dev/alerts/test-state") return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
-      return Promise.resolve({ ok: true, json: async () => ({ running: false, successful_runs: [] }) });
+      if (url === "/api/dev/alerts/test-state")
+        return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ running: false, successful_runs: [] }),
+      });
     });
 
     render(<StatusPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Stop test verlopen token" }));
 
     await waitFor(() =>
-      expect(global.fetch).toHaveBeenCalledWith("/api/dev/jira-token-warning/clear", { method: "POST" })
+      expect(global.fetch).toHaveBeenCalledWith("/api/dev/jira-token-warning/clear", {
+        method: "POST",
+      })
     );
   });
 });

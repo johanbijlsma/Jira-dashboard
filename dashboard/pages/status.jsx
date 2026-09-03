@@ -1,8 +1,14 @@
 import Link from "next/link";
 import Head from "next/head";
+import { useRouter } from "next/router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API } from "../lib/dashboard-constants";
 import { usePageVisibility } from "../lib/use-page-visibility";
+
+const AUTO_RESET_IDLE_MS = Math.max(
+  0,
+  (Number(process.env.NEXT_PUBLIC_AUTO_RESET_IDLE_SECONDS) || 120) * 1000
+);
 
 function fmtDateTime(value) {
   if (!value) return "—";
@@ -29,20 +35,14 @@ function num(value) {
   return new Intl.NumberFormat("nl-NL").format(Number(value));
 }
 
-function statusFaviconDataUri(hasError) {
-  const glyph = hasError ? "❌" : "✅";
-  const bg = hasError ? "#7f1d1d" : "#14532d";
-  const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='12' fill='${bg}'/><text x='32' y='42' text-anchor='middle' font-size='30'>${glyph}</text></svg>`;
-  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
-}
-
 function triggerBadge(triggerType) {
   const normalized = String(triggerType || "").toLowerCase();
-  if (normalized === "automatic") return "⚙️ Automatisch";
-  return "👤 Handmatig";
+  if (normalized === "automatic") return "Automatisch";
+  return "Handmatig";
 }
 
 export default function StatusPage() {
+  const router = useRouter();
   const isPageVisible = usePageVisibility();
   const wasPageVisibleRef = useRef(isPageVisible);
   const [status, setStatus] = useState(null);
@@ -54,6 +54,27 @@ export default function StatusPage() {
   const [testAlertKeys, setTestAlertKeys] = useState([]);
   const [tokenWarning, setTokenWarning] = useState(null);
   const [selectedRunIndex, setSelectedRunIndex] = useState(0);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || AUTO_RESET_IDLE_MS <= 0) return undefined;
+    let timer = null;
+    const schedule = () => {
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(() => router.replace("/"), AUTO_RESET_IDLE_MS);
+    };
+    schedule();
+    window.addEventListener("pointerdown", schedule, { passive: true });
+    window.addEventListener("keydown", schedule);
+    window.addEventListener("wheel", schedule, { passive: true });
+    window.addEventListener("touchstart", schedule, { passive: true });
+    return () => {
+      if (timer) window.clearTimeout(timer);
+      window.removeEventListener("pointerdown", schedule);
+      window.removeEventListener("keydown", schedule);
+      window.removeEventListener("wheel", schedule);
+      window.removeEventListener("touchstart", schedule);
+    };
+  }, [router]);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -231,11 +252,6 @@ export default function StatusPage() {
     [status]
   );
   const selectedRun = recentRuns[selectedRunIndex] || recentRuns[0] || null;
-  const latestRunHasError = recentRuns.length ? recentRuns[0]?.success === false : false;
-  const faviconHref = useMemo(
-    () => statusFaviconDataUri(Boolean(latestRunHasError)),
-    [latestRunHasError]
-  );
 
   useEffect(() => {
     if (!recentRuns.length) return;
@@ -356,7 +372,6 @@ export default function StatusPage() {
     <main style={pageStyle}>
       <Head>
         <title>Status | Dashboard Servicedesk Twentecs</title>
-        <link rel="icon" href={faviconHref} />
       </Head>
       <div style={shellStyle}>
         <div style={headerStyle}>
@@ -476,10 +491,10 @@ export default function StatusPage() {
             <p style={cardValueStyle}>
               {selectedRun
                 ? selectedRun.success
-                  ? "✅ Succes"
+                  ? "Succes"
                   : selectedRun.error
-                    ? "❌ Fout"
-                    : "⏳ Bezig"
+                    ? "Fout"
+                    : "Bezig"
                 : "—"}
             </p>
             <p style={cardMetaStyle}>Start: {fmtDateTime(selectedRun?.started_at)}</p>
@@ -526,7 +541,7 @@ export default function StatusPage() {
                       <td style={tdStyle}>{row.mode || "—"}</td>
                       <td style={tdStyle}>{triggerBadge(row.trigger_type)}</td>
                       <td style={tdStyle}>
-                        {row.success ? "✅ Succes" : row.error ? "❌ Fout" : "⏳ Bezig"}
+                        {row.success ? "Succes" : row.error ? "Fout" : "Bezig"}
                       </td>
                       <td style={tdStyle}>{num(row.upserts)}</td>
                       <td style={tdStyle}>{fmtDateTime(row.set_last_sync)}</td>
