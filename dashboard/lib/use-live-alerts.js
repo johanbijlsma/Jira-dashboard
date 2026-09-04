@@ -77,7 +77,7 @@ export function useLiveAlerts({ onRefresh } = {}) {
     if (typeof window === "undefined") return undefined;
     if (window.sessionStorage.getItem("dashboard-dev-alert-pending") !== "1") return undefined;
     window.sessionStorage.removeItem("dashboard-dev-alert-pending");
-    setPendingPriorityAlertIntro(true);
+    const introTimer = window.setTimeout(() => setPendingPriorityAlertIntro(true), 0);
     // The status page schedules the test alert after navigation. Fetch once more
     // shortly afterwards so the dashboard can show its incoming-alert animation.
     const refreshTimer = window.setTimeout(() => refreshLiveAlerts().catch(() => {}), 3500);
@@ -86,6 +86,7 @@ export function useLiveAlerts({ onRefresh } = {}) {
     return () => {
       window.clearTimeout(refreshTimer);
       window.clearTimeout(expiryTimer);
+      window.clearTimeout(introTimer);
     };
   }, [refreshLiveAlerts]);
 

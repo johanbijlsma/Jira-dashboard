@@ -17,9 +17,13 @@ function UrgentAlertIntro({ p1Items, p2Items, forceIntro = false }) {
       active &&
       !candidates.some((item) => item.kind === active.kind && item.issue_key === active.issue_key)
     ) {
-      setActive(null);
-      setStage("");
+      const timer = window.setTimeout(() => {
+        setActive(null);
+        setStage("");
+      }, 0);
+      return () => window.clearTimeout(timer);
     }
+    return undefined;
   }, [active, p1Items, p2Items]);
 
   useEffect(() => {
@@ -39,10 +43,16 @@ function UrgentAlertIntro({ p1Items, p2Items, forceIntro = false }) {
     if (!next) return undefined;
     if (forcedCandidate) forcedIntroShownRef.current = true;
     seenRef.current.add(`${next.kind}:${next.issue_key}`);
-    setActive(next);
-    setStage("overlay");
-    const timer = window.setTimeout(() => setStage("card"), 1200);
-    return () => window.clearTimeout(timer);
+    let cardTimer = null;
+    const activationTimer = window.setTimeout(() => {
+      setActive(next);
+      setStage("overlay");
+      cardTimer = window.setTimeout(() => setStage("card"), 1200);
+    }, 0);
+    return () => {
+      window.clearTimeout(activationTimer);
+      if (cardTimer) window.clearTimeout(cardTimer);
+    };
   }, [forceIntro, p1Items, p2Items]);
 
   if (!active || !stage) return null;
