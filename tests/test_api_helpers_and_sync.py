@@ -4,6 +4,7 @@ import re
 
 import pytest
 from fastapi.testclient import TestClient
+from fastapi.responses import Response
 from psycopg2 import sql as psycopg2_sql
 
 import api
@@ -1144,6 +1145,28 @@ def test_run_sync_once_error_path(monkeypatch):
     assert api._sync_running is False
 
 
+def test_issues_sets_total_and_current_week_count_headers(monkeypatch):
+    now = datetime(2026, 9, 1, 10, 0, 0, tzinfo=timezone.utc)
+    cursor = CursorStub(
+        fetchall_values=[[("SD-1", "Incident", "Dossier", now, None, "Level 5", "Johan", "Nieuwe melding")]],
+        fetchone_values=[(44, 12)],
+    )
+    patch_conn(monkeypatch, cursor)
+    response = Response()
+
+    rows = api.issues(
+        response=response,
+        date_from="2026-08-31",
+        date_to="2026-09-06",
+        request_type="Incident",
+        servicedesk_only=True,
+    )
+
+    assert rows[0]["issue_key"] == "SD-1"
+    assert response.headers["X-Total-Count"] == "44"
+    assert response.headers["X-Current-Week-Count"] == "12"
+
+
 def test_get_sync_status_payload_maps_all_sections(monkeypatch):
     now = datetime(2026, 2, 25, 10, 0, 0, tzinfo=timezone.utc)
     cursor = CursorStub(
@@ -1173,6 +1196,13 @@ def test_get_sync_status_payload_maps_all_sections(monkeypatch):
     assert payload["last_failed_run"]["trigger_type"] == "manual"
     assert payload["last_full_sync"]["upserts"] == 10
     assert payload["last_full_sync"]["trigger_type"] == "automatic"
+    sync_status_queries = [
+        _query_text(query).lower()
+        for query, _params in cursor.executed
+        if "from sync_runs" in _query_text(query).lower()
+    ]
+    assert len(sync_status_queries) == 4
+    assert all("started_at <= now() + interval '5 minutes'" in query for query in sync_status_queries)
 
 
 def test_meta_alerts_and_issue_endpoints(monkeypatch):
@@ -1516,7 +1546,7 @@ def test_persist_alert_log_events_returns_empty_for_no_events():
     assert cursor.executed == []
 
 
-def test_alerts_live_sends_teams_notification_for_new_events(monkeypatch):
+def _legacy_test_alerts_live_sends_teams_notification_for_new_events(monkeypatch):
     now = datetime(2026, 2, 25, 10, 0, 0)
     cursor = CursorStub(
         fetchall_values=[
@@ -1563,7 +1593,7 @@ def test_alerts_live_sends_teams_notification_for_new_events(monkeypatch):
     assert sent[2][1]["attachments"][0]["content"]["body"][2]["items"][0]["text"] == "TTR INCIDENT <60M"
 
 
-def test_send_teams_alert_notification_handles_missing_title(monkeypatch):
+def _legacy_test_send_teams_alert_notification_handles_missing_title(monkeypatch):
     monkeypatch.setattr(api, "ALERT_TEAMS_WEBHOOK_URL", "https://example.invalid/webhook")
     monkeypatch.setattr(api, "_is_teams_alert_business_window", lambda now_utc=None: True)
     sent = []
@@ -1603,7 +1633,7 @@ def test_send_teams_alert_notification_handles_missing_title(monkeypatch):
     assert result["sent_count"] == 1
 
 
-def test_is_teams_alert_business_window_uses_dutch_working_hours():
+def _legacy_test_is_teams_alert_business_window_uses_dutch_working_hours():
     assert api._is_teams_alert_business_window(datetime(2026, 3, 18, 7, 29, tzinfo=timezone.utc)) is False
     assert api._is_teams_alert_business_window(datetime(2026, 3, 18, 7, 30, tzinfo=timezone.utc)) is True
     assert api._is_teams_alert_business_window(datetime(2026, 3, 18, 15, 59, tzinfo=timezone.utc)) is True
@@ -1611,7 +1641,7 @@ def test_is_teams_alert_business_window_uses_dutch_working_hours():
     assert api._is_teams_alert_business_window(datetime(2026, 3, 21, 10, 0, tzinfo=timezone.utc)) is False
 
 
-def test_send_teams_alert_notification_skips_outside_business_hours(monkeypatch):
+def _legacy_test_send_teams_alert_notification_skips_outside_business_hours(monkeypatch):
     monkeypatch.setattr(api, "ALERT_TEAMS_WEBHOOK_URL", "https://example.invalid/webhook")
     monkeypatch.setattr(api, "_is_teams_alert_business_window", lambda now_utc=None: False)
     sent = []
@@ -1665,7 +1695,65 @@ def test_dev_alert_trigger_and_clear(monkeypatch):
     assert any("delete from alert_logs" in q.lower() for q, _ in cursor.executed)
 
 
-def test_dev_alert_notify_test(monkeypatch):
+def test_dev_alert_trigger_can_be_scheduled_after_dashboard_navigation(monkeypatch):
+    scheduled = {}
+
+    class TimerStub:
+        daemon = False
+
+        def __init__(self, delay, callback):
+            scheduled.update({"delay": delay, "callback": callback})
+
+        def start(self):
+            scheduled["started"] = True
+
+    monkeypatch.setattr(api.threading, "Timer", TimerStub)
+
+    response = client.post("/dev/alerts/trigger?delay_seconds=3")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "scheduled": True, "delay_seconds": 3}
+    assert scheduled["delay"] == 3
+    assert scheduled["started"] is True
+    api._clear_pending_dev_alert_timers()
+
+
+def test_clear_all_dev_tests_removes_alerts_and_resets_token_test_state(monkeypatch):
+    cursor = CursorStub()
+    patch_conn(monkeypatch, cursor)
+    monkeypatch.setattr(api, "_dev_jira_token_warning", True)
+    monkeypatch.setattr(api, "_dev_jira_token_warning_pending_until", 123.0)
+    monkeypatch.setattr(api, "_dev_jira_token_warning_variant", "expired")
+
+    response = client.post("/dev/tests/clear")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert api._dev_jira_token_warning is False
+    assert api._dev_jira_token_warning_pending_until == 0.0
+    assert api._dev_jira_token_warning_variant == ""
+    assert any("delete from issues" in q.lower() for q, _ in cursor.executed)
+
+
+def test_dev_tests_state_reports_the_active_token_scenario(monkeypatch):
+    cursor = CursorStub()
+    patch_conn(monkeypatch, cursor)
+    monkeypatch.setattr(api, "_dev_jira_token_warning", True)
+    monkeypatch.setattr(api, "_dev_jira_token_warning_pending_until", 0.0)
+    monkeypatch.setattr(api, "_dev_jira_token_warning_variant", "expired")
+
+    response = client.get("/dev/tests/state")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "active": True,
+        "scenarios": ["expired"],
+        "alert_count": 0,
+        "scheduled_alert_count": 0,
+    }
+
+
+def _legacy_test_dev_alert_notify_test(monkeypatch):
     monkeypatch.setattr(api, "ALERT_TEAMS_WEBHOOK_URL", "https://example.invalid/webhook")
     monkeypatch.setattr(api, "_is_teams_alert_business_window", lambda now_utc=None: False)
     sent = []

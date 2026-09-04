@@ -3,20 +3,25 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import StatusPage from "../pages/status";
 
 let mockPageVisible = true;
-const { mockRouterReplace } = vi.hoisted(() => ({ mockRouterReplace: vi.fn() }));
+const { mockRouterPush, mockRouterReplace } = vi.hoisted(() => ({
+  mockRouterPush: vi.fn(),
+  mockRouterReplace: vi.fn(),
+}));
 
 vi.mock("../lib/use-page-visibility", () => ({
   usePageVisibility: () => mockPageVisible,
 }));
 
 vi.mock("next/router", () => ({
-  useRouter: () => ({ replace: mockRouterReplace }),
+  useRouter: () => ({ push: mockRouterPush, replace: mockRouterReplace }),
 }));
 
 describe("Status page", () => {
   beforeEach(() => {
     mockPageVisible = true;
+    mockRouterPush.mockReset();
     mockRouterReplace.mockReset();
+    window.sessionStorage.clear();
     global.fetch = vi.fn();
   });
 
@@ -44,7 +49,7 @@ describe("Status page", () => {
         screen.getByText("Er loopt al een synchronisatie. Status wordt live bijgewerkt.")
       ).toBeInTheDocument()
     );
-    expect(global.fetch).toHaveBeenCalledWith("/api/status");
+    expect(global.fetch).toHaveBeenCalledWith("/api/status", { cache: "no-store" });
   });
 
   it("returns to the dashboard after the idle timeout", async () => {
@@ -67,8 +72,8 @@ describe("Status page", () => {
     global.fetch.mockImplementation((url) => {
       if (url === "/api/sync")
         return Promise.resolve({ ok: true, json: async () => ({ queued: true }) });
-      if (url === "/api/dev/alerts/test-state")
-        return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
+      if (url === "/api/dev/tests/state")
+        return Promise.resolve({ ok: true, json: async () => ({ active: false, scenarios: [] }) });
       if (url === "/api/config/jira-token-warning")
         return Promise.resolve({ ok: true, json: async () => ({}) });
       return Promise.resolve({
@@ -99,7 +104,7 @@ describe("Status page", () => {
 
     render(<StatusPage />);
     await waitFor(() => expect(global.fetch).toHaveBeenCalled());
-    expect(global.fetch).toHaveBeenCalledWith("/api/status");
+    expect(global.fetch).toHaveBeenCalledWith("/api/status", { cache: "no-store" });
     await waitFor(() => expect(intervalSpy).toHaveBeenCalled());
     expect(intervalSpy).toHaveBeenCalledWith(expect.any(Function), 3000);
   });
@@ -131,7 +136,9 @@ describe("Status page", () => {
     });
 
     render(<StatusPage />);
-    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith("/api/status"));
+    await waitFor(() =>
+      expect(global.fetch).toHaveBeenCalledWith("/api/status", { cache: "no-store" })
+    );
     await waitFor(() => expect(intervalSpy).toHaveBeenCalled());
     expect(intervalSpy).toHaveBeenCalledWith(expect.any(Function), 60000);
   });
@@ -153,8 +160,8 @@ describe("Status page", () => {
     global.fetch.mockImplementation((url) => {
       if (url === "/api/sync/full")
         return Promise.resolve({ ok: true, json: async () => ({ queued: true, mode: "full" }) });
-      if (url === "/api/dev/alerts/test-state")
-        return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
+      if (url === "/api/dev/tests/state")
+        return Promise.resolve({ ok: true, json: async () => ({ active: false, scenarios: [] }) });
       if (url === "/api/config/jira-token-warning")
         return Promise.resolve({ ok: true, json: async () => ({}) });
       return Promise.resolve({
@@ -208,7 +215,7 @@ describe("Status page", () => {
       })
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ keys: [] }),
+        json: async () => ({ active: false, scenarios: [] }),
       });
 
     render(<StatusPage />);
@@ -244,7 +251,7 @@ describe("Status page", () => {
       })
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ keys: [] }),
+        json: async () => ({ active: false, scenarios: [] }),
       });
 
     render(<StatusPage />);
@@ -254,14 +261,14 @@ describe("Status page", () => {
     expect(screen.getAllByText("Succes").length).toBeGreaterThan(0);
   });
 
-  it("clears the first available dev alert and refreshes the state", async () => {
+  it("clears all active persistent tests from one button", async () => {
     global.fetch.mockImplementation((url) => {
-      if (url === "/api/dev/alerts/test-state")
-        return Promise.resolve({ ok: true, json: async () => ({ keys: ["SD-11079"] }) });
-      if (url === "/api/dev/alerts/clear?issue_key=SD-11079")
+      if (url === "/api/dev/tests/state")
+        return Promise.resolve({ ok: true, json: async () => ({ active: true, scenarios: ["alert"] }) });
+      if (url === "/api/dev/tests/clear")
         return Promise.resolve({ ok: true, json: async () => ({ cleared: true }) });
       if (url === "/api/config/jira-token-warning")
-        return Promise.resolve({ ok: true, json: async () => ({}) });
+        return Promise.resolve({ ok: true, json: async () => ({ is_test: false }) });
       return Promise.resolve({
         ok: true,
         json: async () => ({ running: false, successful_runs: [] }),
@@ -270,64 +277,104 @@ describe("Status page", () => {
 
     render(<StatusPage />);
 
-    const clearButton = await waitFor(() =>
-      screen.getByRole("button", { name: "Stop test alert" })
-    );
+    const clearButton = await waitFor(() => screen.getByRole("button", { name: "Alle tests uitzetten" }));
     fireEvent.click(clearButton);
 
     await waitFor(() =>
-      expect(global.fetch).toHaveBeenCalledWith("/api/dev/alerts/clear?issue_key=SD-11079", {
+      expect(global.fetch).toHaveBeenCalledWith("/api/dev/tests/clear", {
         method: "POST",
       })
     );
-    await waitFor(() => expect(screen.getByText("Test alert is verwijderd.")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Alle actieve tests zijn uitgezet.")).toBeInTheDocument());
   });
 
-  it("triggers a test alert and refreshes the state", async () => {
-    global.fetch
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          running: false,
-          successful_runs: [],
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ keys: [] }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ triggered: true }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ priority1: [] }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          running: false,
-          successful_runs: [],
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ keys: ["SD-11079"] }),
-      });
+  it("always shows the all-tests button but disables it without an active scenario", async () => {
+    global.fetch.mockImplementation((url) => {
+      if (url === "/api/dev/tests/state")
+        return Promise.resolve({ ok: true, json: async () => ({ active: false, scenarios: [] }) });
+      if (url === "/api/config/jira-token-warning")
+        return Promise.resolve({ ok: true, json: async () => ({ is_test: false }) });
+      return Promise.resolve({ ok: true, json: async () => ({ running: false, successful_runs: [] }) });
+    });
 
     render(<StatusPage />);
 
-    const triggerButton = await waitFor(() => screen.getByRole("button", { name: "Test alert" }));
+    expect(await screen.findByRole("button", { name: "Alle tests uitzetten" })).toBeDisabled();
+  });
+
+  it("activates the all-tests button only when the central test scenario is active", async () => {
+    global.fetch.mockImplementation((url) => {
+      if (url === "/api/dev/tests/state") {
+        return Promise.resolve({ ok: true, json: async () => ({ active: true, scenarios: ["alert"] }) });
+      }
+      if (url === "/api/config/jira-token-warning") {
+        return Promise.resolve({ ok: true, json: async () => ({ is_test: false }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ running: false, successful_runs: [] }) });
+    });
+
+    render(<StatusPage />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Alle tests uitzetten" })).toBeEnabled()
+    );
+  });
+
+  it("schedules a test alert and returns to the dashboard", async () => {
+    global.fetch.mockImplementation((url) => {
+      if (url === "/api/dev/alerts/trigger?delay_seconds=3") {
+        return Promise.resolve({ ok: true, json: async () => ({ scheduled: true, delay_seconds: 3 }) });
+      }
+      if (url === "/api/dev/tests/state") {
+        return Promise.resolve({ ok: true, json: async () => ({ active: false, scenarios: [] }) });
+      }
+      if (url === "/api/config/jira-token-warning") {
+        return Promise.resolve({ ok: true, json: async () => ({ is_test: false }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ running: false, successful_runs: [] }) });
+    });
+
+    render(<StatusPage />);
+
+    const triggerButton = await waitFor(() =>
+      screen.getByRole("button", { name: "Test binnenkomende alert" })
+    );
     fireEvent.click(triggerButton);
 
     await waitFor(() =>
-      expect(global.fetch).toHaveBeenCalledWith("/api/dev/alerts/trigger", { method: "POST" })
+      expect(global.fetch).toHaveBeenCalledWith("/api/dev/alerts/trigger?delay_seconds=3", {
+        method: "POST",
+      })
     );
+    await waitFor(() => expect(mockRouterPush).toHaveBeenCalledWith("/"));
+    expect(window.sessionStorage.getItem("dashboard-dev-alert-pending")).toBe("1");
+  });
+
+  it("starts a token test and returns to the dashboard", async () => {
+    global.fetch.mockImplementation((url) => {
+      if (url === "/api/dev/jira-token-warning/trigger?scenario=renewal") {
+        return Promise.resolve({ ok: true, json: async () => ({ is_test: true }) });
+      }
+      if (url === "/api/dev/tests/state") {
+        return Promise.resolve({ ok: true, json: async () => ({ active: false, scenarios: [] }) });
+      }
+      if (url === "/api/config/jira-token-warning") {
+        return Promise.resolve({ ok: true, json: async () => ({ is_test: false }) });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ running: false, successful_runs: [] }) });
+    });
+
+    render(<StatusPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Test tokenwaarschuwing" }));
+
     await waitFor(() =>
-      expect(global.fetch).toHaveBeenCalledWith("/api/alerts/live?servicedesk_only=true")
+      expect(global.fetch).toHaveBeenCalledWith(
+        "/api/dev/jira-token-warning/trigger?scenario=renewal",
+        { method: "POST" }
+      )
     );
-    await waitFor(() => expect(screen.getByText("Test alert is gezet.")).toBeInTheDocument());
+    await waitFor(() => expect(mockRouterPush).toHaveBeenCalledWith("/"));
+    expect(window.sessionStorage.getItem("dashboard-token-test-pending")).toBe("1");
   });
 
   it("sends the latest Weekly Insights PDF to the test mailbox", async () => {
@@ -342,8 +389,8 @@ describe("Status page", () => {
           }),
         });
       }
-      if (url === "/api/dev/alerts/test-state") {
-        return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
+      if (url === "/api/dev/tests/state") {
+        return Promise.resolve({ ok: true, json: async () => ({ active: false, scenarios: [] }) });
       }
       if (url === "/api/config/jira-token-warning") {
         return Promise.resolve({ ok: true, json: async () => ({}) });
@@ -378,8 +425,8 @@ describe("Status page", () => {
           json: async () => ({ detail: "email_not_configured" }),
         });
       }
-      if (url === "/api/dev/alerts/test-state")
-        return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
+      if (url === "/api/dev/tests/state")
+        return Promise.resolve({ ok: true, json: async () => ({ active: false, scenarios: [] }) });
       if (url === "/api/config/jira-token-warning")
         return Promise.resolve({ ok: true, json: async () => ({}) });
       return Promise.resolve({
@@ -394,19 +441,17 @@ describe("Status page", () => {
     await waitFor(() => expect(screen.getByText("email_not_configured")).toBeInTheDocument());
   });
 
-  it("clears an active token test and can reset its test state", async () => {
+  it("clears an active token scenario through the central all-tests button", async () => {
     global.fetch.mockImplementation((url) => {
-      if (url === "/api/dev/jira-token-warning/clear") {
+      if (url === "/api/dev/tests/clear") {
         return Promise.resolve({ ok: true, json: async () => ({}) });
       }
-      if (url === "/api/dev/jira-token-warning/reset-pending") {
-        return Promise.resolve({ ok: true, json: async () => ({}) });
+      if (url === "/api/dev/tests/state") {
+        return Promise.resolve({ ok: true, json: async () => ({ active: true, scenarios: ["renewal"] }) });
       }
       if (url === "/api/config/jira-token-warning") {
         return Promise.resolve({ ok: true, json: async () => ({ test_scenario: "renewal" }) });
       }
-      if (url === "/api/dev/alerts/test-state")
-        return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
       return Promise.resolve({
         ok: true,
         json: async () => ({ running: false, successful_runs: [] }),
@@ -414,44 +459,12 @@ describe("Status page", () => {
     });
 
     render(<StatusPage />);
-    fireEvent.click(await screen.findByRole("button", { name: "Stop test tokenwaarschuwing" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Alle tests uitzetten" }));
     await waitFor(() =>
-      expect(global.fetch).toHaveBeenCalledWith("/api/dev/jira-token-warning/clear", {
+      expect(global.fetch).toHaveBeenCalledWith("/api/dev/tests/clear", {
         method: "POST",
       })
     );
-
-    fireEvent.click(screen.getByRole("button", { name: "Herstel token teststatus" }));
-    await waitFor(() =>
-      expect(global.fetch).toHaveBeenCalledWith("/api/dev/jira-token-warning/reset-pending", {
-        method: "POST",
-      })
-    );
-  });
-
-  it("renders and clears the expired-token variant", async () => {
-    global.fetch.mockImplementation((url) => {
-      if (url === "/api/dev/jira-token-warning/clear") {
-        return Promise.resolve({ ok: true, json: async () => ({}) });
-      }
-      if (url === "/api/config/jira-token-warning") {
-        return Promise.resolve({ ok: true, json: async () => ({ test_scenario: "expired" }) });
-      }
-      if (url === "/api/dev/alerts/test-state")
-        return Promise.resolve({ ok: true, json: async () => ({ keys: [] }) });
-      return Promise.resolve({
-        ok: true,
-        json: async () => ({ running: false, successful_runs: [] }),
-      });
-    });
-
-    render(<StatusPage />);
-    fireEvent.click(await screen.findByRole("button", { name: "Stop test verlopen token" }));
-
-    await waitFor(() =>
-      expect(global.fetch).toHaveBeenCalledWith("/api/dev/jira-token-warning/clear", {
-        method: "POST",
-      })
-    );
+    expect(screen.queryByRole("button", { name: "Herstel token teststatus" })).not.toBeInTheDocument();
   });
 });

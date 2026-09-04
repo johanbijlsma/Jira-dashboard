@@ -225,6 +225,10 @@ function TopicDetailChart({
             responsive: true,
             maintainAspectRatio: false,
             animation,
+            onHover: (event, elements) => {
+              const target = event?.native?.target;
+              if (target?.style) target.style.cursor = elements?.length ? "pointer" : "default";
+            },
             onClick: (_event, elements) => {
               const element = elements?.[0];
               if (!element) return;

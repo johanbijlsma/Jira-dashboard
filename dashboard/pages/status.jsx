@@ -51,7 +51,7 @@ export default function StatusPage() {
   const [actionBusy, setActionBusy] = useState("");
   const [actionMessage, setActionMessage] = useState("");
   const [actionPulse, setActionPulse] = useState(0);
-  const [testAlertKeys, setTestAlertKeys] = useState([]);
+  const [testScenario, setTestScenario] = useState({ active: false, scenarios: [] });
   const [tokenWarning, setTokenWarning] = useState(null);
   const [selectedRunIndex, setSelectedRunIndex] = useState(0);
 
@@ -79,7 +79,7 @@ export default function StatusPage() {
   const fetchStatus = useCallback(async () => {
     try {
       setError("");
-      const r = await fetch(`${API}/status`);
+      const r = await fetch(`${API}/status`, { cache: "no-store" });
       if (!r.ok) throw new Error(`Status ophalen mislukt (${r.status})`);
       const data = await r.json();
       setStatus(data || null);
@@ -90,12 +90,15 @@ export default function StatusPage() {
     }
   }, []);
 
-  const fetchTestAlertState = useCallback(async () => {
+  const fetchTestScenario = useCallback(async () => {
     try {
-      const r = await fetch(`${API}/dev/alerts/test-state`);
+      const r = await fetch(`${API}/dev/tests/state`);
       if (!r.ok) return;
       const data = await r.json();
-      setTestAlertKeys(Array.isArray(data?.keys) ? data.keys : []);
+      setTestScenario({
+        active: Boolean(data?.active),
+        scenarios: Array.isArray(data?.scenarios) ? data.scenarios : [],
+      });
     } catch {
       // Ignore in non-dev environments.
     }
@@ -134,40 +137,32 @@ export default function StatusPage() {
     try {
       setActionBusy("dev-alert");
       setActionMessage("");
-      const r = await fetch(`${API}/dev/alerts/trigger`, { method: "POST" });
+      const r = await fetch(`${API}/dev/alerts/trigger?delay_seconds=3`, { method: "POST" });
       if (!r.ok) throw new Error(`Test alert triggeren mislukt (${r.status})`);
-      await fetch(`${API}/alerts/live?servicedesk_only=true`);
-      setActionMessage("Test alert is gezet.");
-      setActionPulse((v) => v + 1);
-      await fetchStatus();
-      await fetchTestAlertState();
+      window.sessionStorage.setItem("dashboard-dev-alert-pending", "1");
+      await router.push("/");
     } catch (err) {
       setActionMessage(err?.message || "Test alert triggeren mislukt.");
     } finally {
       setActionBusy("");
     }
-  }, [fetchStatus, fetchTestAlertState]);
+  }, [router]);
 
-  const clearDevAlert = useCallback(
-    async (issueKey) => {
-      try {
-        setActionBusy("dev-alert-clear");
-        setActionMessage("");
-        const suffix = issueKey ? `?issue_key=${encodeURIComponent(issueKey)}` : "";
-        const r = await fetch(`${API}/dev/alerts/clear${suffix}`, { method: "POST" });
-        if (!r.ok) throw new Error(`Test alert wissen mislukt (${r.status})`);
-        setActionMessage("Test alert is verwijderd.");
-        setActionPulse((v) => v + 1);
-        await fetchStatus();
-        await fetchTestAlertState();
-      } catch (err) {
-        setActionMessage(err?.message || "Test alert wissen mislukt.");
-      } finally {
-        setActionBusy("");
-      }
-    },
-    [fetchStatus, fetchTestAlertState]
-  );
+  const clearAllDevTests = useCallback(async () => {
+    try {
+      setActionBusy("dev-tests-clear");
+      setActionMessage("");
+      const r = await fetch(`${API}/dev/tests/clear`, { method: "POST" });
+      if (!r.ok) throw new Error(`Tests uitzetten mislukt (${r.status})`);
+      setActionMessage("Alle actieve tests zijn uitgezet.");
+      setActionPulse((v) => v + 1);
+      await Promise.all([fetchTestScenario(), fetchTokenWarning()]);
+    } catch (err) {
+      setActionMessage(err?.message || "Tests uitzetten mislukt.");
+    } finally {
+      setActionBusy("");
+    }
+  }, [fetchTestScenario, fetchTokenWarning]);
 
   const sendWeeklyInsightsTestEmail = useCallback(async () => {
     try {
@@ -196,51 +191,41 @@ export default function StatusPage() {
           { method: "POST" }
         );
         if (!r.ok) throw new Error(`Test tokenwaarschuwing mislukt (${r.status})`);
-        setActionMessage("Testwaarschuwing voor de Jira-token is gezet.");
-        await fetchTokenWarning();
+        window.sessionStorage.setItem("dashboard-token-test-pending", "1");
+        await router.push("/");
       } catch (err) {
         setActionMessage(err?.message || "Test tokenwaarschuwing mislukt.");
       } finally {
         setActionBusy("");
       }
     },
-    [fetchTokenWarning]
+    [router]
   );
-
-  const clearTokenTest = useCallback(async () => {
-    try {
-      setActionBusy("token-warning-clear");
-      await fetch(`${API}/dev/jira-token-warning/clear`, { method: "POST" });
-      await fetchTokenWarning();
-    } finally {
-      setActionBusy("");
-    }
-  }, [fetchTokenWarning]);
 
   useEffect(() => {
     fetchStatus();
-    fetchTestAlertState();
+    fetchTestScenario();
     fetchTokenWarning();
-  }, [fetchStatus, fetchTestAlertState, fetchTokenWarning]);
+  }, [fetchStatus, fetchTestScenario, fetchTokenWarning]);
 
   useEffect(() => {
     if (!wasPageVisibleRef.current && isPageVisible) {
       fetchStatus();
-      fetchTestAlertState();
+      fetchTestScenario();
       fetchTokenWarning();
     }
     wasPageVisibleRef.current = isPageVisible;
-  }, [fetchStatus, fetchTestAlertState, fetchTokenWarning, isPageVisible]);
+  }, [fetchStatus, fetchTestScenario, fetchTokenWarning, isPageVisible]);
 
   useEffect(() => {
     const intervalMs = isPageVisible ? (status?.running ? 3000 : 15000) : 60000;
     const timer = window.setInterval(() => {
       fetchStatus();
-      fetchTestAlertState();
+      fetchTestScenario();
       fetchTokenWarning();
     }, intervalMs);
     return () => window.clearInterval(timer);
-  }, [fetchStatus, fetchTestAlertState, fetchTokenWarning, isPageVisible, status?.running]);
+  }, [fetchStatus, fetchTestScenario, fetchTokenWarning, isPageVisible, status?.running]);
 
   const recentRuns = useMemo(
     () =>
@@ -252,6 +237,7 @@ export default function StatusPage() {
     [status]
   );
   const selectedRun = recentRuns[selectedRunIndex] || recentRuns[0] || null;
+  const hasActiveDevTests = testScenario.active;
 
   useEffect(() => {
     if (!recentRuns.length) return;
@@ -400,6 +386,24 @@ export default function StatusPage() {
               disabled={loading || actionBusy === "full" || !!status?.running}
             >
               {actionBusy === "full" ? "Starten…" : "Start full sync"}
+            </button>
+            <button
+              type="button"
+              onClick={clearAllDevTests}
+              title={
+                hasActiveDevTests
+                  ? "Verwijder actieve en ingeplande testalerts en testwaarschuwingen"
+                  : "Er zijn geen actieve testscenario's"
+              }
+              style={{
+                ...buttonStyle,
+                background: hasActiveDevTests ? "var(--danger)" : "var(--surface-muted)",
+                borderColor: hasActiveDevTests ? "var(--danger)" : "var(--border)",
+                color: hasActiveDevTests ? "#fff" : "var(--text-muted)",
+              }}
+              disabled={!hasActiveDevTests || actionBusy === "dev-tests-clear"}
+            >
+              {actionBusy === "dev-tests-clear" ? "Uitzetten…" : "Alle tests uitzetten"}
             </button>
             <button type="button" onClick={fetchStatus} style={buttonStyle} disabled={loading}>
               {loading ? "Vernersen…" : "Ververs"}
@@ -571,22 +575,14 @@ export default function StatusPage() {
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <button
                 type="button"
-                onClick={() =>
-                  testAlertKeys.length ? clearDevAlert(testAlertKeys[0]) : triggerDevAlert()
-                }
-                style={{
-                  ...buttonStyle,
-                  ...(testAlertKeys.length
-                    ? { background: "var(--ok)", borderColor: "var(--ok)" }
-                    : null),
-                }}
-                disabled={actionBusy === "dev-alert" || actionBusy === "dev-alert-clear"}
+                onClick={triggerDevAlert}
+                style={buttonStyle}
+                disabled={actionBusy === "dev-alert" || hasActiveDevTests}
               >
-                {testAlertKeys.length ? "Stop test alert" : "Test alert"}
+                {actionBusy === "dev-alert" ? "Starten…" : "Test binnenkomende alert"}
               </button>
               <p style={{ ...cardMetaStyle, margin: 0 }}>
-                Simuleer een binnenkomend priority-1-ticket, inclusief een TTFR-SLA-alert van 30
-                minuten.
+                Ga terug naar het dashboard; na drie seconden komt een priority-1-testalert binnen.
               </p>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -605,21 +601,11 @@ export default function StatusPage() {
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <button
                 type="button"
-                onClick={() =>
-                  tokenWarning?.test_scenario === "renewal"
-                    ? clearTokenTest()
-                    : triggerTokenWarning("renewal")
-                }
-                style={{
-                  ...buttonStyle,
-                  ...(tokenWarning?.test_scenario === "renewal"
-                    ? { background: "var(--ok)", borderColor: "var(--ok)" }
-                    : null),
-                }}
+                onClick={() => triggerTokenWarning("renewal")}
+                style={buttonStyle}
+                disabled={actionBusy === "token-warning" || hasActiveDevTests}
               >
-                {tokenWarning?.test_scenario === "renewal"
-                  ? "Stop test tokenwaarschuwing"
-                  : "Test tokenwaarschuwing"}
+                Test tokenwaarschuwing
               </button>
               <p style={{ ...cardMetaStyle, margin: 0 }}>
                 Simuleer de eerste waarschuwing: de token verloopt binnenkort.
@@ -628,21 +614,11 @@ export default function StatusPage() {
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <button
                 type="button"
-                onClick={() =>
-                  tokenWarning?.test_scenario === "expired"
-                    ? clearTokenTest()
-                    : triggerTokenWarning("expired")
-                }
-                style={{
-                  ...buttonStyle,
-                  ...(tokenWarning?.test_scenario === "expired"
-                    ? { background: "var(--ok)", borderColor: "var(--ok)" }
-                    : null),
-                }}
+                onClick={() => triggerTokenWarning("expired")}
+                style={buttonStyle}
+                disabled={actionBusy === "token-warning" || hasActiveDevTests}
               >
-                {tokenWarning?.test_scenario === "expired"
-                  ? "Stop test verlopen token"
-                  : "Test verlopen token"}
+                Test verlopen token
               </button>
               <p style={{ ...cardMetaStyle, margin: 0 }}>
                 Simuleer dat de token is verlopen en Jira geen nieuwe gegevens meer kan leveren.
@@ -651,39 +627,15 @@ export default function StatusPage() {
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <button
                 type="button"
-                onClick={() =>
-                  tokenWarning?.test_scenario === "handoff_expired"
-                    ? clearTokenTest()
-                    : triggerTokenWarning("handoff_expired")
-                }
-                style={{
-                  ...buttonStyle,
-                  ...(tokenWarning?.test_scenario === "handoff_expired"
-                    ? { background: "var(--ok)", borderColor: "var(--ok)" }
-                    : null),
-                }}
+                onClick={() => triggerTokenWarning("handoff_expired")}
+                style={buttonStyle}
+                disabled={actionBusy === "token-warning" || hasActiveDevTests}
               >
-                {tokenWarning?.test_scenario === "handoff_expired"
-                  ? "Stop test verlopen tijdens overdracht"
-                  : "Test verlopen tijdens overdracht"}
+                Test verlopen tijdens overdracht
               </button>
               <p style={{ ...cardMetaStyle, margin: 0 }}>
                 Simuleer dat Jira is vernieuwd, maar Development de nieuwe token niet vóór afloop
                 heeft verwerkt.
-              </p>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <button
-                type="button"
-                onClick={() =>
-                  fetch(`${API}/dev/jira-token-warning/reset-pending`, { method: "POST" })
-                }
-                style={buttonStyle}
-              >
-                Herstel token teststatus
-              </button>
-              <p style={{ ...cardMetaStyle, margin: 0 }}>
-                Verwijder een achtergebleven teststatus zonder de echte vervaldatum te wijzigen.
               </p>
             </div>
           </div>

@@ -252,6 +252,12 @@ describe("dashboard hooks", () => {
       String(url).includes("/metrics/current_week_flow")
     )[0];
     expect(liveFlowCall).toMatch(/\/metrics\/current_week_flow\?servicedesk_only=true$/);
+    expect(global.fetch).toHaveBeenCalledWith("/api/metrics/in_progress_count", {
+      cache: "no-store",
+    });
+    expect(global.fetch).toHaveBeenCalledWith("/api/metrics/new_melding_count", {
+      cache: "no-store",
+    });
     const releaseCall = global.fetch.mock.calls.find(([url]) =>
       String(url).includes("/metrics/release_followup_workload?")
     )[0];
@@ -484,6 +490,10 @@ describe("dashboard hooks", () => {
     const { result } = renderHook(() => useLiveAlerts({ onRefresh }));
 
     await waitFor(() => expect(result.current.liveAlerts.priority1).toHaveLength(1));
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/alerts/live?"),
+      { cache: "no-store" }
+    );
     expect(result.current.liveAlerts.first_response_due_warning[0].issue_key).toBe("SD-2");
     expect(result.current.liveAlerts.time_to_resolution_warning[0].issue_key).toBe("SD-20");
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 60000);
@@ -514,6 +524,18 @@ describe("dashboard hooks", () => {
     expect(result.current.liveAlerts.priority1).toEqual([]);
     expect(result.current.liveAlerts.first_response_due_warning).toEqual([]);
     expect(result.current.liveAlerts.time_to_resolution_overdue).toEqual([]);
+  });
+
+  it("marks a scheduled development alert for the incoming-alert introduction", async () => {
+    window.sessionStorage.setItem("dashboard-dev-alert-pending", "1");
+    global.fetch = createFetchMock({
+      "/alerts/live?": [{ priority1: [] }],
+    });
+
+    const { result } = renderHook(() => useLiveAlerts());
+
+    await waitFor(() => expect(result.current.pendingPriorityAlertIntro).toBe(true));
+    expect(window.sessionStorage.getItem("dashboard-dev-alert-pending")).toBeNull();
   });
 
   it("does not refetch live alerts when the onRefresh callback changes", async () => {
