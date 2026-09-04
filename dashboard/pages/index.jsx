@@ -84,6 +84,8 @@ import {
   Users,
   X,
 } from "lucide-react";
+import { seasonalThemeForDate } from "../lib/seasonal-theme";
+import { getStandardReportingRange } from "../lib/reporting-period";
 import { buildUpcomingWarningText, businessDaysUntil } from "../lib/vacation-banner";
 import {
   hideCardLayout,
@@ -136,6 +138,64 @@ ChartJS.register(
   Legend
 );
 setupChartDefaults(ChartJS);
+
+function SinterklaasDashboardDecorations({ active }) {
+  if (!active) return null;
+  return (
+    <div className="sinterklaas-scene" aria-hidden="true">
+      <div className="sinterklaas-frame" />
+      <SeasonalCornerSpriteAsset season="sinterklaas" />
+      <SeasonalSecondarySpriteAsset season="sinterklaas" />
+    </div>
+  );
+}
+
+function SeasonalCornerSpriteAsset({ season }) {
+  return <div className={`seasonal-corner-sprite seasonal-corner-sprite--${season}`} />;
+}
+
+function SeasonalSecondarySpriteAsset({ season }) {
+  return <div className={`seasonal-secondary-sprite seasonal-secondary-sprite--${season}`} />;
+}
+
+function SeasonalCornerSprite({ season }) {
+  if (!season || season === "sinterklaas") return null;
+  return (
+    <div className="seasonal-corner-scene" aria-hidden="true">
+      <SeasonalCornerSpriteAsset season={season} />
+      <SeasonalSecondarySpriteAsset season={season} />
+    </div>
+  );
+}
+
+function KpiDrillCount({ children, onClick, title }) {
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
+      title={title || "Open drilldown"}
+      style={{
+        appearance: "none",
+        background: "transparent",
+        border: 0,
+        color: "inherit",
+        cursor: "pointer",
+        font: "inherit",
+        margin: 0,
+        padding: 0,
+        textAlign: "inherit",
+        textDecoration: "underline",
+        textDecorationColor: "color-mix(in srgb, currentColor 35%, transparent)",
+        textUnderlineOffset: 3,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
 
 const AUTO_SYNC_INTERVAL_MS = Math.max(
   15000,
@@ -395,34 +455,31 @@ export default function Home() {
     }
   });
   const [themePreferenceDraft, setThemePreferenceDraft] = useState("system");
-  const today = useMemo(() => new Date(), []);
-  const defaultFrom = useMemo(() => {
-    const d = new Date();
-    d.setMonth(d.getMonth() - 1);
-    return d;
+  const [seasonalTheme, setSeasonalTheme] = useState("");
+  useEffect(() => {
+    const requestedTheme = new URLSearchParams(window.location.search).get("season") || "";
+    const developmentOverride =
+      process.env.NODE_ENV === "development" &&
+      ["sinterklaas", "kerst", "pasen"].includes(requestedTheme)
+        ? requestedTheme
+        : "";
+    setSeasonalTheme(developmentOverride || seasonalThemeForDate());
   }, []);
-  const getStandardDateRange = useCallback(() => {
-    const end = new Date();
-    const start = new Date(end);
-    start.setMonth(start.getMonth() - 1);
-    const fromIso = isoDate(start);
-    const toIso = isoDate(end);
-    return {
-      fromIso,
-      toIso,
-      fromLabel: fmtDate(fromIso),
-      toLabel: fmtDate(toIso),
-    };
-  }, []);
+  const initialStandardRange = useMemo(() => getStandardReportingRange(), []);
+  const getStandardDateRange = useCallback(
+    (includeCurrentWeek = true) => getStandardReportingRange({ includeCurrentWeek }),
+    []
+  );
 
-  const [dateFrom, setDateFrom] = useState(isoDate(defaultFrom));
-  const [dateTo, setDateTo] = useState(isoDate(today));
+  const [dateFrom, setDateFrom] = useState(initialStandardRange.fromIso);
+  const [dateTo, setDateTo] = useState(initialStandardRange.toIso);
+  const [isStandardPeriod, setIsStandardPeriod] = useState(true);
   const dateFromNativeRef = useRef(null);
   const dateToNativeRef = useRef(null);
   const dateFromTextRef = useRef(null);
 
-  const [dateFromUi, setDateFromUi] = useState(fmtDate(defaultFrom));
-  const [dateToUi, setDateToUi] = useState(fmtDate(today));
+  const [dateFromUi, setDateFromUi] = useState(initialStandardRange.fromLabel);
+  const [dateToUi, setDateToUi] = useState(initialStandardRange.toLabel);
   useEffect(() => {
     setDateFromUi(fmtDate(dateFrom));
   }, [dateFrom]);
@@ -480,7 +537,14 @@ export default function Home() {
   const [selectedDrillDateFrom, setSelectedDrillDateFrom] = useState("");
   const [selectedDrillDateTo, setSelectedDrillDateTo] = useState("");
   const [selectedDrillIssueKeys, setSelectedDrillIssueKeys] = useState([]);
+  const [selectedDrillFilters, setSelectedDrillFilters] = useState({
+    priority: "",
+    assignee: "",
+    organization: "",
+  });
   const [drillIssues, setDrillIssues] = useState([]);
+  const [drillTotal, setDrillTotal] = useState(0);
+  const [drillCurrentWeekCount, setDrillCurrentWeekCount] = useState(0);
   const [drillLoading, setDrillLoading] = useState(false);
   const [drillOffset, setDrillOffset] = useState(0);
   const [drillHasNext, setDrillHasNext] = useState(false);
@@ -662,8 +726,15 @@ export default function Home() {
     });
   }, []);
 
-  const legendsShown = layoutMasterSettings.legend;
-  const currentWeekShown = layoutMasterSettings.currentWeek;
+  const legendsShown = chartMasterSwitchEnabled("legend");
+  const currentWeekShown = chartMasterSwitchEnabled("currentWeek");
+
+  useEffect(() => {
+    if (!isStandardPeriod) return;
+    const { fromIso, toIso } = getStandardDateRange(currentWeekShown);
+    setDateFrom((previous) => (previous === fromIso ? previous : fromIso));
+    setDateTo((previous) => (previous === toIso ? previous : toIso));
+  }, [currentWeekShown, getStandardDateRange, isStandardPeriod]);
 
   const liveKpiSettings = useMemo(
     () => ({ ...DEFAULT_LIVE_KPI_SETTINGS, ...(dashboardLayout.liveKpiSettings || {}) }),
@@ -681,8 +752,9 @@ export default function Home() {
   const sidePanelOpen =
     sidePanelMode === "alerts" || sidePanelMode === "insights" || !!selectedWeek;
   const filtersAreDefault = useMemo(() => {
-    const { fromIso, toIso } = getStandardDateRange();
+    const { fromIso, toIso } = getStandardDateRange(currentWeekShown);
     return (
+      isStandardPeriod &&
       dateFrom === fromIso &&
       dateTo === toIso &&
       !requestType &&
@@ -701,7 +773,9 @@ export default function Home() {
     assignee,
     organization,
     servicedeskOnly,
+    currentWeekShown,
     getStandardDateRange,
+    isStandardPeriod,
   ]);
   const { syncStatus, refreshSyncStatus } = useSyncStatus();
   const syncBusy = syncLoading || !!syncStatus?.running;
@@ -764,8 +838,8 @@ export default function Home() {
   }, [servicedeskConfig]);
   const activeFilterItems = useMemo(() => {
     const items = [];
-    const { fromIso, toIso } = getStandardDateRange();
-    if (dateFrom !== fromIso || dateTo !== toIso)
+    const { fromIso, toIso } = getStandardDateRange(currentWeekShown);
+    if (!isStandardPeriod || dateFrom !== fromIso || dateTo !== toIso)
       items.push(`Periode: ${fmtDate(dateFrom)} t/m ${fmtDate(dateTo)}`);
     if (requestType) items.push(`Type: ${requestType}`);
     if (onderwerp) items.push(`Onderwerp: ${onderwerp}`);
@@ -785,7 +859,9 @@ export default function Home() {
     servicedeskOnly,
     dateFrom,
     dateTo,
+    currentWeekShown,
     getStandardDateRange,
+    isStandardPeriod,
   ]);
   const p90Period = useMemo(() => {
     const weekStarts = buildWeekStartsFromRange(dateFrom, dateTo);
@@ -925,6 +1001,9 @@ export default function Home() {
     setSelectedDrillDateFrom("");
     setSelectedDrillDateTo("");
     setSelectedDrillIssueKeys([]);
+    setSelectedDrillFilters({ priority: "", assignee: "", organization: "" });
+    setDrillTotal(0);
+    setDrillCurrentWeekCount(0);
     setDrillIssues([]);
     setDrillOffset(0);
     setDrillHasNext(false);
@@ -1009,26 +1088,32 @@ export default function Home() {
     const toIso = isoDate(end);
     setDateFrom(fromIso);
     setDateTo(toIso);
+    setIsStandardPeriod(false);
     setDateFromUi(fmtDate(fromIso));
     setDateToUi(fmtDate(toIso));
   }, []);
 
+  const applyStandardReportingPeriod = useCallback(() => {
+    const { fromIso, toIso, fromLabel, toLabel } = getStandardDateRange(currentWeekShown);
+    setDateFrom(fromIso);
+    setDateTo(toIso);
+    setIsStandardPeriod(true);
+    setDateFromUi(fromLabel);
+    setDateToUi(toLabel);
+  }, [currentWeekShown, getStandardDateRange]);
+
   const resetFilters = useCallback(
     (showToast = true) => {
-      const { fromIso, toIso, fromLabel, toLabel } = getStandardDateRange();
-      setDateFrom(fromIso);
-      setDateTo(toIso);
-      setDateFromUi(fromLabel);
-      setDateToUi(toLabel);
+      applyStandardReportingPeriod();
       setRequestType("");
       setOnderwerp("");
       setPriority("");
       setAssignee("");
       setOrganization("");
       setServicedeskOnly(DEFAULT_SERVICEDESK_ONLY);
-      if (showToast) flashToast("Filters en datumrange gereset (laatste maand)");
+      if (showToast) flashToast("Filters en datumrange gereset (vier rapportageweken)");
     },
-    [flashToast, getStandardDateRange]
+    [applyStandardReportingPeriod, flashToast]
   );
 
   const applyTvModePreference = useCallback((next) => {
@@ -1593,7 +1678,7 @@ export default function Home() {
     async () => refreshAlertLogs(),
     [refreshAlertLogs]
   );
-  const { liveAlerts, refreshLiveAlerts } = useLiveAlerts({
+  const { liveAlerts, refreshLiveAlerts, pendingPriorityAlertIntro } = useLiveAlerts({
     onRefresh: refreshAlertLogsAfterLiveAlert,
   });
 
@@ -2227,8 +2312,8 @@ export default function Home() {
       const active = document.activeElement;
       if (active && typeof active.blur === "function") active.blur();
       if (key === "m") {
-        applyDateRange({ months: 1 });
-        flashToast("Datumselectie: laatste maand");
+        applyStandardReportingPeriod();
+        flashToast("Datumselectie: standaardperiode");
       } else if (key === "j") {
         applyDateRange({ years: 1 });
         flashToast("Datumselectie: laatste jaar");
@@ -2252,6 +2337,7 @@ export default function Home() {
     hotkeysOpen,
     vacationEditMode,
     applyDateRange,
+    applyStandardReportingPeriod,
     flashToast,
     resetFilters,
     triggerSync,
@@ -3298,8 +3384,13 @@ export default function Home() {
       const basisLabel =
         options?.basisLabel || (dateField === "resolved" ? "Afgesloten" : "Binnengekomen");
       const dateFrom = options?.dateFrom || weekStart;
-      const dateTo = options?.dateTo || addDaysIso(weekStart, 7);
+      const dateTo = options?.dateTo || addDaysIso(weekStart, 6);
       const issueKeys = Array.isArray(options?.issueKeys) ? options.issueKeys.filter(Boolean) : [];
+      const drillFilters = {
+        priority: options?.priority || priority || "",
+        assignee: options?.assignee || assignee || "",
+        organization: options?.organization || organization || "",
+      };
       setSelectedWeek(weekStart || dateFrom);
       setSelectedType(typeLabel || "");
       setSelectedOnderwerp(onderwerpLabel || onderwerp || "");
@@ -3310,6 +3401,7 @@ export default function Home() {
       setSelectedDrillDateFrom(dateFrom);
       setSelectedDrillDateTo(dateTo);
       setSelectedDrillIssueKeys(issueKeys);
+      setSelectedDrillFilters(drillFilters);
       setDrillOffset(offset);
       setDrillLoading(true);
 
@@ -3325,16 +3417,27 @@ export default function Home() {
         if (typeLabel) params.set("request_type", typeLabel);
         if (onderwerpLabel) params.set("onderwerp", onderwerpLabel);
         else if (onderwerp) params.set("onderwerp", onderwerp);
-        if (priority) params.set("priority", priority);
-        if (assignee) params.set("assignee", assignee);
-        if (organization) params.set("organization", organization);
+        if (drillFilters.priority) params.set("priority", drillFilters.priority);
+        if (drillFilters.assignee) params.set("assignee", drillFilters.assignee);
+        if (drillFilters.organization) params.set("organization", drillFilters.organization);
         if (servicedeskOnly) params.set("servicedesk_only", "true");
         if (issueKeys.length) params.set("issue_keys", issueKeys.join(","));
 
-        const res = await fetch(`${API}/issues?` + params.toString());
+        const res = await fetch(`${API}/issues?` + params.toString(), { cache: "no-store" });
         const data = await res.json();
+        const totalFromHeader = Number(res.headers.get("X-Total-Count"));
+        const currentWeekFromHeader = Number(res.headers.get("X-Current-Week-Count"));
+        const total = Number.isFinite(totalFromHeader)
+          ? totalFromHeader
+          : Array.isArray(data)
+            ? data.length
+            : 0;
         setDrillIssues(data);
-        setDrillHasNext(Array.isArray(data) && data.length === DRILL_LIMIT);
+        setDrillTotal(total);
+        setDrillCurrentWeekCount(
+          Number.isFinite(currentWeekFromHeader) ? currentWeekFromHeader : 0
+        );
+        setDrillHasNext(offset + (Array.isArray(data) ? data.length : 0) < total);
       } finally {
         setDrillLoading(false);
       }
@@ -4851,6 +4954,11 @@ export default function Home() {
     );
   }
 
+  const updateClickableChartCursor = (_event, elements) => {
+    const target = _event?.native?.target;
+    if (target?.style) target.style.cursor = elements?.length ? "pointer" : "default";
+  };
+
   function renderCardContent(cardKey, expanded = false) {
     const bodyStyle = expanded
       ? { height: "100%", minHeight: 0, position: "relative" }
@@ -5070,6 +5178,7 @@ export default function Home() {
                 responsive: true,
                 maintainAspectRatio: false,
                 animation: slowChartAnimation("volume"),
+                onHover: updateClickableChartCursor,
                 onClick: (_evt, elements) => {
                   const el = elements?.[0];
                   if (!el) return;
@@ -5170,6 +5279,17 @@ export default function Home() {
                     maintainAspectRatio: false,
                     indexAxis: "y",
                     animation: slowChartAnimation("priority"),
+                    onHover: updateClickableChartCursor,
+                    onClick: (_event, elements) => {
+                      const element = elements?.[0];
+                      const priorityLabel = priorityBarData.labels?.[element?.index];
+                      if (priorityLabel)
+                        fetchDrilldown(dateFrom, requestType, onderwerp || "", 0, {
+                          dateTo,
+                          priority: priorityLabel,
+                          title: `Prioriteit ${priorityLabel}`,
+                        });
+                    },
                     plugins: {
                       legend: {
                         display: settings.legend,
@@ -5227,6 +5347,17 @@ export default function Home() {
                     maintainAspectRatio: false,
                     indexAxis: "y",
                     animation: slowChartAnimation("assignee"),
+                    onHover: updateClickableChartCursor,
+                    onClick: (_event, elements) => {
+                      const element = elements?.[0];
+                      const assigneeLabel = assigneeBarData.labels?.[element?.index];
+                      if (assigneeLabel)
+                        fetchDrilldown(dateFrom, requestType, onderwerp || "", 0, {
+                          dateTo,
+                          assignee: assigneeLabel,
+                          title: `Assignee ${assigneeLabel}`,
+                        });
+                    },
                     plugins: {
                       legend: {
                         display: settings.legend,
@@ -5327,6 +5458,7 @@ export default function Home() {
                 responsive: true,
                 maintainAspectRatio: false,
                 animation: slowChartAnimation("inflowVsClosed"),
+                onHover: updateClickableChartCursor,
                 onClick: (_evt, elements) => {
                   const el = elements?.[0];
                   if (!el) return;
@@ -5447,6 +5579,7 @@ export default function Home() {
                       maxLabels: expanded ? 20 : 10,
                     }),
                   },
+                  onHover: updateClickableChartCursor,
                   onClick: (_evt, elements) => {
                     const el = elements?.[0];
                     if (!el) return;
@@ -5571,6 +5704,18 @@ export default function Home() {
                 responsive: true,
                 maintainAspectRatio: false,
                 animation: slowChartAnimation("organizationWeekly"),
+                onHover: updateClickableChartCursor,
+                onClick: (_event, elements) => {
+                  const element = elements?.[0];
+                  if (!element) return;
+                  const weekStart = chartWeeks("organizationWeekly")[element.index];
+                  const organizationLabel = chartData.datasets?.[element.datasetIndex]?.label;
+                  if (organizationLabel)
+                    fetchDrilldown(weekStart, requestType, onderwerp || "", 0, {
+                      organization: organizationLabel,
+                      title: `Partner ${organizationLabel}`,
+                    });
+                },
                 plugins: {
                   legend: {
                     display: settings.legend,
@@ -5896,6 +6041,18 @@ export default function Home() {
   const liveKpiItems = useMemo(() => {
     const receivedTrend = trendInfo(kpiStats.currentWeekReceived, kpiStats.previousWeekReceived);
     const closedTrend = trendInfo(kpiStats.currentWeekClosed, kpiStats.previousWeekClosed);
+    const currentWeekStart = String(currentWeekFlow?.current_week_start || "").slice(0, 10);
+    const currentWeekEnd = isoDate(new Date());
+    const openCurrentWeekDrilldown = (dateField, basisLabel, title) => {
+      if (!currentWeekStart) return;
+      fetchDrilldown(currentWeekStart, "", "", 0, {
+        dateField,
+        basisLabel,
+        dateFrom: currentWeekStart,
+        dateTo: currentWeekEnd,
+        title,
+      });
+    };
 
     return [
       liveKpiSettings.currentWeekFlow
@@ -5923,7 +6080,20 @@ export default function Home() {
                       Ontvangen
                     </span>
                     <span>
-                      <strong style={{ fontSize: 20 }}>{num(kpiStats.currentWeekReceived)}</strong>{" "}
+                      <KpiDrillCount
+                        onClick={() =>
+                          openCurrentWeekDrilldown(
+                            "created",
+                            "Binnengekomen",
+                            "Lopende week — ontvangen"
+                          )
+                        }
+                        title="Open ontvangen tickets van de lopende week"
+                      >
+                        <strong style={{ fontSize: 20 }}>
+                          {num(kpiStats.currentWeekReceived)}
+                        </strong>
+                      </KpiDrillCount>{" "}
                       <span
                         style={{
                           color: receivedTrend.color,
@@ -5947,7 +6117,18 @@ export default function Home() {
                       Gesloten
                     </span>
                     <span>
-                      <strong style={{ fontSize: 20 }}>{num(kpiStats.currentWeekClosed)}</strong>{" "}
+                      <KpiDrillCount
+                        onClick={() =>
+                          openCurrentWeekDrilldown(
+                            "resolved",
+                            "Afgesloten",
+                            "Lopende week — gesloten"
+                          )
+                        }
+                        title="Open afgesloten tickets van de lopende week"
+                      >
+                        <strong style={{ fontSize: 20 }}>{num(kpiStats.currentWeekClosed)}</strong>
+                      </KpiDrillCount>{" "}
                       <span
                         style={{
                           color: closedTrend.color,
@@ -5993,10 +6174,37 @@ export default function Home() {
     kpiStats.previousWeekReceived,
     liveKpiSettings,
     newMeldingCount,
+    currentWeekFlow,
+    fetchDrilldown,
   ]);
 
-  const kpiTiles = useMemo(
-    () => ({
+  const kpiTiles = useMemo(() => {
+    const openTotalTicketsDrilldown =
+      fullWeekInfo.count > 0
+        ? () =>
+            fetchDrilldown(weeks[fullWeekInfo.indices[0]], "", "", 0, {
+              dateFrom: weeks[fullWeekInfo.indices[0]],
+              dateTo: addDaysIso(weeks[fullWeekInfo.lastIndex], 6),
+              title: "Tickets in volledige weken",
+            })
+        : null;
+    const openLatestTicketsDrilldown =
+      fullWeekInfo.lastIndex >= 0
+        ? () =>
+            fetchDrilldown(weeks[fullWeekInfo.lastIndex], "", "", 0, {
+              title: "Tickets laatste volledige week",
+            })
+        : null;
+    const openTopPartnerDrilldown =
+      fullWeekInfo.lastIndex >= 0 && kpiStats.topPartnerLabel !== "—"
+        ? () =>
+            fetchDrilldown(weeks[fullWeekInfo.lastIndex], "", "", 0, {
+              organization: kpiStats.topPartnerLabel,
+              title: `Partner ${kpiStats.topPartnerLabel}`,
+            })
+        : null;
+
+    return {
       totalTickets: {
         label: "Tickets (volledige weken)",
         value: (
@@ -6012,7 +6220,13 @@ export default function Home() {
               >
                 Totaal
               </span>
-              <span>{num(kpiStats.totalTickets)}</span>
+              {openTotalTicketsDrilldown ? (
+                <KpiDrillCount onClick={openTotalTicketsDrilldown}>
+                  {num(kpiStats.totalTickets)}
+                </KpiDrillCount>
+              ) : (
+                <span>{num(kpiStats.totalTickets)}</span>
+              )}
             </span>
             <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
               <span
@@ -6030,12 +6244,20 @@ export default function Home() {
           </span>
         ),
         sub: kpiStats.periodLabel,
+        onClick: openTotalTicketsDrilldown,
       },
       latestTickets: {
         label: "Tickets laatste volledige week",
-        value: num(kpiStats.latestTickets),
+        value: openLatestTicketsDrilldown ? (
+          <KpiDrillCount onClick={openLatestTicketsDrilldown}>
+            {num(kpiStats.latestTickets)}
+          </KpiDrillCount>
+        ) : (
+          num(kpiStats.latestTickets)
+        ),
         sub: `Week van ${kpiStats.lastCompletedWeekLabel} · WoW: ${pct(kpiStats.wowChangePct)}`,
         badge: "Periode: laatste week",
+        onClick: openLatestTicketsDrilldown,
       },
       liveStatus: {
         label: "Live",
@@ -6117,7 +6339,13 @@ export default function Home() {
             <span style={{ fontSize: "0.7em", fontWeight: 600, color: "var(--text-muted)" }}>
               met
             </span>{" "}
-            <span>{num(kpiStats.topPartnerTickets)}</span>{" "}
+            {openTopPartnerDrilldown ? (
+              <KpiDrillCount onClick={openTopPartnerDrilldown}>
+                {num(kpiStats.topPartnerTickets)}
+              </KpiDrillCount>
+            ) : (
+              <span>{num(kpiStats.topPartnerTickets)}</span>
+            )}{" "}
             <span style={{ fontSize: "0.7em", fontWeight: 600, color: "var(--text-muted)" }}>
               tickets
             </span>
@@ -6129,17 +6357,20 @@ export default function Home() {
             <strong>{num(kpiStats.topPartnerPrevTickets)}</strong> tickets
           </span>
         ),
+        onClick: openTopPartnerDrilldown,
       },
-    }),
-    [
-      kpiStats,
-      liveKpiItems,
-      liveKpiUpdateLabel,
-      openReleaseWorkloadDrilldown,
-      releaseStatusBadge,
-      releaseStatusNote,
-    ]
-  );
+    };
+  }, [
+    kpiStats,
+    liveKpiItems,
+    liveKpiUpdateLabel,
+    openReleaseWorkloadDrilldown,
+    fetchDrilldown,
+    fullWeekInfo,
+    releaseStatusBadge,
+    releaseStatusNote,
+    weeks,
+  ]);
 
   const visibleKpiKeys = dashboardLayout.kpiRow;
   const hiddenKpiKeys = dashboardLayout.hiddenKpis;
@@ -6308,14 +6539,20 @@ export default function Home() {
   }, [isLayoutEditing]);
 
   return (
-    <div style={pageStyle}>
+    <div
+      className={`dashboard-page${seasonalTheme === "sinterklaas" ? " sinterklaas-dashboard" : ""}`}
+      style={pageStyle}
+    >
       <Head>
         <title>Dashboard Servicedesk Twentecs</title>
       </Head>
+      <SinterklaasDashboardDecorations active={seasonalTheme === "sinterklaas"} />
+      <SeasonalCornerSprite season={seasonalTheme} />
       <JiraTokenExpiryWarning />
       <Toast message={syncMessage} kind={syncMessageKind} onClose={() => setSyncMessage("")} />
       <LiveAlertStack
         alerts={liveAlerts}
+        forcePriorityAlertIntro={pendingPriorityAlertIntro}
         ttrCollapsed={ttrAlertsCollapsed}
         onToggleTtrCollapsed={() => setTtrAlertsCollapsed((value) => !value)}
         layoutEditing={isLayoutEditing}
@@ -6530,6 +6767,7 @@ export default function Home() {
                               const iso = parseNlDateToIso(dateFromUi);
                               if (iso) {
                                 setDateFrom(iso);
+                                setIsStandardPeriod(false);
                               } else {
                                 setSyncMessage("Ongeldige datum (Van). Gebruik dd/mm/jjjj.");
                                 setSyncMessageKind("error");
@@ -6571,6 +6809,7 @@ export default function Home() {
                             onChange={(e) => {
                               const iso = e.target.value;
                               setDateFrom(iso);
+                              setIsStandardPeriod(false);
                               setDateFromUi(fmtDate(iso));
                             }}
                             style={{
@@ -6603,6 +6842,7 @@ export default function Home() {
                               const iso = parseNlDateToIso(dateToUi);
                               if (iso) {
                                 setDateTo(iso);
+                                setIsStandardPeriod(false);
                               } else {
                                 setSyncMessage("Ongeldige datum (Tot). Gebruik dd/mm/jjjj.");
                                 setSyncMessageKind("error");
@@ -6643,6 +6883,7 @@ export default function Home() {
                             onChange={(e) => {
                               const iso = e.target.value;
                               setDateTo(iso);
+                              setIsStandardPeriod(false);
                               setDateToUi(fmtDate(iso));
                             }}
                             style={{
@@ -7946,7 +8187,9 @@ export default function Home() {
                   <td style={hotkeysTdStyle}>
                     <span style={hotkeysKeyStyle}>M</span>
                   </td>
-                  <td style={hotkeysTdStyle}>Zet de datumselectie op de laatste maand.</td>
+                  <td style={hotkeysTdStyle}>
+                    Zet de datumselectie op de standaardperiode van vier rapportageweken.
+                  </td>
                 </tr>
                 <tr>
                   <td style={hotkeysTdStyle}>
@@ -8649,6 +8892,7 @@ export default function Home() {
                       title: selectedDrillTitle,
                       meta: selectedDrillMeta,
                       issueKeys: selectedDrillIssueKeys,
+                      ...selectedDrillFilters,
                     }
                   )
                 }
@@ -8671,6 +8915,7 @@ export default function Home() {
                       title: selectedDrillTitle,
                       meta: selectedDrillMeta,
                       issueKeys: selectedDrillIssueKeys,
+                      ...selectedDrillFilters,
                     }
                   )
                 }
@@ -8679,7 +8924,9 @@ export default function Home() {
                 Volgende
               </button>
               <span style={{ color: "var(--text-muted)" }}>
-                rijen {drillOffset + 1}–{drillOffset + drillIssues.length}
+                {drillTotal
+                  ? `rijen ${drillOffset + 1}–${drillOffset + drillIssues.length} van ${drillTotal}`
+                  : "geen tickets"}
               </span>
               <span style={{ color: "var(--text-faint)" }}>•</span>
               <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -9587,7 +9834,11 @@ export default function Home() {
               </table>
 
               <div style={{ marginTop: 8, color: "var(--text-muted)" }}>
-                {drillIssues.length} tickets (limit {DRILL_LIMIT}, offset {drillOffset})
+                {drillTotal} tickets totaal
+                {drillCurrentWeekCount ? ` · ${drillCurrentWeekCount} in de lopende week` : ""}
+                {drillTotal > drillIssues.length
+                  ? ` (rijen ${drillOffset + 1}–${drillOffset + drillIssues.length})`
+                  : ""}
               </div>
             </div>
           ) : (
@@ -9778,6 +10029,87 @@ export default function Home() {
         a {
           color: var(--accent);
         }
+        :root[data-season="sinterklaas"] {
+          --page-bg: #f3e3c2;
+          --surface: #fffdf7;
+          --surface-muted: #f9efd8;
+          --border: #c9aa66;
+          --border-strong: #b9944f;
+          --shadow-medium: rgba(98, 62, 24, 0.16);
+        }
+        .sinterklaas-dashboard {
+          background:
+            radial-gradient(circle at 16% 12%, rgba(177, 123, 48, 0.08) 0 1px, transparent 1.6px) 0 0 / 7px 7px,
+            linear-gradient(120deg, rgba(255, 255, 255, 0.42), rgba(214, 177, 109, 0.18)),
+            var(--page-bg) !important;
+          isolation: isolate;
+        }
+        .sinterklaas-dashboard .dashboard-card-shell {
+          box-shadow:
+            inset 0 0 0 1px rgba(181, 136, 55, 0.22),
+            0 8px 18px rgba(98, 62, 24, 0.12);
+        }
+        .sinterklaas-scene,
+        .sinterklaas-scene * {
+          pointer-events: none !important;
+          user-select: none;
+        }
+        .sinterklaas-scene {
+          position: fixed;
+          inset: 0;
+          z-index: 20;
+          overflow: hidden;
+        }
+        .sinterklaas-frame {
+          position: absolute;
+          inset: 4px;
+          border: 3px double rgba(160, 112, 35, 0.74);
+          border-radius: 8px;
+          box-shadow:
+            inset 0 0 0 2px rgba(255, 223, 136, 0.64),
+            0 0 0 2px rgba(104, 68, 22, 0.2);
+        }
+        .seasonal-corner-scene {
+          position: fixed;
+          inset: 0;
+          z-index: 20;
+          overflow: hidden;
+          pointer-events: none;
+          user-select: none;
+        }
+        .seasonal-corner-sprite {
+          position: absolute;
+          right: clamp(22px, 2.8vw, 52px);
+          bottom: clamp(18px, 2.2dvh, 34px);
+          width: clamp(205px, 18vw, 300px);
+          aspect-ratio: 1 / 0.82;
+          background-image: url("/seasonal/seasonal-sprite-v1.png");
+          background-position: 0 0;
+          background-repeat: no-repeat;
+          background-size: 300% 200%;
+          filter: drop-shadow(0 8px 9px rgba(75, 44, 17, 0.2));
+        }
+        .seasonal-corner-sprite--sinterklaas { background-position: 0 0; }
+        .seasonal-corner-sprite--kerst { background-position: 50% 0; }
+        .seasonal-corner-sprite--pasen { background-position: 100% 0; }
+        .seasonal-secondary-sprite {
+          position: absolute;
+          left: clamp(22px, 2.8vw, 52px);
+          bottom: clamp(16px, 1.9dvh, 30px);
+          width: clamp(92px, 9vw, 155px);
+          aspect-ratio: 1 / 0.82;
+          background-image: url("/seasonal/seasonal-sprite-v1.png");
+          background-repeat: no-repeat;
+          background-size: 300% 200%;
+          filter: drop-shadow(0 5px 6px rgba(75, 44, 17, 0.16));
+        }
+        .seasonal-secondary-sprite--sinterklaas { background-position: 0 100%; }
+        .seasonal-secondary-sprite--kerst { background-position: 50% 100%; }
+        .seasonal-secondary-sprite--pasen { background-position: 100% 100%; }
+        @media (max-width: 1500px) {
+          .seasonal-corner-sprite { transform: scale(0.78); transform-origin: bottom right; }
+          .seasonal-secondary-sprite { transform: scale(0.78); transform-origin: bottom left; }
+        }
         .card-expand-title {
           transition:
             transform 160ms ease,
@@ -9828,6 +10160,17 @@ export default function Home() {
           to {
             opacity: 1;
             transform: translateY(0) scale(1);
+          }
+        }
+        @keyframes urgentFlash {
+          0% {
+            opacity: 0;
+          }
+          35% {
+            opacity: 1;
+          }
+          100% {
+            opacity: 0;
           }
         }
         @keyframes dashSkeletonWave {

@@ -69,11 +69,11 @@ ALERT_P1_ACTIVE_STATUSES = [
     ).split(",")
     if s.strip()
 ]
-ALERT_TEAMS_WEBHOOK_URL = (os.environ.get("ALERT_TEAMS_WEBHOOK_URL") or "").strip()
-ALERT_TEAMS_NOTIFICATIONS_ENABLED = str(
-    os.environ.get("ALERT_TEAMS_NOTIFICATIONS_ENABLED", "true")
-).strip().lower() in {"1", "true", "yes", "on"}
-ALERT_TEAMS_TIMEOUT_SECONDS = float(os.environ.get("ALERT_TEAMS_TIMEOUT_SECONDS", "3"))
+ALERT_P2_PRIORITIES = [
+    p.strip().lower()
+    for p in os.environ.get("ALERT_P2_PRIORITIES", "priority 2,p2,high,hoog,level 2").split(",")
+    if p.strip()
+]
 WEEKLY_INSIGHTS_ENABLED = str(os.environ.get("WEEKLY_INSIGHTS_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
 WEEKLY_INSIGHTS_WEEKDAY = max(0, min(6, int(os.environ.get("WEEKLY_INSIGHTS_WEEKDAY", "0"))))
 WEEKLY_INSIGHTS_HOUR = max(0, min(23, int(os.environ.get("WEEKLY_INSIGHTS_HOUR", "8"))))
@@ -82,6 +82,7 @@ WEEKLY_INSIGHTS_RETENTION_DAYS = max(1, int(os.environ.get("WEEKLY_INSIGHTS_RETE
 WEEKLY_INSIGHTS_REPORT_DIR = Path(os.environ.get("WEEKLY_INSIGHTS_REPORT_DIR", "/tmp/jsm-weekly-insights")).expanduser()
 WEEKLY_INSIGHTS_PUBLIC_BASE_URL = (os.environ.get("WEEKLY_INSIGHTS_PUBLIC_BASE_URL") or "").strip().rstrip("/")
 WEEKLY_INSIGHTS_TEAMS_WEBHOOK_URL = (os.environ.get("WEEKLY_INSIGHTS_TEAMS_WEBHOOK_URL") or "").strip()
+WEEKLY_INSIGHTS_TEAMS_TIMEOUT_SECONDS = float(os.environ.get("WEEKLY_INSIGHTS_TEAMS_TIMEOUT_SECONDS", "3"))
 WEEKLY_INSIGHTS_EMAIL_TO = [value.strip() for value in (os.environ.get("WEEKLY_INSIGHTS_EMAIL_TO") or "").split(",") if value.strip()]
 WEEKLY_INSIGHTS_TEST_EMAIL_TO = [
     value.strip()
@@ -146,6 +147,8 @@ _weekly_insights_scheduler_lock = threading.Lock()
 _dev_jira_token_warning = False
 _dev_jira_token_warning_pending_until = 0.0
 _dev_jira_token_warning_variant = ""
+_dev_alert_timers = []
+_dev_alert_timers_lock = threading.Lock()
 _jira_token_api_error = None
 _sync_status_cache_payload = None
 _sync_status_cache_checked_at = 0.0
@@ -1041,7 +1044,7 @@ def _send_weekly_insights_teams_notification(payload: Dict[str, Any], report_url
         "potentialAction": [{"@type": "OpenUri", "name": "Open PDF (intern netwerk)", "targets": [{"os": "default", "uri": report_url}]}],
     }
     try:
-        response = requests.post(WEEKLY_INSIGHTS_TEAMS_WEBHOOK_URL, json=body, timeout=ALERT_TEAMS_TIMEOUT_SECONDS)
+        response = requests.post(WEEKLY_INSIGHTS_TEAMS_WEBHOOK_URL, json=body, timeout=WEEKLY_INSIGHTS_TEAMS_TIMEOUT_SECONDS)
         response.raise_for_status()
         return {"sent": True}
     except requests.RequestException as exc:
@@ -2966,6 +2969,8 @@ def get_sync_status_payload():
             """
             select started_at, finished_at, mode, trigger_type, success, upserts, set_last_sync, error
             from sync_runs
+            -- A local clock change must not make an old run look newer than all real runs.
+            where started_at <= now() + interval '5 minutes'
             order by started_at desc
             limit 10;
             """
@@ -2990,6 +2995,7 @@ def get_sync_status_payload():
             select started_at, finished_at, mode, trigger_type, upserts, set_last_sync
             from sync_runs
             where success = true
+              and started_at <= now() + interval '5 minutes'
             order by started_at desc
             limit 10;
             """
@@ -3013,6 +3019,7 @@ def get_sync_status_payload():
             from sync_runs
             where success = false
               and error is not null
+              and started_at <= now() + interval '5 minutes'
             order by started_at desc
             limit 1;
             """
@@ -3034,6 +3041,7 @@ def get_sync_status_payload():
             from sync_runs
             where success = true
               and mode = 'full'
+              and started_at <= now() + interval '5 minutes'
             order by started_at desc
             limit 1;
             """
@@ -3258,6 +3266,11 @@ def is_priority1_alert_status(value: Optional[str]) -> bool:
     if not status:
         return False
     return status in ALERT_P1_ACTIVE_STATUSES
+
+
+def is_priority2_priority(value: Optional[str]) -> bool:
+    normalized = re.sub(r"\s+", " ", str(value or "").strip().lower())
+    return normalized in ALERT_P2_PRIORITIES or bool(re.search(r"(^|[^a-z0-9])p2([^a-z0-9]|$)", normalized)) or "priority 2" in normalized or "prioriteit 2" in normalized
 
 
 def _maybe_cleanup_alert_logs(cur):
@@ -5028,6 +5041,7 @@ def volume_weekly_by_organization(
 
 @app.get("/issues")
 def issues(
+    response: Response,
     date_from: str,
     date_to: str,
     request_type: Optional[str] = None,
@@ -5072,9 +5086,40 @@ def issues(
         date_null_guard=date_null_guard,
         filter_sql=filter_sql,
     )
+    count_q = compose_sql_query(
+        """
+    select
+      count(*) as total_count,
+      count(*) filter (where {date_column} >= %s::timestamptz) as current_week_count
+    from issues
+    where {date_column} >= %s::timestamptz and {date_column} < (%s::timestamptz + interval '1 day')
+      {date_null_guard}
+      and (%s::text[] is null or issue_key = any(%s::text[]))
+      and {filter_sql};
+    """,
+        date_column=date_column,
+        date_null_guard=date_null_guard,
+        filter_sql=filter_sql,
+    )
+    current_week_start = _local_week_comparison_windows()["current_week_start"]
     with conn() as c, c.cursor() as cur:
         cur.execute(q, (date_from, date_to, issue_key_list, issue_key_list, *filter_params, limit, offset))
         rows = cur.fetchall()
+        cur.execute(
+            count_q,
+            (
+                current_week_start,
+                date_from,
+                date_to,
+                issue_key_list,
+                issue_key_list,
+                *filter_params,
+            ),
+        )
+        count_row = cur.fetchone() or (0, 0)
+
+    response.headers["X-Total-Count"] = str(int(count_row[0] or 0))
+    response.headers["X-Current-Week-Count"] = str(int(count_row[1] or 0))
 
     return [
         {
@@ -5126,7 +5171,9 @@ def alerts_live(servicedesk_only: bool = True):
             """,
             (servicedesk_only, servicedesk_onderwerpen, servicedesk_team_members),
         )
-        p1_rows = [r for r in cur.fetchall() if is_priority1_priority(r[2]) and is_priority1_alert_status(r[3])][:25]
+        priority_alert_rows = cur.fetchall()
+        p1_rows = [r for r in priority_alert_rows if is_priority1_priority(r[2]) and is_priority1_alert_status(r[3])][:25]
+        p2_rows = [r for r in priority_alert_rows if is_priority2_priority(r[2]) and is_priority1_alert_status(r[3])][:25]
 
         cur.execute(
             """
@@ -5364,6 +5411,11 @@ def alerts_live(servicedesk_only: bool = True):
         for r in p1_rows
         if r[0] in existing_keys
     ]
+    priority2_items = [
+        {"issue_key": r[0], "created_at": r[1].isoformat() if r[1] else None, "priority": r[2], "status": r[3], "issue_summary": r[4]}
+        for r in p2_rows
+        if r[0] in existing_keys
+    ]
     due_warning_items = [
         {
             "issue_key": r[0],
@@ -5446,6 +5498,14 @@ def alerts_live(servicedesk_only: bool = True):
     )
     log_events.extend(
         {
+            "issue_key": item["issue_key"], "alert_kind": "P2", "status": item.get("status"),
+            "meta": item.get("priority") or "Priority 2", "issue_summary": item.get("issue_summary"),
+            "issue_url": f"{JIRA_BASE}/browse/{item['issue_key']}", "servicedesk_only": servicedesk_only,
+        }
+        for item in priority2_items
+    )
+    log_events.extend(
+        {
             "issue_key": item["issue_key"],
             "alert_kind": "SLA_WARNING",
             "status": item.get("status"),
@@ -5521,11 +5581,9 @@ def alerts_live(servicedesk_only: bool = True):
         _maybe_cleanup_alert_logs(cur)
         inserted_events = _persist_alert_log_events(cur, log_events)
         c.commit()
-    teams_events = [e for e in inserted_events if e.get("alert_kind") in {"P1", "SLA_CRITICAL", "TTR_WARNING", "TTR_CRITICAL"}]
-    _send_teams_alert_notification(teams_events)
-
     return {
         "priority1": priority_items,
+        "priority2": priority2_items,
         "first_response_due_soon": due_warning_items,
         "first_response_due_warning": due_warning_items,
         "first_response_due_critical": due_critical_items,
@@ -5646,8 +5704,7 @@ def alerts_logs_clear(servicedesk_only: bool = True):
     return {"ok": True, "servicedesk_only": bool(servicedesk_only)}
 
 
-@app.post("/dev/alerts/trigger")
-def dev_alert_trigger(servicedesk_only: bool = True):
+def _create_dev_alert(servicedesk_only: bool = True):
     ensure_schema()
     issue_key = f"{DEV_ALERT_ISSUE_KEY}-{int(time.time())}"
     with conn() as c, c.cursor() as cur:
@@ -5727,9 +5784,44 @@ def dev_alert_trigger(servicedesk_only: bool = True):
     return {"ok": True, "issue_key": issue_key, "servicedesk_only": bool(servicedesk_only)}
 
 
+def _clear_pending_dev_alert_timers():
+    with _dev_alert_timers_lock:
+        timers = list(_dev_alert_timers)
+        _dev_alert_timers.clear()
+    for timer in timers:
+        cancel = getattr(timer, "cancel", None)
+        if callable(cancel):
+            cancel()
+
+
+@app.post("/dev/alerts/trigger")
+def dev_alert_trigger(servicedesk_only: bool = True, delay_seconds: int = Query(0, ge=0, le=10)):
+    """Create a dashboard-only alert test, optionally after navigation has completed."""
+    delay_seconds = int(delay_seconds or 0)
+    if delay_seconds:
+        timer = None
+
+        def run_scheduled_alert():
+            try:
+                _create_dev_alert(servicedesk_only=servicedesk_only)
+            finally:
+                with _dev_alert_timers_lock:
+                    if timer in _dev_alert_timers:
+                        _dev_alert_timers.remove(timer)
+
+        timer = threading.Timer(delay_seconds, run_scheduled_alert)
+        timer.daemon = True
+        with _dev_alert_timers_lock:
+            _dev_alert_timers.append(timer)
+        timer.start()
+        return {"ok": True, "scheduled": True, "delay_seconds": delay_seconds}
+    return _create_dev_alert(servicedesk_only=servicedesk_only)
+
+
 @app.post("/dev/alerts/clear")
 def dev_alert_clear(issue_key: Optional[str] = None):
     ensure_schema()
+    _clear_pending_dev_alert_timers()
     with conn() as c, c.cursor() as cur:
         if issue_key:
             cur.execute("delete from issues where issue_key = %s;", (issue_key,))
@@ -5739,6 +5831,17 @@ def dev_alert_clear(issue_key: Optional[str] = None):
             cur.execute("delete from alert_logs where issue_key like %s;", (f"{DEV_ALERT_ISSUE_KEY}-%",))
         c.commit()
     return {"ok": True, "issue_key": issue_key or f"{DEV_ALERT_ISSUE_KEY}-*"}
+
+
+@app.post("/dev/tests/clear")
+def clear_all_dev_tests():
+    """Clear every persistent development test without touching real alert or token state."""
+    global _dev_jira_token_warning, _dev_jira_token_warning_pending_until, _dev_jira_token_warning_variant
+    _dev_jira_token_warning = False
+    _dev_jira_token_warning_pending_until = 0.0
+    _dev_jira_token_warning_variant = ""
+    dev_alert_clear()
+    return {"ok": True}
 
 
 @app.get("/dev/alerts/test-state")
@@ -5757,7 +5860,26 @@ def dev_alert_test_state():
             (f"{DEV_ALERT_ISSUE_KEY}-%",),
         )
         keys = [r[0] for r in cur.fetchall()]
-    return {"keys": keys, "count": len(keys)}
+    with _dev_alert_timers_lock:
+        scheduled_count = len(_dev_alert_timers)
+    return {"keys": keys, "count": len(keys), "scheduled_count": scheduled_count}
+
+
+@app.get("/dev/tests/state")
+def dev_tests_state():
+    """Single source of truth for development scenarios shown in the status test panel."""
+    alert_state = dev_alert_test_state()
+    scenarios = []
+    if int(alert_state.get("count") or 0) or int(alert_state.get("scheduled_count") or 0):
+        scenarios.append("alert")
+    if _dev_jira_token_warning or _dev_jira_token_warning_pending_until > time.time() or _dev_jira_token_warning_variant:
+        scenarios.append(_dev_jira_token_warning_variant or "token_warning")
+    return {
+        "active": bool(scenarios),
+        "scenarios": scenarios,
+        "alert_count": int(alert_state.get("count") or 0),
+        "scheduled_alert_count": int(alert_state.get("scheduled_count") or 0),
+    }
 
 
 @app.post("/dev/alerts/notify-test")

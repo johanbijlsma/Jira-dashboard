@@ -12,9 +12,9 @@ export function useVacationsData() {
 
   const refreshVacations = useCallback(async () => {
     const [allRes, upcomingRes, todayRes] = await Promise.all([
-      fetch(`${API}/vacations`),
-      fetch(`${API}/vacations/upcoming?limit=3`),
-      fetch(`${API}/vacations/today`),
+      fetch(`${API}/vacations`, { cache: "no-store" }),
+      fetch(`${API}/vacations/upcoming?limit=3`, { cache: "no-store" }),
+      fetch(`${API}/vacations/today`, { cache: "no-store" }),
     ]);
     const [allData, upcomingData, todayData] = await Promise.all([
       allRes.json(),
@@ -48,9 +48,12 @@ export function useVacationsData() {
   }, [isPageVisible, refreshVacations]);
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      refreshVacations().catch(() => {});
-    }, isPageVisible ? 300000 : 900000);
+    const timer = setInterval(
+      () => {
+        refreshVacations().catch(() => {});
+      },
+      isPageVisible ? 300000 : 900000
+    );
     return () => clearInterval(timer);
   }, [isPageVisible, refreshVacations]);
 

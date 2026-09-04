@@ -19,8 +19,8 @@ const DEFAULT_META = {
   organizations: [],
 };
 
-function fetchJson(url) {
-  return fetch(url).then(async (r) => {
+function fetchJson(url, options) {
+  return fetch(url, options).then(async (r) => {
     const data = await r.json().catch(() => null);
     if (!r.ok) {
       const detail = data && typeof data === "object" ? data.detail : null;
@@ -112,7 +112,9 @@ export function useDashboardData({
 
   const refreshCurrentWeekFlow = useCallback(() => {
     // Live KPI's deliberately ignore historical dashboard filters.
-    return fetchJson(`${API}/metrics/current_week_flow?servicedesk_only=true`)
+    return fetchJson(`${API}/metrics/current_week_flow?servicedesk_only=true`, {
+      cache: "no-store",
+    })
       .then((data) => {
         setCurrentWeekFlow(data);
         return data;
@@ -127,10 +129,10 @@ export function useDashboardData({
     const updateCount = (setter) => (data) => setter(Math.max(0, Number(data?.count) || 0));
     return Promise.all([
       refreshCurrentWeekFlow(),
-      fetchJson(`${API}/metrics/in_progress_count`)
+      fetchJson(`${API}/metrics/in_progress_count`, { cache: "no-store" })
         .then(updateCount(setInProgressCount))
         .catch(() => setInProgressCount(0)),
-      fetchJson(`${API}/metrics/new_melding_count`)
+      fetchJson(`${API}/metrics/new_melding_count`, { cache: "no-store" })
         .then(updateCount(setNewMeldingCount))
         .catch(() => setNewMeldingCount(0)),
     ]).then(() => {

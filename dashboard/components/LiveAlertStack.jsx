@@ -1,14 +1,115 @@
 import { JIRA_BASE } from "../lib/dashboard-constants";
+import { useEffect, useRef, useState } from "react";
 
-function AlertSection({
-  badge,
-  title,
-  count,
-  items,
-  itemKeyPrefix,
-  valueLabel,
-  palette,
-}) {
+function UrgentAlertIntro({ p1Items, p2Items, forceIntro = false }) {
+  const seenRef = useRef(new Set());
+  const bootstrappedRef = useRef(false);
+  const forcedIntroShownRef = useRef(false);
+  const [active, setActive] = useState(null);
+  const [stage, setStage] = useState("");
+
+  useEffect(() => {
+    const candidates = [
+      ...p1Items.map((item) => ({ ...item, kind: "P1" })),
+      ...p2Items.map((item) => ({ ...item, kind: "P2" })),
+    ];
+    if (
+      active &&
+      !candidates.some((item) => item.kind === active.kind && item.issue_key === active.issue_key)
+    ) {
+      const timer = window.setTimeout(() => {
+        setActive(null);
+        setStage("");
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
+    return undefined;
+  }, [active, p1Items, p2Items]);
+
+  useEffect(() => {
+    const candidates = [
+      ...p1Items.map((item) => ({ ...item, kind: "P1" })),
+      ...p2Items.map((item) => ({ ...item, kind: "P2" })),
+    ];
+    if (!bootstrappedRef.current) {
+      bootstrappedRef.current = true;
+      if (!forceIntro || !candidates.length) {
+        candidates.forEach((item) => seenRef.current.add(`${item.kind}:${item.issue_key}`));
+        return undefined;
+      }
+    }
+    const forcedCandidate = forceIntro && !forcedIntroShownRef.current ? candidates[0] : null;
+    const next = forcedCandidate || candidates.find((item) => !seenRef.current.has(`${item.kind}:${item.issue_key}`));
+    if (!next) return undefined;
+    if (forcedCandidate) forcedIntroShownRef.current = true;
+    seenRef.current.add(`${next.kind}:${next.issue_key}`);
+    let cardTimer = null;
+    const activationTimer = window.setTimeout(() => {
+      setActive(next);
+      setStage("overlay");
+      cardTimer = window.setTimeout(() => setStage("card"), 1200);
+    }, 0);
+    return () => {
+      window.clearTimeout(activationTimer);
+      if (cardTimer) window.clearTimeout(cardTimer);
+    };
+  }, [forceIntro, p1Items, p2Items]);
+
+  if (!active || !stage) return null;
+  const isP1 = active.kind === "P1";
+  const color = isP1 ? "#b91c1c" : "#c2410c";
+  return (
+    <>
+      {stage === "overlay" ? (
+        <div
+          aria-hidden="true"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1200,
+            pointerEvents: "none",
+            background: isP1 ? "rgba(185,28,28,.30)" : "rgba(194,65,12,.25)",
+            animation: "urgentFlash 900ms ease-out",
+          }}
+        />
+      ) : null}
+      {stage === "card" ? (
+        <section
+          role="alert"
+          aria-live="assertive"
+          style={{
+            position: "fixed",
+            zIndex: 1201,
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            width: "min(620px, calc(100vw - 48px))",
+            padding: 28,
+            borderRadius: 18,
+            border: `3px solid ${color}`,
+            background: "var(--surface)",
+            color: "var(--text-main)",
+            boxShadow: `0 24px 70px color-mix(in srgb, ${color} 48%, transparent)`,
+            animation: "alertIn 300ms ease",
+          }}
+        >
+          <div style={{ color, fontWeight: 900, fontSize: 15, letterSpacing: 1 }}>
+            {active.kind} LIVE ALERT
+          </div>
+          <div style={{ marginTop: 7, fontSize: 28, fontWeight: 850 }}>{active.issue_key}</div>
+          <div style={{ marginTop: 6, fontSize: 16 }}>
+            {active.issue_summary || "Nieuwe melding"}
+          </div>
+          <div style={{ marginTop: 12, color: "var(--text-muted)", fontSize: 13 }}>
+            Blijft zichtbaar totdat de melding in behandeling is.
+          </div>
+        </section>
+      ) : null}
+    </>
+  );
+}
+
+function AlertSection({ badge, title, count, items, itemKeyPrefix, valueLabel, palette }) {
   const cardStyle = {
     borderRadius: 12,
     border: "1px solid",
@@ -51,7 +152,14 @@ function AlertSection({
   return (
     <section style={cardStyle}>
       <div style={titleRowStyle}>
-        <span style={{ fontSize: 11, border: "1px solid rgba(255,255,255,0.35)", borderRadius: 999, padding: "2px 8px" }}>
+        <span
+          style={{
+            fontSize: 11,
+            border: "1px solid rgba(255,255,255,0.35)",
+            borderRadius: 999,
+            padding: "2px 8px",
+          }}
+        >
           {badge}
         </span>
         <span>{title}</span>
@@ -78,21 +186,38 @@ function AlertSection({
 
 export default function LiveAlertStack({
   alerts,
+  forcePriorityAlertIntro = false,
   ttrCollapsed = false,
   onToggleTtrCollapsed,
   layoutEditing = false,
   layoutPanelHeight = 0,
 }) {
   const p1Items = Array.isArray(alerts?.priority1) ? alerts.priority1 : [];
+  const p2Items = Array.isArray(alerts?.priority2) ? alerts.priority2 : [];
   const slaWarningItems = Array.isArray(alerts?.first_response_due_warning)
     ? alerts.first_response_due_warning
-    : (Array.isArray(alerts?.first_response_due_soon) ? alerts.first_response_due_soon : []);
-  const slaCriticalItems = Array.isArray(alerts?.first_response_due_critical) ? alerts.first_response_due_critical : [];
-  const overdueItems = Array.isArray(alerts?.first_response_overdue) ? alerts.first_response_overdue : [];
-  const ttrWarningItems = Array.isArray(alerts?.time_to_resolution_warning) ? alerts.time_to_resolution_warning : [];
-  const ttrCriticalItems = Array.isArray(alerts?.time_to_resolution_critical) ? alerts.time_to_resolution_critical : [];
+    : Array.isArray(alerts?.first_response_due_soon)
+      ? alerts.first_response_due_soon
+      : [];
+  const slaCriticalItems = Array.isArray(alerts?.first_response_due_critical)
+    ? alerts.first_response_due_critical
+    : [];
+  const overdueItems = Array.isArray(alerts?.first_response_overdue)
+    ? alerts.first_response_overdue
+    : [];
+  const ttrWarningItems = Array.isArray(alerts?.time_to_resolution_warning)
+    ? alerts.time_to_resolution_warning
+    : [];
+  const ttrCriticalItems = Array.isArray(alerts?.time_to_resolution_critical)
+    ? alerts.time_to_resolution_critical
+    : [];
 
-  const hasAcuteAlerts = p1Items.length || slaWarningItems.length || slaCriticalItems.length || overdueItems.length;
+  const hasAcuteAlerts =
+    p1Items.length ||
+    p2Items.length ||
+    slaWarningItems.length ||
+    slaCriticalItems.length ||
+    overdueItems.length;
   const ttrTotal = ttrWarningItems.length + ttrCriticalItems.length;
   if (!hasAcuteAlerts && !ttrTotal) return null;
 
@@ -154,6 +279,11 @@ export default function LiveAlertStack({
 
   return (
     <>
+      <UrgentAlertIntro
+        p1Items={p1Items}
+        p2Items={p2Items}
+        forceIntro={forcePriorityAlertIntro}
+      />
       {hasAcuteAlerts ? (
         <div style={acuteShellStyle} aria-live="assertive" aria-atomic="false">
           {p1Items.length ? (
@@ -168,6 +298,22 @@ export default function LiveAlertStack({
                 borderColor: "rgba(127, 29, 29, 0.45)",
                 background: "linear-gradient(135deg, #7f1d1d, #991b1b)",
                 color: "#fee2e2",
+              }}
+            />
+          ) : null}
+
+          {p2Items.length ? (
+            <AlertSection
+              badge="P2"
+              title="Priority 2 binnengekomen"
+              count={p2Items.length}
+              items={p2Items}
+              itemKeyPrefix="p2"
+              valueLabel={(item) => item.status || "Open"}
+              palette={{
+                borderColor: "rgba(146, 64, 14, 0.5)",
+                background: "linear-gradient(135deg, #9a3412, #c2410c)",
+                color: "#ffedd5",
               }}
             />
           ) : null}
@@ -234,7 +380,9 @@ export default function LiveAlertStack({
               <span style={ttrBadgeStyle}>TTR</span>
               <span>Incident TTR alerts</span>
               <strong style={{ marginLeft: "auto", fontSize: 12 }}>{ttrTotal}</strong>
-              <span aria-hidden="true" style={{ fontSize: 16, lineHeight: 1 }}>{ttrIsCollapsed ? "▸" : "▾"}</span>
+              <span aria-hidden="true" style={{ fontSize: 16, lineHeight: 1 }}>
+                {ttrIsCollapsed ? "▸" : "▾"}
+              </span>
             </button>
             {!ttrIsCollapsed ? (
               <div style={{ display: "grid", gap: 10, padding: "0 0 10px" }}>
