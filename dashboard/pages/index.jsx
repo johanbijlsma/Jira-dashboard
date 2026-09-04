@@ -52,17 +52,12 @@ import {
   ArrowUp,
   Bell,
   Building2,
-  CandyCane,
   CalendarDays,
   ChevronRight,
-  CloudSnow,
   Columns2,
-  Egg,
   Filter,
   Flag,
-  Gift,
   GripVertical,
-  House,
   Lock,
   LockKeyholeOpen,
   Mail,
@@ -74,7 +69,6 @@ import {
   Plus,
   RotateCcw,
   Rocket,
-  Rabbit,
   Save,
   Settings,
   Siren,
@@ -84,7 +78,6 @@ import {
   Tags,
   ThumbsDown,
   ThumbsUp,
-  TreePine,
   Trash2,
   Tv,
   UserRound,
@@ -146,124 +139,33 @@ ChartJS.register(
 );
 setupChartDefaults(ChartJS);
 
-function HeaderSeasonalDecoration({ season }) {
-  const shellStyle = {
-    alignItems: "center",
-    background: "var(--surface, #fff)",
-    border: "1px solid var(--border)",
-    borderRadius: 999,
-    boxShadow: "0 3px 10px rgb(15 23 42 / 10%)",
-    display: "inline-flex",
-    gap: 6,
-    gridColumn: 2,
-    justifySelf: "center",
-    padding: "4px 10px",
-    whiteSpace: "nowrap",
-  };
-  const iconStyle = { width: 21, height: 21, strokeWidth: 1.8 };
-  const labelStyle = { fontSize: 12, fontWeight: 800, marginLeft: 2 };
-  const pepernootStyle = {
-    background: "#9a4f1d",
-    borderRadius: "50%",
-    boxShadow: "inset -1px -1px #6c3518",
-    display: "inline-block",
-    height: 7,
-    width: 7,
-  };
+function SinterklaasDashboardDecorations({ active }) {
+  if (!active) return null;
+  return (
+    <div className="sinterklaas-scene" aria-hidden="true">
+      <div className="sinterklaas-frame" />
+      <SeasonalCornerSpriteAsset season="sinterklaas" />
+      <SeasonalSecondarySpriteAsset season="sinterklaas" />
+    </div>
+  );
+}
 
-  if (season === "sinterklaas") {
-    return (
-      <div
-        className="seasonal-header-decoration"
-        style={{ ...shellStyle, color: "#7c2d12" }}
-        role="img"
-        aria-label="Sinterklaasdecoratie"
-      >
-        <House style={{ ...iconStyle, color: "#3f2b29" }} />
-        <House style={{ ...iconStyle, color: "#5b3124", marginLeft: -10 }} />
-        <span style={{ display: "inline-flex", gap: 2 }}>
-          {[0, 1, 2, 3, 4].map((index) => (
-            <i key={index} style={pepernootStyle} />
-          ))}
-        </span>
-        <span
-          style={{
-            background: "#b91c1c",
-            border: "1px solid #7f1d1d",
-            borderRadius: "45% 45% 35% 35%",
-            height: 21,
-            transform: "rotate(-7deg)",
-            width: 16,
-          }}
-        />
-        <Gift style={{ ...iconStyle, color: "#b45309" }} />
-        <CandyCane style={{ ...iconStyle, color: "#dc2626" }} />
-        <span style={labelStyle}>Sinterklaas</span>
-      </div>
-    );
-  }
+function SeasonalCornerSpriteAsset({ season }) {
+  return <div className={`seasonal-corner-sprite seasonal-corner-sprite--${season}`} />;
+}
 
-  if (season === "kerst") {
-    return (
-      <div
-        className="seasonal-header-decoration"
-        style={{ ...shellStyle, color: "#166534" }}
-        role="img"
-        aria-label="Kerstdecoratie"
-      >
-        <CloudSnow style={{ ...iconStyle, color: "#60a5fa" }} />
-        <TreePine style={{ ...iconStyle, color: "#15803d" }} />
-        <TreePine style={{ ...iconStyle, color: "#166534", marginLeft: -10 }} />
-        <Gift style={{ ...iconStyle, color: "#b91c1c" }} />
-        <span style={{ display: "inline-flex", gap: 3 }}>
-          {["#fbbf24", "#dc2626", "#16a34a"].map((color) => (
-            <i
-              key={color}
-              style={{
-                background: color,
-                borderRadius: "50%",
-                boxShadow: `0 0 5px ${color}`,
-                height: 7,
-                width: 7,
-              }}
-            />
-          ))}
-        </span>
-        <span style={labelStyle}>Kerst</span>
-      </div>
-    );
-  }
+function SeasonalSecondarySpriteAsset({ season }) {
+  return <div className={`seasonal-secondary-sprite seasonal-secondary-sprite--${season}`} />;
+}
 
-  if (season === "pasen") {
-    return (
-      <div
-        className="seasonal-header-decoration"
-        style={{ ...shellStyle, color: "#6d28d9" }}
-        role="img"
-        aria-label="Paasdecoratie"
-      >
-        <Rabbit style={{ ...iconStyle, color: "#7c3aed" }} />
-        <span
-          style={{
-            background: "#f8fafc",
-            border: "1px solid #94a3b8",
-            borderRadius: "48%",
-            height: 16,
-            position: "relative",
-            width: 23,
-          }}
-        />
-        <Egg style={{ ...iconStyle, color: "#ec4899" }} />
-        <Egg
-          style={{ ...iconStyle, color: "#f59e0b", marginLeft: -9, transform: "translateY(-3px)" }}
-        />
-        <Egg style={{ ...iconStyle, color: "#22c55e", marginLeft: -9 }} />
-        <span style={labelStyle}>Pasen</span>
-      </div>
-    );
-  }
-
-  return null;
+function SeasonalCornerSprite({ season }) {
+  if (!season || season === "sinterklaas") return null;
+  return (
+    <div className="seasonal-corner-scene" aria-hidden="true">
+      <SeasonalCornerSpriteAsset season={season} />
+      <SeasonalSecondarySpriteAsset season={season} />
+    </div>
+  );
 }
 
 function KpiDrillCount({ children, onClick, title }) {
@@ -6637,10 +6539,15 @@ export default function Home() {
   }, [isLayoutEditing]);
 
   return (
-    <div style={pageStyle}>
+    <div
+      className={`dashboard-page${seasonalTheme === "sinterklaas" ? " sinterklaas-dashboard" : ""}`}
+      style={pageStyle}
+    >
       <Head>
         <title>Dashboard Servicedesk Twentecs</title>
       </Head>
+      <SinterklaasDashboardDecorations active={seasonalTheme === "sinterklaas"} />
+      <SeasonalCornerSprite season={seasonalTheme} />
       <JiraTokenExpiryWarning />
       <Toast message={syncMessage} kind={syncMessageKind} onClose={() => setSyncMessage("")} />
       <LiveAlertStack
@@ -6664,7 +6571,6 @@ export default function Home() {
       </button>
       <div style={headerRowStyle}>
         <h1 style={titleStyle}>Dashboard Servicedesk Twentecs</h1>
-        <HeaderSeasonalDecoration season={seasonalTheme} />
         <div style={headerActionsStyle}>
           {activeFilterItems.length ? (
             <>
@@ -10122,6 +10028,87 @@ export default function Home() {
         }
         a {
           color: var(--accent);
+        }
+        :root[data-season="sinterklaas"] {
+          --page-bg: #f3e3c2;
+          --surface: #fffdf7;
+          --surface-muted: #f9efd8;
+          --border: #c9aa66;
+          --border-strong: #b9944f;
+          --shadow-medium: rgba(98, 62, 24, 0.16);
+        }
+        .sinterklaas-dashboard {
+          background:
+            radial-gradient(circle at 16% 12%, rgba(177, 123, 48, 0.08) 0 1px, transparent 1.6px) 0 0 / 7px 7px,
+            linear-gradient(120deg, rgba(255, 255, 255, 0.42), rgba(214, 177, 109, 0.18)),
+            var(--page-bg) !important;
+          isolation: isolate;
+        }
+        .sinterklaas-dashboard .dashboard-card-shell {
+          box-shadow:
+            inset 0 0 0 1px rgba(181, 136, 55, 0.22),
+            0 8px 18px rgba(98, 62, 24, 0.12);
+        }
+        .sinterklaas-scene,
+        .sinterklaas-scene * {
+          pointer-events: none !important;
+          user-select: none;
+        }
+        .sinterklaas-scene {
+          position: fixed;
+          inset: 0;
+          z-index: 20;
+          overflow: hidden;
+        }
+        .sinterklaas-frame {
+          position: absolute;
+          inset: 4px;
+          border: 3px double rgba(160, 112, 35, 0.74);
+          border-radius: 8px;
+          box-shadow:
+            inset 0 0 0 2px rgba(255, 223, 136, 0.64),
+            0 0 0 2px rgba(104, 68, 22, 0.2);
+        }
+        .seasonal-corner-scene {
+          position: fixed;
+          inset: 0;
+          z-index: 20;
+          overflow: hidden;
+          pointer-events: none;
+          user-select: none;
+        }
+        .seasonal-corner-sprite {
+          position: absolute;
+          right: clamp(22px, 2.8vw, 52px);
+          bottom: clamp(18px, 2.2dvh, 34px);
+          width: clamp(205px, 18vw, 300px);
+          aspect-ratio: 1 / 0.82;
+          background-image: url("/seasonal/seasonal-sprite-v1.png");
+          background-position: 0 0;
+          background-repeat: no-repeat;
+          background-size: 300% 200%;
+          filter: drop-shadow(0 8px 9px rgba(75, 44, 17, 0.2));
+        }
+        .seasonal-corner-sprite--sinterklaas { background-position: 0 0; }
+        .seasonal-corner-sprite--kerst { background-position: 50% 0; }
+        .seasonal-corner-sprite--pasen { background-position: 100% 0; }
+        .seasonal-secondary-sprite {
+          position: absolute;
+          left: clamp(22px, 2.8vw, 52px);
+          bottom: clamp(16px, 1.9dvh, 30px);
+          width: clamp(92px, 9vw, 155px);
+          aspect-ratio: 1 / 0.82;
+          background-image: url("/seasonal/seasonal-sprite-v1.png");
+          background-repeat: no-repeat;
+          background-size: 300% 200%;
+          filter: drop-shadow(0 5px 6px rgba(75, 44, 17, 0.16));
+        }
+        .seasonal-secondary-sprite--sinterklaas { background-position: 0 100%; }
+        .seasonal-secondary-sprite--kerst { background-position: 50% 100%; }
+        .seasonal-secondary-sprite--pasen { background-position: 100% 100%; }
+        @media (max-width: 1500px) {
+          .seasonal-corner-sprite { transform: scale(0.78); transform-origin: bottom right; }
+          .seasonal-secondary-sprite { transform: scale(0.78); transform-origin: bottom left; }
         }
         .card-expand-title {
           transition:
